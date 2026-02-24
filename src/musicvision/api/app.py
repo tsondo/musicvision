@@ -26,12 +26,15 @@ from pydantic import BaseModel
 
 from musicvision.models import (
     ApprovalStatus,
-    FluxConfig,
     HumoConfig,
+    ImageGenConfig,
     ProjectConfig,
     Scene,
     StyleSheet,
 )
+
+# Backward compat — keep FluxConfig importable from here
+FluxConfig = ImageGenConfig
 from musicvision.project import ProjectService
 
 log = logging.getLogger(__name__)
@@ -134,10 +137,19 @@ async def update_humo_config(humo: HumoConfig):
     return {"status": "updated"}
 
 
-@app.put("/api/projects/config/flux")
-async def update_flux_config(flux: FluxConfig):
+@app.put("/api/projects/config/image-gen")
+async def update_image_gen_config(image_gen: ImageGenConfig):
     proj = get_project()
-    proj.config.flux = flux
+    proj.config.image_gen = image_gen
+    proj.save_config()
+    return {"status": "updated"}
+
+
+@app.put("/api/projects/config/flux")
+async def update_flux_config(flux: ImageGenConfig):
+    """Deprecated — use /api/projects/config/image-gen instead."""
+    proj = get_project()
+    proj.config.image_gen = flux
     proj.save_config()
     return {"status": "updated"}
 
@@ -260,8 +272,95 @@ async def run_intake(use_llm: bool = True, skip_transcription: bool = False):
 @app.post("/api/pipeline/generate-images")
 async def generate_images(req: GenerateRequest):
     """Stage 2: Generate reference images for specified scenes (or all)."""
-    # TODO: wire to imaging module
-    return {"status": "not_implemented", "stage": "generate_images", "scene_ids": req.scene_ids}
+    from musicvision.imaging import create_engine
+    from musicvision.imaging.prompt_generator import generate_image_prompt
+    from musicvision.utils.gpu import detect_devices
+
+    proj = get_project()
+
+    # Resolve target scenes
+    if req.scene_ids:
+        scenes = []
+        for sid in req.scene_ids:
+            scene = proj.scenes.get_scene(sid)
+            if not scene:
+                raise HTTPException(status_code=404, detail=f"Scene {sid} not found")
+            scenes.append(scene)
+    else:
+        scenes = proj.scenes.scenes
+
+    if not scenes:
+        raise HTTPException(status_code=400, detail="No scenes to process")
+
+    # Generate prompts for scenes that don't have one yet
+    for scene in scenes:
+        if not scene.effective_image_prompt:
+            scene.image_prompt = generate_image_prompt(scene, proj.config)
+
+    # Resolve style sheet dimensions
+    ss = proj.config.style_sheet
+    res_parts = ss.resolution.split("x") if "x" in ss.resolution else ["1280", "720"]
+    width, height = int(res_parts[0]), int(res_parts[1])
+
+    # Build character LoRA lookup
+    char_loras: dict[str, tuple[str, float]] = {}
+    for char_def in proj.config.style_sheet.characters:
+        if char_def.lora_path:
+            char_loras[char_def.id] = (char_def.lora_path, char_def.lora_weight)
+
+    # Create engine and generate
+    device_map = detect_devices()
+    engine = create_engine(proj.config.image_gen, device_map)
+    engine.load()
+
+    generated: list[str] = []
+    failed: list[dict] = []
+
+    try:
+        # Sort by LoRA to minimize swaps
+        def _lora_key(s):
+            for cid in s.characters:
+                if cid in char_loras:
+                    return char_loras[cid][0]
+            return ""
+
+        sorted_scenes = sorted(scenes, key=_lora_key)
+
+        for scene in sorted_scenes:
+            try:
+                # Find LoRA from first character that has one
+                lora_path = None
+                lora_weight = 0.8
+                for cid in scene.characters:
+                    if cid in char_loras:
+                        lora_path, lora_weight = char_loras[cid]
+                        break
+
+                output_path = proj.paths.image_path(scene.id)
+                engine.generate(
+                    prompt=scene.effective_image_prompt,
+                    width=width,
+                    height=height,
+                    lora_path=lora_path,
+                    lora_weight=lora_weight,
+                    output_path=output_path,
+                )
+                scene.reference_image = f"images/{scene.id}.png"
+                generated.append(scene.id)
+            except Exception as exc:
+                log.error("Image generation failed for %s: %s", scene.id, exc)
+                failed.append({"scene_id": scene.id, "error": str(exc)})
+    finally:
+        engine.unload()
+
+    proj.save_scenes()
+
+    return {
+        "status": "complete",
+        "generated": generated,
+        "failed": failed,
+        "total": len(scenes),
+    }
 
 
 @app.post("/api/pipeline/generate-videos")

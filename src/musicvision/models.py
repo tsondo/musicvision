@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -45,9 +45,15 @@ class HumoResolution(str, Enum):
     SD = "480p"
 
 
-class FluxModel(str, Enum):
-    DEV = "flux-dev"
-    SCHNELL = "flux-schnell"
+class ImageModel(str, Enum):
+    FLUX_DEV = "flux-dev"
+    FLUX_SCHNELL = "flux-schnell"
+    ZIMAGE = "z-image"
+    ZIMAGE_TURBO = "z-image-turbo"
+
+
+# Backward-compat alias
+FluxModel = ImageModel
 
 
 # ---------------------------------------------------------------------------
@@ -104,10 +110,14 @@ class HumoConfig(BaseModel):
         return 1280 if self.resolution == HumoResolution.HD else 832
 
 
-class FluxConfig(BaseModel):
-    model: FluxModel = FluxModel.DEV
+class ImageGenConfig(BaseModel):
+    model: ImageModel = ImageModel.FLUX_DEV
     steps: int = 28
     guidance_scale: float = 3.5
+
+
+# Backward-compat alias
+FluxConfig = ImageGenConfig
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +157,20 @@ class ProjectConfig(BaseModel):
     song: SongInfo = Field(default_factory=SongInfo)
     style_sheet: StyleSheet = Field(default_factory=StyleSheet)
     humo: HumoConfig = Field(default_factory=HumoConfig)
-    flux: FluxConfig = Field(default_factory=FluxConfig)
+    image_gen: ImageGenConfig = Field(default_factory=ImageGenConfig)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_flux_key(cls, data: dict) -> dict:
+        """Accept 'flux' as a deprecated alias for 'image_gen'."""
+        if isinstance(data, dict) and "flux" in data and "image_gen" not in data:
+            data["image_gen"] = data.pop("flux")
+        return data
+
+    @property
+    def flux(self) -> ImageGenConfig:
+        """Deprecated alias for image_gen. Use image_gen instead."""
+        return self.image_gen
 
     @classmethod
     def load(cls, path: Path) -> ProjectConfig:

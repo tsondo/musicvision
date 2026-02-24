@@ -1,8 +1,7 @@
 """
-FLUX inference wrapper for reference image generation.
+Z-Image inference wrapper for reference image generation.
 
-Loads FLUX-dev or FLUX-schnell via diffusers, with optional LoRA.
-DiT runs on primary GPU, text encoder on secondary GPU.
+Loads Tongyi-MAI/Z-Image or Z-Image-Turbo via diffusers, with optional LoRA.
 """
 
 from __future__ import annotations
@@ -19,20 +18,20 @@ from musicvision.utils.gpu import DeviceMap, clear_vram
 log = logging.getLogger(__name__)
 
 MODEL_IDS: dict[ImageModel, str] = {
-    ImageModel.FLUX_DEV: "black-forest-labs/FLUX.1-dev",
-    ImageModel.FLUX_SCHNELL: "black-forest-labs/FLUX.1-schnell",
+    ImageModel.ZIMAGE: "Tongyi-MAI/Z-Image",
+    ImageModel.ZIMAGE_TURBO: "Tongyi-MAI/Z-Image-Turbo",
 }
 
 
-class FluxEngine(ImageEngine):
+class ZImageEngine(ImageEngine):
     """
-    FLUX image generation engine.
+    Z-Image generation engine (Alibaba/Tongyi-MAI, 6B params).
 
     Lifecycle:
-        engine = FluxEngine(config, device_map)
-        engine.load()           # load model weights
+        engine = ZImageEngine(config, device_map)
+        engine.load()
         result = engine.generate(prompt, ...)
-        engine.unload()         # free VRAM before HuMo stage
+        engine.unload()
     """
 
     def __init__(self, config: ImageGenConfig, device_map: DeviceMap):
@@ -46,11 +45,11 @@ class FluxEngine(ImageEngine):
         return self._pipe is not None
 
     def load(self) -> None:
-        """Load FLUX pipeline with CPU offload to the primary GPU."""
+        """Load Z-Image pipeline with CPU offload."""
         from diffusers import FluxPipeline
 
         model_id = MODEL_IDS[self.config.model]
-        log.info("Loading FLUX pipeline: %s", model_id)
+        log.info("Loading Z-Image pipeline: %s", model_id)
 
         self._pipe = FluxPipeline.from_pretrained(
             model_id,
@@ -61,11 +60,10 @@ class FluxEngine(ImageEngine):
         if gpu_index is not None:
             self._pipe.enable_model_cpu_offload(gpu_id=gpu_index)
         else:
-            # CPU-only mode
-            log.warning("No GPU available — FLUX running on CPU (very slow)")
+            log.warning("No GPU available — Z-Image running on CPU (very slow)")
 
         self._current_lora = None
-        log.info("FLUX pipeline loaded")
+        log.info("Z-Image pipeline loaded")
 
     def generate(
         self,
@@ -79,14 +77,14 @@ class FluxEngine(ImageEngine):
     ) -> ImageResult:
         """Generate a single image. Returns an ImageResult with the saved path."""
         if not self.is_loaded:
-            raise RuntimeError("FluxEngine not loaded. Call load() first.")
+            raise RuntimeError("ZImageEngine not loaded. Call load() first.")
 
         self._apply_lora(lora_path)
 
-        # Schnell uses max 4 steps with guidance 0.0
-        is_schnell = self.config.model == ImageModel.FLUX_SCHNELL
-        steps = min(self.config.steps, 4) if is_schnell else self.config.steps
-        guidance = 0.0 if is_schnell else self.config.guidance_scale
+        # Turbo uses 8 steps with low guidance
+        is_turbo = self.config.model == ImageModel.ZIMAGE_TURBO
+        steps = min(self.config.steps, 8) if is_turbo else self.config.steps
+        guidance = min(self.config.guidance_scale, 1.0) if is_turbo else self.config.guidance_scale
 
         generator = torch.Generator().manual_seed(seed) if seed is not None else None
         actual_seed = seed if seed is not None else torch.seed()
@@ -143,4 +141,4 @@ class FluxEngine(ImageEngine):
             self._pipe = None
         self._current_lora = None
         clear_vram()
-        log.info("FLUX engine unloaded")
+        log.info("Z-Image engine unloaded")
