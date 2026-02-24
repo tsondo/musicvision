@@ -366,8 +366,105 @@ async def generate_images(req: GenerateRequest):
 @app.post("/api/pipeline/generate-videos")
 async def generate_videos(req: GenerateRequest):
     """Stage 3: Generate video clips for specified scenes (or all)."""
-    # TODO: wire to video module
-    return {"status": "not_implemented", "stage": "generate_videos", "scene_ids": req.scene_ids}
+    from musicvision.video import create_video_engine
+    from musicvision.video.prompt_generator import generate_video_prompt
+    from musicvision.utils.gpu import detect_devices
+
+    proj = get_project()
+
+    # Resolve target scenes
+    if req.scene_ids:
+        scenes = []
+        for sid in req.scene_ids:
+            scene = proj.scenes.get_scene(sid)
+            if not scene:
+                raise HTTPException(status_code=404, detail=f"Scene {sid} not found")
+            scenes.append(scene)
+    else:
+        scenes = proj.scenes.scenes
+
+    if not scenes:
+        raise HTTPException(status_code=400, detail="No scenes to process")
+
+    # Check that scenes have reference images (Stage 2 must run first)
+    missing_images = [s.id for s in scenes if not s.reference_image]
+    if missing_images:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Scenes missing reference images (run generate-images first): {missing_images}",
+        )
+
+    # Generate video prompts for scenes that don't have one yet
+    for scene in scenes:
+        if not scene.effective_video_prompt:
+            scene.video_prompt = generate_video_prompt(scene, proj.config)
+
+    # Resolve audio file
+    audio_file = proj.config.song.audio_file
+    if not audio_file:
+        raise HTTPException(status_code=400, detail="No audio file set in project config.")
+    audio_path = proj.resolve_path(audio_file)
+    if not audio_path.exists():
+        raise HTTPException(status_code=404, detail=f"Audio file not found: {audio_path}")
+
+    # Create engine and generate
+    device_map = detect_devices()
+    engine = create_video_engine(proj.config.humo, device_map)
+    engine.load()
+
+    generated: list[str] = []
+    failed: list[dict] = []
+
+    try:
+        for scene in sorted(scenes, key=lambda s: s.order):
+            try:
+                ref_image = proj.resolve_path(scene.reference_image)
+                segment = proj.resolve_path(scene.audio_segment) if scene.audio_segment else audio_path
+
+                results = engine.generate_scene(
+                    text_prompt=scene.effective_video_prompt,
+                    reference_image=ref_image,
+                    audio_segment=segment,
+                    output_dir=proj.paths.clips_dir,
+                    scene_id=scene.id,
+                    duration=scene.duration,
+                )
+
+                if scene.needs_sub_clips and len(results) > 1:
+                    # Update sub-clip entries
+                    scene.sub_clips = []
+                    from musicvision.video.humo_engine import MAX_DURATION, _sub_clip_suffixes
+                    suffixes = _sub_clip_suffixes(len(results))
+                    for j, (r, suffix) in enumerate(zip(results, suffixes)):
+                        from musicvision.models import SubClip
+                        sub_start = scene.time_start + j * MAX_DURATION
+                        sub_end = min(scene.time_start + (j + 1) * MAX_DURATION, scene.time_end)
+                        scene.sub_clips.append(SubClip(
+                            id=f"{scene.id}_{suffix}",
+                            time_start=sub_start,
+                            time_end=sub_end,
+                            video_prompt=scene.effective_video_prompt,
+                            video_clip=str(r.video_path.relative_to(proj.paths.root)),
+                        ))
+                else:
+                    scene.video_clip = f"clips/{scene.id}.mp4"
+
+                generated.append(scene.id)
+
+            except Exception as exc:
+                log.error("Video generation failed for %s: %s", scene.id, exc)
+                failed.append({"scene_id": scene.id, "error": str(exc)})
+    finally:
+        engine.unload()
+
+    proj.save_scenes()
+
+    return {
+        "status": "complete",
+        "generated": generated,
+        "failed": failed,
+        "total": len(scenes),
+    }
 
 
 class AssembleRequest(BaseModel):
