@@ -177,45 +177,64 @@ class BaseHumoLoader(ABC):
     # ------------------------------------------------------------------
 
     def _load_t5(self, device: Any, weights_dir: Path | None = None) -> Any:
-        """Load UMT5-XXL text encoder onto *device*."""
+        """Load UMT5-XXL text encoder onto *device*. Auto-downloads on first use."""
         from musicvision.video.wan_t5 import WanT5Encoder
+        from musicvision.video.weight_registry import download_shared
         import torch
 
-        path = locate_shared("t5", weights_dir)
+        try:
+            path = locate_shared("t5", weights_dir)
+        except FileNotFoundError:
+            log.info("T5 weights not found locally — downloading from HuggingFace (Wan-AI/Wan2.1-T2V-1.3B, ~10 GB)…")
+            path = download_shared("t5", base_dir=weights_dir)
+
         log.info("Loading T5 encoder from %s onto %s", path.name, device)
-        dtype = torch.bfloat16
-        encoder = WanT5Encoder(device=device, dtype=dtype)
+        encoder = WanT5Encoder(device=device, dtype=torch.bfloat16)
         encoder.load(path)
         log.info("T5 encoder ready on %s", device)
         return encoder
 
     def _load_vae(self, device: Any, weights_dir: Path | None = None) -> Any:
-        """Load Wan2.1 Video VAE onto *device*."""
+        """Load Wan2.1 Video VAE onto *device*. Auto-downloads on first use."""
         from musicvision.video.wan_vae import WanVideoVAE
+        from musicvision.video.weight_registry import download_shared
         import torch
 
-        path = locate_shared("vae", weights_dir)
+        try:
+            path = locate_shared("vae", weights_dir)
+        except FileNotFoundError:
+            log.info("VAE weights not found locally — downloading from HuggingFace (Wan-AI/Wan2.1-T2V-1.3B, ~0.4 GB)…")
+            path = download_shared("vae", base_dir=weights_dir)
+
         log.info("Loading VAE from %s onto %s", path.name, device)
-        dtype = torch.float16
-        vae = WanVideoVAE(device=device, dtype=dtype)
+        vae = WanVideoVAE(device=device, dtype=torch.float16)
         vae.load(path)
         log.info("VAE ready on %s", device)
         return vae
 
     def _load_whisper(self, device: Any, weights_dir: Path | None = None) -> Any:
-        """Load Whisper large-v3 encoder onto *device*."""
+        """Load Whisper large-v3 encoder onto *device*. Auto-downloads on first use."""
         try:
             from transformers import WhisperModel
         except ImportError as e:
             raise RuntimeError("transformers is not installed — run: pip install transformers") from e
 
-        path = locate_shared("whisper", weights_dir)
-        log.info("Loading Whisper encoder from %s onto %s", path.name, device)
-        # Load encoder weights only — we don't need the decoder
-        model = WhisperModel.from_pretrained(
-            str(path.parent),
-            torch_dtype=__import__("torch").float16,
-        ).encoder.to(device)
+        import torch
+
+        try:
+            path = locate_shared("whisper", weights_dir)
+            model = WhisperModel.from_pretrained(
+                str(path.parent),
+                torch_dtype=torch.float16,
+            ).encoder.to(device)
+        except FileNotFoundError:
+            log.info("Whisper weights not found locally — downloading via HuggingFace transformers (openai/whisper-large-v3, ~1.5 GB)…")
+            # transformers handles its own cache (~/.cache/huggingface); no token needed
+            model = WhisperModel.from_pretrained(
+                "openai/whisper-large-v3",
+                torch_dtype=torch.float16,
+            ).encoder.to(device)
+
         model.eval()
         log.info("Whisper encoder ready on %s", device)
         return model

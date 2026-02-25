@@ -110,29 +110,45 @@ class HumoEngine:
         """
         Load all model components for the configured tier.
 
-        Downloads missing weights automatically if HUGGINGFACE_TOKEN is set.
+        Shared weights (T5, VAE, Whisper) are open models and auto-download
+        on first use — no token required.  The DiT checkpoint may require
+        HUGGINGFACE_TOKEN depending on the repo; if missing the engine raises
+        with a clear message pointing at `musicvision download-weights`.
+
         Applies block swap if config.block_swap_count > 0.
         """
         import os
 
-        from musicvision.video.weight_registry import weight_status, download_all_for_tier
+        from musicvision.video.weight_registry import (
+            weight_status, download_dit, download_shared,
+        )
 
         tier = self.config.tier
         status = weight_status(tier)
-        missing = [k for k, present in status.items() if not present]
+        hf_token = os.environ.get("HUGGINGFACE_TOKEN") or os.environ.get("HF_TOKEN")
 
-        if missing:
-            hf_token = os.environ.get("HUGGINGFACE_TOKEN") or os.environ.get("HF_TOKEN")
+        # Shared weights are open — auto-download without requiring a token.
+        # The individual loaders (_load_t5 / _load_vae / _load_whisper) also
+        # handle this on FileNotFoundError, so this is an optional fast-path.
+        for key in ("t5", "vae", "whisper"):
+            if not status.get(key, False):
+                log.info("Auto-downloading shared weight '%s' (open model)…", key)
+                try:
+                    download_shared(key, hf_token=hf_token)
+                except Exception as exc:
+                    log.warning(
+                        "Pre-download of '%s' failed (%s) — loader will retry on demand.", key, exc
+                    )
+
+        # DiT checkpoint — download if missing (token required for some repos).
+        if not status.get("dit", False):
             if hf_token:
-                log.info(
-                    "Missing weights for tier %s: %s — downloading…",
-                    tier.value, missing,
-                )
-                download_all_for_tier(tier, hf_token=hf_token)
+                log.info("Downloading DiT weights for tier %s…", tier.value)
+                download_dit(tier, hf_token=hf_token)
             else:
                 raise RuntimeError(
-                    f"HuMo weights for tier '{tier.value}' are not present locally "
-                    f"(missing: {missing}). Set HUGGINGFACE_TOKEN in .env and re-run, "
+                    f"HuMo DiT weights for tier '{tier.value}' are not present locally. "
+                    f"Set HUGGINGFACE_TOKEN in .env and re-run, "
                     f"or run: musicvision download-weights --tier {tier.value}"
                 )
 
