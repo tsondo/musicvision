@@ -60,6 +60,10 @@ def slice_audio(
     output.parent.mkdir(parents=True, exist_ok=True)
 
     duration = end_seconds - start_seconds
+    # -ss before -i uses fast input seek; output codec pcm_s16le (WAV) is
+    # sample-accurate because PCM has no codec frame boundaries.
+    # WARNING: if source is ever MP3/AAC/Opus, switch to -af atrim to avoid
+    # sub-frame drift at the cut point.  WAV → WAV is always exact.
     cmd = [
         "ffmpeg", "-y",
         "-ss", f"{start_seconds:.6f}",

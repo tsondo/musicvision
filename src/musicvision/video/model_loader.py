@@ -453,7 +453,14 @@ class FP8ScaledLinear(__import__("torch").nn.Module):
 
 
 def _fp8_supported(device: Any) -> bool:
-    """FP8 scaled_mm requires compute capability ≥ 8.9 (Ada / Hopper)."""
+    """FP8 scaled_mm requires compute capability ≥ 8.9 (Ada / Hopper / Blackwell).
+
+    The >= (8, 9) tuple comparison naturally covers all future architectures:
+    - Ada Lovelace (RTX 40xx): CC 8.9
+    - Hopper (H100): CC 9.0
+    - Blackwell (RTX 50xx, e.g. RTX 5090): CC 12.0  ← also passes
+    torch.float8_e4m3fn is supported on all three.
+    """
     try:
         import torch
         if device.type == "cpu":

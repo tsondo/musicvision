@@ -311,11 +311,26 @@ musicvision serve ./my-video
 
 ## What's Not Built Yet
 
-- **React frontend** — pipeline driven via API/CLI today (Swagger UI at `/docs`)
-- **LoRA training** — pipeline supports LoRA paths for characters but doesn't train them
-- **Scene approval UI** — API endpoints exist but no web UI for side-by-side image review
-- **Seed propagation** — `HumoInput` accepts a seed; wired through to the denoising loop
+### Frontend & UI
+- **React frontend** — pipeline driven entirely via REST API and CLI today; Swagger UI at `/docs` for manual testing
+- **Gradio UI** — originally planned as the storyboard interface; not started. Core pipeline modules are UI-agnostic by design.
+- **Scene approval UI** — API endpoints for scene CRUD and approval exist, but no visual side-by-side review interface
 
+### Pipeline Features
+- **Progress/status tracking** — no WebSocket or SSE for long-running generation jobs; API endpoints are synchronous. A 50-scene video gen blocks for hours with no progress feedback.
+- **Partial failure recovery** — if video generation fails at scene 22 of 50, there's no automatic resume. Workaround: use `--scene-ids` CLI flag to regenerate specific scenes. Needs a proper job/resume model.
+- **Scene reordering** — scenes are ordered by `order` field in scenes.json, but no API endpoint or UI to drag-reorder and renumber.
+- **Transitions** — hard cuts only between scenes. No crossfades, AI-generated transitions, or blending.
+- **Batch parallelism** — scenes generate sequentially. No concurrent generation across multiple GPUs or cloud workers.
+
+### Model & Generation
+- **LoRA training** — pipeline accepts LoRA paths for character consistency but doesn't include training workflows
+- **Seed reproducibility** — `HumoInput.seed` is wired: random seed generated when None, both `torch.manual_seed` and `torch.cuda.manual_seed` called, seed recorded in `HumoOutput.seed_used`. Remaining gap: GPU test needed to confirm fully deterministic output (CUDNN non-determinism).
+- **Render time estimation** — no estimated time display for users. 3× DiT passes per step × 50 steps × N scenes can take many hours; users need to know upfront.
+
+### Export
+- **Audio-only export** — no way to export just the segmented audio clips without running image/video gen
+- **Rough cut preview without full render** — storyboard slideshow (images + audio, no video) would let users validate before committing to HuMo render time
 ---
 
 ## Design Notes

@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import logging
 import math
+import random
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -82,6 +83,7 @@ class HumoOutput:
     video_path: Path
     frames_generated: int
     duration_seconds: float
+    seed_used: int = 0  # seed used for noise init; 0 means unset
 
 
 # ---------------------------------------------------------------------------
@@ -200,10 +202,20 @@ class HumoEngine:
             n_frames, n_frames / FPS, inp.output_path.name,
         )
 
-        # Step 1-3: encode conditioning signals
+        # Step 1-3: encode conditioning signals (sequential — no CUDA stream overlap)
+        # T5 encoding runs on GPU1 (~0.3–1s/scene) and noise init on GPU0 are
+        # independent, but stream overlap adds complexity for minimal gain at
+        # single-scene throughput.  Re-evaluate if batching multiple scenes.
+        # Future: VAE decode (GPU1) could overlap the next scene's T5 encode.
+        # TODO: measure T5 encode time on GPU to quantify the opportunity.
         text_embeds  = self._encode_text(inp.text_prompt)
         image_cond   = self._encode_image(inp.reference_image, n_frames)
         audio_embeds = self._encode_audio(inp.audio_segment, n_frames)
+
+        # Resolve seed: use provided seed or generate a random one so the result
+        # is always reproducible.  The used seed is recorded in HumoOutput.
+        seed = inp.seed if inp.seed is not None else random.randint(0, 2**32 - 1)
+        log.info("Using seed %d for %s", seed, inp.output_path.name)
 
         # Step 4-5: denoising loop
         video_latent = self._denoise(
@@ -211,7 +223,7 @@ class HumoEngine:
             text_embeds=text_embeds,
             image_cond=image_cond,
             audio_embeds=audio_embeds,
-            seed=inp.seed,
+            seed=seed,
         )
 
         # Step 6-7: decode and save
@@ -219,11 +231,12 @@ class HumoEngine:
         _save_mp4(frames, inp.output_path, fps=FPS)
 
         duration = n_frames / FPS
-        log.info("Clip saved → %s (%.2fs)", inp.output_path.name, duration)
+        log.info("Clip saved → %s (%.2fs, seed=%d)", inp.output_path.name, duration, seed)
         return HumoOutput(
             video_path=inp.output_path,
             frames_generated=n_frames,
             duration_seconds=duration,
+            seed_used=seed,
         )
 
     def generate_scene(
@@ -480,9 +493,13 @@ class HumoEngine:
         total_lat_f = lat_f + 1
         lat_h, lat_w = H // 8, W // 8
 
-        # Initialize noise
+        # Initialize noise — seed is always set by generate() before this call,
+        # but guard here too for direct _denoise() callers (e.g. tests).
+        # Both CPU and CUDA RNGs must be seeded: torch.randn on a CUDA device
+        # uses the CUDA RNG exclusively, so manual_seed alone is not sufficient.
         if seed is not None:
             torch.manual_seed(seed)
+            torch.cuda.manual_seed(seed)
         noise = torch.randn(
             1, 16, total_lat_f, lat_h, lat_w,
             device=dit_device, dtype=torch.bfloat16,

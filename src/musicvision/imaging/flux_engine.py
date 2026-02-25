@@ -328,7 +328,11 @@ def _select_strategy(free_gb: float, config: ImageGenConfig) -> str:
 
 
 def _supports_fp8(device) -> bool:
-    """FP8 requires compute capability ≥ 8.9 (Ada Lovelace / Hopper, RTX 40xx+)."""
+    """FP8 requires compute capability ≥ 8.9 (Ada Lovelace / Hopper / Blackwell).
+
+    The >= (8, 9) check covers RTX 40xx (CC 8.9), H100 (CC 9.0), and
+    Blackwell RTX 50xx (CC 12.0). torch.float8_e4m3fn works on all three.
+    """
     try:
         import torch
         if device.type == "cpu":
