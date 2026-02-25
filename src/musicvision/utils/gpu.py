@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-import torch
+if TYPE_CHECKING:
+    import torch
 
 log = logging.getLogger(__name__)
 
@@ -22,17 +24,17 @@ log = logging.getLogger(__name__)
 class DeviceMap:
     """Device assignments for the two-GPU split."""
 
-    dit_device: torch.device          # primary: DiT / UNet
-    encoder_device: torch.device      # secondary: T5, CLIP, Whisper
-    vae_device: torch.device          # secondary: VAE encode/decode
-    offload_device: torch.device      # CPU for idle models
+    dit_device: "torch.device"          # primary: DiT / UNet
+    encoder_device: "torch.device"      # secondary: T5, CLIP, Whisper
+    vae_device: "torch.device"          # secondary: VAE encode/decode
+    offload_device: "torch.device"      # CPU for idle models
 
     @property
-    def primary(self) -> torch.device:
+    def primary(self) -> "torch.device":
         return self.dit_device
 
     @property
-    def secondary(self) -> torch.device:
+    def secondary(self) -> "torch.device":
         return self.encoder_device
 
 
@@ -45,6 +47,8 @@ def detect_devices() -> DeviceMap:
       - 1 GPU   → everything on GPU0, offload to CPU
       - 0 GPUs  → CPU-only (for testing / assembly-only workflows)
     """
+    import torch
+
     n_gpus = torch.cuda.device_count()
 
     if n_gpus >= 2:
@@ -84,6 +88,8 @@ def detect_devices() -> DeviceMap:
 
 def log_vram_usage() -> None:
     """Log current VRAM usage for all GPUs."""
+    import torch
+
     for i in range(torch.cuda.device_count()):
         allocated = torch.cuda.memory_allocated(i) / 1024**3
         reserved = torch.cuda.memory_reserved(i) / 1024**3
@@ -97,10 +103,14 @@ def log_vram_usage() -> None:
 def clear_vram() -> None:
     """Aggressively free VRAM. Call between pipeline stages (FLUX → HuMo swap)."""
     import gc
+    import torch
 
     gc.collect()
-    torch.cuda.empty_cache()
-    torch.cuda.synchronize()
+    try:
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+    except Exception:
+        pass
     log.info("VRAM cleared")
 
 
@@ -111,6 +121,7 @@ def recommend_tier(device_map: DeviceMap) -> "HumoTier":
     Conservative: selects the highest-quality tier that fits comfortably,
     leaving headroom for text encoder, VAE, and Whisper on the secondary device.
     """
+    import torch
     from musicvision.models import HumoTier
 
     try:
@@ -133,6 +144,8 @@ def recommend_tier(device_map: DeviceMap) -> "HumoTier":
 
 def vram_info() -> list[dict]:
     """Return VRAM info for all GPUs as a list of dicts (for CLI/API output)."""
+    import torch
+
     result = []
     for i in range(torch.cuda.device_count()):
         props = torch.cuda.get_device_properties(i)

@@ -22,8 +22,6 @@ import os
 from pathlib import Path
 from typing import Optional
 
-import torch
-
 from musicvision.imaging.base import ImageEngine, ImageResult
 from musicvision.models import FluxQuant, ImageGenConfig, ImageModel
 from musicvision.utils.gpu import DeviceMap, clear_vram
@@ -153,6 +151,8 @@ class FluxEngine(ImageEngine):
             self._apply_lora(lora_path, lora_weight)
             scene_lora_active = True
 
+        import torch
+
         generator = (
             torch.Generator().manual_seed(seed)
             if seed is not None
@@ -201,6 +201,7 @@ class FluxEngine(ImageEngine):
 
     def _load_split(self, model_id: str, token: Optional[str]):
         """Tier A (multi-GPU): bf16, transformer on GPU0, encoders on GPU1."""
+        import torch
         from diffusers import FluxPipeline
 
         pipe = FluxPipeline.from_pretrained(
@@ -216,6 +217,7 @@ class FluxEngine(ImageEngine):
 
     def _load_bf16_offload(self, model_id: str, token: Optional[str]):
         """Tier B (single GPU, ≥14 GB): bf16, model cpu offload for T5."""
+        import torch
         from diffusers import FluxPipeline
 
         pipe = FluxPipeline.from_pretrained(
@@ -234,6 +236,7 @@ class FluxEngine(ImageEngine):
         strategy: str,
     ):
         """Tier C/D: quantized transformer + cpu offload."""
+        import torch
         from diffusers import FluxPipeline
         from optimum.quanto import freeze, quantize
 
@@ -289,6 +292,7 @@ class FluxEngine(ImageEngine):
 def _free_vram_gb(device) -> float:
     """Return free VRAM in GB on the given device. Returns 0 for CPU."""
     try:
+        import torch
         if device.type == "cpu":
             return 0.0
         free_bytes, _ = torch.cuda.mem_get_info(device)
@@ -326,6 +330,7 @@ def _select_strategy(free_gb: float, config: ImageGenConfig) -> str:
 def _supports_fp8(device) -> bool:
     """FP8 requires compute capability ≥ 8.9 (Ada Lovelace / Hopper, RTX 40xx+)."""
     try:
+        import torch
         if device.type == "cpu":
             return False
         major, minor = torch.cuda.get_device_capability(device)
