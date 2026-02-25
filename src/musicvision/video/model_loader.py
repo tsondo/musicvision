@@ -63,6 +63,93 @@ class HumoModelBundle:
 # Base
 # ---------------------------------------------------------------------------
 
+
+# ---------------------------------------------------------------------------
+# Module-level helpers
+# ---------------------------------------------------------------------------
+
+def _patch_fp8_linears(model: Any, state: dict, fp8_weight_keys: set) -> None:
+    """Replace nn.Linear modules with FP8ScaledLinear where FP8 weights exist."""
+    import torch
+
+    def _get_module(root, path):
+        parts = path.split(".")
+        m = root
+        for p in parts:
+            m = getattr(m, p)
+        return m
+
+    def _set_module(root, path, new_module):
+        parts = path.split(".")
+        parent = root
+        for p in parts[:-1]:
+            parent = getattr(parent, p)
+        setattr(parent, parts[-1], new_module)
+
+    patched = 0
+    for weight_key in fp8_weight_keys:
+        # weight_key is like "blocks.0.self_attn.q_proj.weight"
+        # module_path is "blocks.0.self_attn.q_proj"
+        module_path = weight_key[:-len(".weight")]
+        scale_key = weight_key[:-len("weight")] + "scale"
+        if scale_key not in state:
+            scale_key = module_path + "_scale_weight"
+        if scale_key not in state:
+            # Try with _scale suffix
+            scale_key = weight_key + "_scale_weight"
+
+        weight_fp8 = state[weight_key]
+        scale = state.get(scale_key, torch.tensor(1.0, dtype=torch.float32))
+
+        # Get bias if present
+        bias_key = module_path + ".bias"
+        bias = state.get(bias_key, None)
+
+        try:
+            _set_module(model, module_path, FP8ScaledLinear(weight_fp8, scale, bias))
+            patched += 1
+        except AttributeError:
+            log.debug("FP8 patch: could not find module at path %s", module_path)
+
+    log.info("FP8 patched %d linear layers", patched)
+
+
+def _gguf_name_to_pt_key(name: str) -> str:
+    """
+    Convert GGUF tensor name to PyTorch state dict key.
+
+    GGUF (llama.cpp convention): blk.N.attn_q.weight
+    PyTorch (WanModel): blocks.N.self_attn.q_proj.weight
+    """
+    # Common remappings for WanModel
+    replacements = [
+        ("blk.", "blocks."),
+        (".attn_q.", ".self_attn.q_proj."),
+        (".attn_k.", ".self_attn.k_proj."),
+        (".attn_v.", ".self_attn.v_proj."),
+        (".attn_output.", ".self_attn.out_proj."),
+        (".ffn_gate.", ".ffn.fc1."),
+        (".ffn_up.", ".ffn.fc2."),
+        (".ffn_down.", ".ffn.fc3."),
+        (".attn_norm.", ".norm1."),
+        (".ffn_norm.", ".norm3."),
+        (".cross_attn_q.", ".cross_attn.q_proj."),
+        (".cross_attn_k.", ".cross_attn.k_proj."),
+        (".cross_attn_v.", ".cross_attn.v_proj."),
+        (".cross_attn_output.", ".cross_attn.out_proj."),
+        (".cross_attn_norm.", ".norm2."),
+        ("token_embd.", "text_embed.0."),
+        ("output_norm.", "head_norm."),
+        ("output.", "head_proj."),
+        ("time_embed.", "time_embed.0."),
+        ("patch_embed.", "patch_embed."),
+    ]
+    result = name
+    for old, new in replacements:
+        result = result.replace(old, new)
+    return result
+
+
 class BaseHumoLoader(ABC):
     """Abstract base for all HuMo model loaders."""
 
@@ -91,36 +178,29 @@ class BaseHumoLoader(ABC):
 
     def _load_t5(self, device: Any, weights_dir: Path | None = None) -> Any:
         """Load UMT5-XXL text encoder onto *device*."""
+        from musicvision.video.wan_t5 import WanT5Encoder
         import torch
 
         path = locate_shared("t5", weights_dir)
         log.info("Loading T5 encoder from %s onto %s", path.name, device)
-
-        # HuMo uses a PyTorch checkpoint, not a diffusers Hub format.
-        # The T5 encoder is the UMT5-XXL model from Wan-AI.
-        # Concrete loading requires the Wan model code which is bundled with
-        # the HuMo weights.  We return a lazy loader that will be resolved
-        # when the full HuMo codebase is importable.
-        state = torch.load(str(path), map_location="cpu", weights_only=True)
-        # TODO: construct UMT5 model, load state_dict, move to device
-        # Reference: wan.modules.t5 — WanT5Encoder
-        log.warning(
-            "T5 load is a stub — requires wan.modules.t5 from the HuMo source tree. "
-            "Clone bytedance-research/HuMo and add it to PYTHONPATH."
-        )
-        return state  # placeholder
+        dtype = torch.bfloat16
+        encoder = WanT5Encoder(device=device, dtype=dtype)
+        encoder.load(path)
+        log.info("T5 encoder ready on %s", device)
+        return encoder
 
     def _load_vae(self, device: Any, weights_dir: Path | None = None) -> Any:
         """Load Wan2.1 Video VAE onto *device*."""
+        from musicvision.video.wan_vae import WanVideoVAE
         import torch
 
         path = locate_shared("vae", weights_dir)
         log.info("Loading VAE from %s onto %s", path.name, device)
-        state = torch.load(str(path), map_location="cpu", weights_only=True)
-        # TODO: construct WanVAE, load state, move to device
-        # Reference: wan.modules.vae — WanVideoVAE
-        log.warning("VAE load is a stub — requires wan.modules.vae from HuMo source tree.")
-        return state
+        dtype = torch.float16
+        vae = WanVideoVAE(device=device, dtype=dtype)
+        vae.load(path)
+        log.info("VAE ready on %s", device)
+        return vae
 
     def _load_whisper(self, device: Any, weights_dir: Path | None = None) -> Any:
         """Load Whisper large-v3 encoder onto *device*."""
@@ -199,19 +279,31 @@ class FP16Loader(BaseHumoLoader):
         )
 
     def _load_wan_dit(self, weight_path: Path, dtype: Any, dit_device: Any, device_map: Any) -> Any:
-        """
-        Load WanModel from safetensors shards.
+        """Load WanModel from safetensors shards in FP16."""
+        import torch
+        from safetensors.torch import load_file
+        from musicvision.video.wan_model import WanModel
 
-        TODO: import WanModel from wan.modules.model (HuMo source tree),
-        load safetensors shards in order, apply FSDP wrap for multi-GPU.
+        model = WanModel.from_config("14B")
+        model = model.to(dtype)
 
-        Reference: HuMo generate.py — model = WanModel.from_pretrained(cfg)
-        """
-        log.warning(
-            "FP16Loader._load_wan_dit is a stub — requires wan.modules.model from HuMo source. "
-            "Set PYTHONPATH to the HuMo repo root after cloning bytedance-research/HuMo."
-        )
-        return None  # placeholder
+        # Load from directory of shards or single file
+        if weight_path.is_dir():
+            import glob as _glob
+            shards = sorted(_glob.glob(str(weight_path / "*.safetensors")))
+            state = {}
+            for shard in shards:
+                state.update(load_file(shard, device="cpu"))
+        else:
+            state = load_file(str(weight_path), device="cpu")
+
+        missing, unexpected = model.load_state_dict(state, strict=False)
+        if missing:
+            log.warning("FP16 DiT: %d missing keys (first 5: %s)", len(missing), missing[:5])
+        model = model.to(dit_device)
+        model.eval()
+        log.info("FP16 WanModel loaded on %s (%s)", dit_device, dtype)
+        return model
 
 
 # ---------------------------------------------------------------------------
@@ -253,22 +345,35 @@ class FP8ScaledLoader(BaseHumoLoader):
         )
 
     def _load_fp8_dit(self, weight_path: Path, dit_device: Any) -> Any:
-        """
-        Load FP8 scaled safetensors and patch nn.Linear layers with FP8ScaledLinear.
+        """Load FP8 scaled safetensors and patch nn.Linear layers with FP8ScaledLinear."""
+        import torch
+        from safetensors.torch import load_file
+        from musicvision.video.wan_model import WanModel
 
-        Steps (following kijai's fp8_optimization.py):
-        1. Load base WanModel architecture in bfloat16 (no weights yet)
-        2. Load fp8 safetensors → state_dict with .weight (fp8) + .weight_scale (float32)
-        3. Replace each nn.Linear with FP8ScaledLinear(weight_fp8, scale)
-        4. Move patched model to dit_device
+        log.info("Loading FP8 DiT from %s", weight_path.name)
+        state = load_file(str(weight_path), device="cpu")
 
-        TODO: implement once WanModel is importable from HuMo source.
-        """
-        log.warning(
-            "FP8ScaledLoader._load_fp8_dit is a stub — requires wan.modules.model. "
-            "See kijai/ComfyUI-WanVideoWrapper fp8_optimization.py for the patching pattern."
-        )
-        return None
+        # Separate weight tensors from scale tensors
+        weight_keys = {k for k in state if not k.endswith("_scale_weight") and not k.endswith(".scale")}
+        scale_keys = {k for k in state if k.endswith("_scale_weight") or k.endswith(".scale")}
+        log.debug("FP8 state dict: %d weight keys, %d scale keys", len(weight_keys), len(scale_keys))
+
+        # Build base model in bfloat16 (no weights yet — we'll patch linears)
+        model = WanModel.from_config("14B")
+        model = model.to(torch.bfloat16)
+
+        # Load non-FP8 weights (norms, embeddings, etc.) with strict=False
+        non_fp8_state = {k: v for k, v in state.items() if not k.endswith("_scale_weight") and not k.endswith(".scale")}
+        model.load_state_dict(non_fp8_state, strict=False)
+
+        # Patch nn.Linear layers that have FP8 weights in the checkpoint
+        fp8_weight_keys = {k for k in state if state[k].dtype == torch.float8_e4m3fn}
+        _patch_fp8_linears(model, state, fp8_weight_keys)
+
+        model = model.to(dit_device)
+        model.eval()
+        log.info("FP8 WanModel loaded on %s", dit_device)
+        return model
 
 
 class FP8ScaledLinear(__import__("torch").nn.Module):
@@ -385,32 +490,77 @@ class GGUFLoader(BaseHumoLoader):
         )
 
     def _load_gguf_dit(self, gguf_path: Path, dit_device: Any) -> Any:
-        """
-        Parse GGUF file and construct a WanModel with GGUFLinear layers.
+        """Parse GGUF file and construct a WanModel with GGUFLinear layers."""
+        import torch
+        import gguf
+        from musicvision.video.wan_model import WanModel
 
-        Steps:
-        1. gguf.GGUFReader(gguf_path) → read all tensor entries
-        2. Build base WanModel architecture (no weights)
-        3. For each named linear: load quantized buffer → GGUFLinear
-        4. For non-linear tensors (norm weights etc.): dequant → fp32
-        5. Move patched model to dit_device
+        log.info("Parsing GGUF file: %s", gguf_path.name)
+        reader = gguf.GGUFReader(str(gguf_path))
 
-        TODO: implement tensor-name mapping from GGUF → WanModel state_dict.
-        The name mapping follows the same conventions as kijai's gguf.py.
-        """
-        try:
-            import gguf  # noqa: F401
-        except ImportError as e:
-            raise RuntimeError(
-                "gguf package is not installed. Run: pip install gguf"
-            ) from e
+        # Build base model in bfloat16 (skeleton — linears will be replaced)
+        model = WanModel.from_config("14B")
+        model = model.to(torch.bfloat16)
 
-        log.warning(
-            "GGUFLoader._load_gguf_dit is a stub — requires wan.modules.model + "
-            "GGUF→WanModel tensor name mapping. "
-            "Reference: kijai/ComfyUI-WanVideoWrapper/gguf/gguf.py"
-        )
-        return None
+        # Map GGUF tensors: {name: tensor}
+        gguf_tensors: dict[str, Any] = {}
+        for tensor in reader.tensors:
+            name = tensor.name
+            gguf_tensors[name] = tensor
+
+        # Separate non-quantized (norm/embed) from quantized (linear) tensors
+        non_linear_state: dict[str, Any] = {}
+        linear_tensors: dict[str, Any] = {}
+
+        for name, tensor in gguf_tensors.items():
+            pt_key = _gguf_name_to_pt_key(name)
+            gguf_type = tensor.tensor_type
+            is_quantized = gguf_type not in (
+                gguf.GGMLQuantizationType.F32,
+                gguf.GGMLQuantizationType.F16,
+                gguf.GGMLQuantizationType.BF16,
+            )
+            if is_quantized and ".weight" in pt_key:
+                linear_tensors[pt_key] = (tensor, gguf_type)
+            else:
+                # Dequantize to bfloat16 for non-linear params
+                try:
+                    arr = tensor.data
+                    t = torch.from_numpy(arr.copy())
+                    if t.dtype == torch.float16:
+                        t = t.to(torch.bfloat16)
+                    non_linear_state[pt_key] = t
+                except Exception as e:
+                    log.debug("GGUF: could not convert %s: %s", name, e)
+
+        # Load non-quantized weights
+        model.load_state_dict(non_linear_state, strict=False)
+
+        # Replace linear modules with GGUFLinear
+        patched = 0
+        for pt_key, (tensor, gguf_type) in linear_tensors.items():
+            module_path = pt_key[:-len(".weight")]
+            quant_type_name = gguf_type.name  # e.g. "Q8_0", "Q6_K", "Q4_K_M"
+            try:
+                import numpy as np
+                raw_data = torch.from_numpy(tensor.data.copy())
+                shape = tuple(tensor.shape[::-1])  # GGUF stores transposed
+                bias_key = module_path + ".bias"
+                bias = non_linear_state.get(bias_key, None)
+                new_linear = GGUFLinear(raw_data, shape, quant_type_name, bias)
+                parts = module_path.split(".")
+                parent = model
+                for p in parts[:-1]:
+                    parent = getattr(parent, p)
+                setattr(parent, parts[-1], new_linear)
+                patched += 1
+            except Exception as e:
+                log.debug("GGUF patch failed for %s: %s", module_path, e)
+
+        log.info("GGUF: patched %d quantized linear layers", patched)
+        model = model.to(dit_device)
+        model.eval()
+        return model
 
 
 class GGUFLinear(__import__("torch").nn.Module):
@@ -533,17 +683,30 @@ class Preview1_7BLoader(BaseHumoLoader):
         )
 
     def _load_preview_dit(self, weight_path: Path, dit_device: Any, dtype: Any) -> Any:
-        """
-        Load 1.7B WanModel variant (smaller architecture config).
+        """Load 1.7B WanModel variant in FP16."""
+        import torch
+        from safetensors.torch import load_file
+        from musicvision.video.wan_model import WanModel
 
-        TODO: construct WanModel with 1.7B config (different num_layers, hidden_dim),
-        load safetensors shards, move to dit_device.
-        """
-        log.warning(
-            "Preview1_7BLoader._load_preview_dit is a stub — requires wan.modules.model "
-            "with the 1.7B architecture config from HuMo source."
-        )
-        return None
+        model = WanModel.from_config("1_7B")
+        model = model.to(dtype)
+
+        if weight_path.is_dir():
+            import glob as _glob
+            shards = sorted(_glob.glob(str(weight_path / "*.safetensors")))
+            state = {}
+            for shard in shards:
+                state.update(load_file(shard, device="cpu"))
+        else:
+            state = load_file(str(weight_path), device="cpu")
+
+        missing, unexpected = model.load_state_dict(state, strict=False)
+        if missing:
+            log.warning("Preview DiT: %d missing keys", len(missing))
+        model = model.to(dit_device)
+        model.eval()
+        log.info("Preview 1.7B WanModel loaded on %s", dit_device)
+        return model
 
 
 # ---------------------------------------------------------------------------

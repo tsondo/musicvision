@@ -186,14 +186,14 @@ class HumoEngine:
 
         # Step 1-3: encode conditioning signals
         text_embeds  = self._encode_text(inp.text_prompt)
-        image_latent = self._encode_image(inp.reference_image)
-        audio_embeds = self._encode_audio(inp.audio_segment)
+        image_cond   = self._encode_image(inp.reference_image, n_frames)
+        audio_embeds = self._encode_audio(inp.audio_segment, n_frames)
 
         # Step 4-5: denoising loop
         video_latent = self._denoise(
             n_frames=n_frames,
             text_embeds=text_embeds,
-            image_latent=image_latent,
+            image_cond=image_cond,
             audio_embeds=audio_embeds,
             seed=inp.seed,
         )
@@ -310,71 +310,97 @@ class HumoEngine:
 
     def _encode_text(self, prompt: str) -> "Any":
         """
-        Encode *prompt* via the UMT5-XXL text encoder.
-
-        Returns text_embeds tensor on encoder_device.
-
-        TODO: implement using wan.modules.t5.WanT5Encoder once HuMo source is available.
-        Reference: kijai nodes_sampler.py — encode_prompt()
+        Encode prompt via the UMT5-XXL text encoder.
+        Returns (pos_embeds, neg_embeds) tuple, each [1, 512, 4096].
         """
-        log.warning("_encode_text is a stub — requires wan.modules.t5")
-        return None
+        if self._bundle is None or self._bundle.t5 is None:
+            raise RuntimeError("T5 encoder not loaded — call load() first")
+        pos_embeds, neg_embeds = self._bundle.t5.encode_pair(prompt, "")
+        return pos_embeds, neg_embeds
 
-    def _encode_image(self, image_path: Path) -> "Any":
+    def _encode_image(self, image_path: Path, n_frames: int) -> "Any":
         """
-        Process reference image through the HuMoEmbeds pipeline.
+        Process reference image into image conditioning tensors.
 
-        Steps (from kijai nodes.py — HuMoEmbeds):
-          1. Load image → normalize to [-1, 1]
-          2. VAE encode → image latent
-          3. Apply positional embeddings for image conditioning
-          4. Return image_cond tensor for the DiT cross-attention
+        Returns (image_cond_pos, image_cond_neg) both [1, 20, total_lat_f, lat_h, lat_w].
+        The 20 channels = 4 mask + 16 latent.
 
-        TODO: implement using wan.modules.vae.WanVideoVAE
+        Positive: ref image latent at position 0, zeros for noise frames.
+        Negative: all zeros (uncond).
         """
-        log.warning("_encode_image is a stub — requires wan.modules.vae + HuMoEmbeds logic")
-        return None
+        if self._bundle is None or self._bundle.vae is None:
+            raise RuntimeError("VAE not loaded — call load() first")
 
-    def _encode_audio(self, audio_path: Path) -> "Any":
+        import torch
+        from PIL import Image
+        import numpy as np
+
+        vae = self._bundle.vae
+        enc_device = self._bundle.encoder_device
+
+        # Determine resolution from config
+        if self.config.resolution == "720p":
+            H, W = 720, 1280
+        elif self.config.resolution == "480p":
+            H, W = 480, 832
+        else:
+            H, W = 720, 1280
+
+        # Latent dimensions
+        lat_f = (n_frames - 1) // 4 + 1   # temporal latent frames for noise
+        total_lat_f = lat_f + 1            # +1 for reference frame
+        lat_h, lat_w = H // 8, W // 8
+
+        # Load and resize reference image
+        img = Image.open(image_path).convert("RGB").resize((W, H), Image.LANCZOS)
+        img_np = np.array(img, dtype=np.float32) / 255.0
+        img_t = torch.from_numpy(img_np).permute(2, 0, 1).unsqueeze(0)  # [1, 3, H, W]
+        img_t = img_t.to(enc_device)
+
+        # VAE encode the reference image
+        with torch.no_grad():
+            img_latent = vae.encode_image(img_t)  # [1, 16, 1, lat_h, lat_w]
+
+        # Build positive image condition: [1, 20, total_lat_f, lat_h, lat_w]
+        # Channel layout: [4 mask | 16 latent]
+        # Mask: 1 where we have a reference frame (frame 0), 0 elsewhere
+        mask_pos = torch.zeros(1, 4, total_lat_f, lat_h, lat_w, device=enc_device)
+        mask_pos[:, :, 0, :, :] = 1.0  # ref frame mask
+
+        # Latent: reference image at frame 0, zeros for noise frames
+        latent_frames = torch.zeros(1, 16, total_lat_f, lat_h, lat_w, device=enc_device)
+        latent_frames[:, :, 0, :, :] = img_latent[:, :, 0, :, :]
+
+        image_cond_pos = torch.cat([mask_pos, latent_frames], dim=1)  # [1, 20, total_lat_f, lat_h, lat_w]
+
+        # Negative: all zeros
+        image_cond_neg = torch.zeros_like(image_cond_pos)
+
+        return image_cond_pos, image_cond_neg
+
+    def _encode_audio(self, audio_path: Path, n_frames: int) -> "Any":
         """
-        Encode audio segment via Whisper encoder → audio_embeds tensor.
-
-        Steps (from kijai nodes.py — HuMoEmbeds audio branch):
-          1. Load WAV, resample to 16 kHz
-          2. Whisper feature extraction (log-mel spectrogram, 80 bins)
-          3. Pass through Whisper encoder (no decoder)
-          4. Return last_hidden_state on encoder_device
-
-        The full-mix audio (not isolated vocals) is the correct input here
-        because HuMo was trained with mixed audio for A/V synchronisation.
-
-        TODO: complete once Whisper encoder is loaded in _bundle.whisper
+        Encode audio segment via Whisper encoder → windowed audio features.
+        Returns [1, total_lat_f, 8, 5, 1280] tensor.
         """
         if self._bundle is None or self._bundle.whisper is None:
-            log.warning("_encode_audio is a stub — Whisper encoder not loaded")
-            return None
+            raise RuntimeError("Whisper encoder not loaded — call load() first")
 
-        try:
-            import torch
-            from transformers import WhisperFeatureExtractor
-            import soundfile as sf
+        from musicvision.video.audio_encoder import HumoAudioEncoder
 
-            wav, sr = sf.read(str(audio_path), dtype="float32")
-            if wav.ndim > 1:
-                wav = wav.mean(axis=1)  # mono
+        lat_f = (n_frames - 1) // 4 + 1
+        total_lat_f = lat_f + 1  # +1 for ref frame
 
-            extractor = WhisperFeatureExtractor.from_pretrained("openai/whisper-large-v3")
-            features = extractor(
-                wav, sampling_rate=sr, return_tensors="pt"
-            ).input_features.to(self._bundle.encoder_device)
-
-            with torch.no_grad():
-                audio_embeds = self._bundle.whisper(features).last_hidden_state
-
-            return audio_embeds
-        except Exception as exc:
-            log.warning("Audio encoding failed: %s — returning None", exc)
-            return None
+        encoder = HumoAudioEncoder(
+            whisper_model=self._bundle.whisper,
+            device=self._bundle.encoder_device,
+        )
+        audio_features = encoder.encode(
+            audio_path=audio_path,
+            num_latent_frames=lat_f,
+            include_ref_frame=True,
+        )
+        return audio_features  # [1, total_lat_f, 8, 5, 1280]
 
     # ------------------------------------------------------------------
     # Internal: denoising loop
@@ -384,31 +410,155 @@ class HumoEngine:
         self,
         n_frames: int,
         text_embeds: "Any",
-        image_latent: "Any",
+        image_cond: "Any",
         audio_embeds: "Any",
         seed: int | None = None,
     ) -> "Any":
         """
-        Flow-Matching denoising loop producing the video latent.
+        Flow-Matching denoising loop with TIA dual CFG guidance.
 
-        Scheduler: UniPC / DPM++ or the Flow-Matching scheduler from HuMo
-        (see bytedance-research/HuMo generate.yaml — solver type).
+        Dual CFG formula (from HuMo paper):
+            v_pred = v_text_neg + scale_a * (v_cond - v_audio_neg)
+                     + (scale_t - 2.0) * (v_audio_neg - v_text_neg)
 
-        Guidance: dual CFG with scale_t (text) and scale_a (audio).
-        Negative conditioning: zeros for audio_embeds, uncond text token for text.
-
-        Block swap: if self._bundle.block_swap is not None, each transformer
-        block is executed via swap.execute_block(idx, hidden, ...) which
-        handles CPU↔GPU migration transparently.
-
-        TODO: implement once WanModel forward signature is known from HuMo source.
-        Reference: kijai nodes_sampler.py — WanVideoSampler.sample()
+        Three DiT forward passes per step:
+            v_cond      = dit(z + img_pos, t, pos_text, audio)
+            v_audio_neg = dit(z + img_pos, t, pos_text, audio_zeros)
+            v_text_neg  = dit(z + img_neg, t, neg_text, audio)
         """
-        log.warning(
-            "_denoise is a stub — requires WanModel forward() signature from HuMo source. "
-            "Reference: kijai/ComfyUI-WanVideoWrapper/nodes_sampler.py"
+        import torch
+        from musicvision.video.scheduler import FlowMatchScheduler
+
+        if self._bundle is None or self._bundle.dit is None:
+            raise RuntimeError("DiT not loaded — call load() first")
+
+        dit = self._bundle.dit
+        dit_device = self._bundle.dit_device
+        enc_device = self._bundle.encoder_device
+
+        # Unpack conditioning
+        pos_text, neg_text = text_embeds        # each [1, 512, 4096]
+        image_cond_pos, image_cond_neg = image_cond  # each [1, 20, total_lat_f, lat_h, lat_w]
+
+        # Move text embeds to dit device
+        pos_text = pos_text.to(dit_device)
+        neg_text = neg_text.to(dit_device)
+        image_cond_pos = image_cond_pos.to(dit_device)
+        image_cond_neg = image_cond_neg.to(dit_device)
+
+        # Audio features — move to dit device, create zero version
+        if audio_embeds is not None:
+            audio_embeds = audio_embeds.to(dit_device)
+            audio_zeros = torch.zeros_like(audio_embeds)
+        else:
+            audio_zeros = None
+
+        # Determine latent shape
+        if self.config.resolution == "720p":
+            H, W = 720, 1280
+        elif self.config.resolution == "480p":
+            H, W = 480, 832
+        else:
+            H, W = 720, 1280
+        lat_f = (n_frames - 1) // 4 + 1
+        total_lat_f = lat_f + 1
+        lat_h, lat_w = H // 8, W // 8
+
+        # Initialize noise
+        if seed is not None:
+            torch.manual_seed(seed)
+        noise = torch.randn(
+            1, 16, total_lat_f, lat_h, lat_w,
+            device=dit_device, dtype=torch.bfloat16,
         )
-        return None
+        z = noise.clone()
+
+        # Create scheduler
+        scheduler = FlowMatchScheduler(
+            num_inference_steps=self.config.denoising_steps,
+            shift=5.0,
+        )
+
+        scale_a = float(self.config.scale_a)
+        scale_t = float(self.config.scale_t)
+
+        log.info(
+            "Denoising: %d steps, lat shape [1,16,%d,%d,%d], scale_a=%.1f, scale_t=%.1f",
+            self.config.denoising_steps, total_lat_f, lat_h, lat_w, scale_a, scale_t,
+        )
+
+        use_swap = self._bundle.block_swap is not None
+
+        with torch.no_grad():
+            for step_idx in range(self.config.denoising_steps):
+                t = scheduler.sigmas[step_idx].to(dit_device)
+                timestep = t.expand(1)
+
+                # Build DiT inputs: cat noise latent + image conditioning
+                x_pos = torch.cat([z, image_cond_pos], dim=1)  # [1, 36, total_lat_f, lat_h, lat_w]
+                x_neg = torch.cat([z, image_cond_neg], dim=1)
+
+                if use_swap:
+                    v_cond = self._forward_with_swap(x_pos, timestep, pos_text, audio_embeds)
+                    v_audio_neg = self._forward_with_swap(x_pos, timestep, pos_text, audio_zeros)
+                    v_text_neg = self._forward_with_swap(x_neg, timestep, neg_text, audio_embeds)
+                else:
+                    v_cond = dit(x_pos, timestep, pos_text, audio_embeds)
+                    v_audio_neg = dit(x_pos, timestep, pos_text, audio_zeros)
+                    v_text_neg = dit(x_neg, timestep, neg_text, audio_embeds)
+
+                # TIA dual CFG combination
+                v_pred = (
+                    v_text_neg
+                    + scale_a * (v_cond - v_audio_neg)
+                    + (scale_t - 2.0) * (v_audio_neg - v_text_neg)
+                )
+
+                z = scheduler.step(v_pred, z, step_idx)
+
+                if (step_idx + 1) % 10 == 0:
+                    log.debug("Denoising step %d/%d", step_idx + 1, self.config.denoising_steps)
+
+        return z  # [1, 16, total_lat_f, lat_h, lat_w]
+
+    def _forward_with_swap(
+        self,
+        x: "Any",
+        timestep: "Any",
+        text_embeds: "Any",
+        audio_features: "Any",
+    ) -> "Any":
+        """
+        DiT forward pass with block swap: executes blocks one at a time,
+        moving each from CPU to GPU and back.
+
+        Calls dit.pre_blocks() → BlockSwapManager.execute_block() × N → dit.post_blocks()
+        """
+        import torch
+
+        dit = self._bundle.dit
+        swap = self._bundle.block_swap
+
+        # Run pre-block processing (patch embed, time/text/audio conditioning)
+        x_seq, time_emb, text_ctx, audio_proj_out, freqs, F_frames, h, w = dit.pre_blocks(
+            x, timestep, text_embeds, audio_features
+        )
+
+        # Execute each block via block swap manager
+        for block_idx in range(len(dit.blocks)):
+            x_seq = swap.execute_block(
+                block_idx,
+                x_seq,
+                time_emb,
+                text_ctx,
+                audio_proj_out,
+                freqs,
+                F_frames,
+            )
+
+        # Run post-block processing (head AdaLN + unpatchify)
+        out = dit.post_blocks(x_seq, time_emb, F_frames, h, w)
+        return out
 
     # ------------------------------------------------------------------
     # Internal: VAE decode
@@ -418,10 +568,34 @@ class HumoEngine:
         """
         Decode video latent → pixel-space frames tensor (T, H, W, 3) uint8.
 
-        TODO: implement using wan.modules.vae.WanVideoVAE.decode()
+        Strips the reference frame (last position), decodes remaining frames.
+        Returns (T, H, W, 3) uint8 numpy array or torch tensor.
         """
-        log.warning("_decode_latent is a stub — requires wan.modules.vae")
-        return None
+        if self._bundle is None or self._bundle.vae is None:
+            raise RuntimeError("VAE not loaded — call load() first")
+
+        import torch
+
+        vae = self._bundle.vae
+        enc_device = self._bundle.encoder_device
+
+        # Strip reference frame (it's appended at the end, position total_lat_f-1)
+        # latent: [1, 16, total_lat_f, lat_h, lat_w]
+        # Drop the last latent frame (reference frame used for conditioning)
+        noise_latent = latent[:, :, :-1, :, :]  # [1, 16, lat_f, lat_h, lat_w]
+
+        # Move to encoder device for VAE decode
+        noise_latent = noise_latent.to(enc_device).to(torch.float16)
+
+        with torch.no_grad():
+            pixels = vae.decode(noise_latent)  # [1, 3, T, H, W] in [0,1]
+
+        # Convert to (T, H, W, 3) uint8
+        pixels = pixels.squeeze(0)           # [3, T, H, W]
+        pixels = pixels.permute(1, 2, 3, 0)  # [T, H, W, 3]
+        pixels = (pixels.clamp(0, 1) * 255).to(torch.uint8)
+
+        return pixels  # (T, H, W, 3) uint8
 
 
 # ---------------------------------------------------------------------------
