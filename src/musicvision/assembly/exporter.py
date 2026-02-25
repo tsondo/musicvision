@@ -5,7 +5,7 @@ Both formats describe a timeline of scene clips at their correct positions.
 Import into DaVinci Resolve via File → Import → Timeline (EDL or FCPXML).
 
 EDL  — CMX 3600, universally supported, simple cut list
-FCPXML — Apple format v1.10, richer metadata, supported by DaVinci Resolve 18+
+FCPXML — Apple format v1.9 (primary), richer metadata, supported by DaVinci Resolve 18+ and FCP
 """
 
 from __future__ import annotations
@@ -101,7 +101,7 @@ def export_edl(
 
 
 # ---------------------------------------------------------------------------
-# FCPXML — v1.10
+# FCPXML — v1.9
 # ---------------------------------------------------------------------------
 
 def export_fcpxml(
@@ -113,7 +113,10 @@ def export_fcpxml(
     output_path: Path | None = None,
 ) -> Path:
     """
-    Generate an FCPXML 1.10 file for DaVinci Resolve / Final Cut Pro import.
+    Generate an FCPXML 1.9 file for DaVinci Resolve / Final Cut Pro import.
+
+    Version 1.9 is the recommended format for DaVinci Resolve (File → Import → Timeline).
+    Resolve's support for 1.10 is inconsistent; 1.9 is the stable target.
 
     Creates:
       - One <format> resource (fps + resolution)
@@ -142,7 +145,7 @@ def export_fcpxml(
     total_duration = sum(s.duration for s in ordered)
 
     # --- Build XML tree ---
-    root = ET.Element("fcpxml", {"version": "1.10"})
+    root = ET.Element("fcpxml", {"version": "1.9"})
 
     # Resources block
     resources = ET.SubElement(root, "resources")

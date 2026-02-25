@@ -222,9 +222,16 @@ class HumoEngine:
         """
         Generate video for a full scene, splitting into sub-clips when duration > 3.88s.
 
-        Each sub-clip uses the same reference image but inherits the full prompt.
-        The sub-clip audio segments are sliced by the caller (intake pipeline) and
-        stored alongside the main segment.
+        Sub-clip continuity (config.sub_clip_continuity, default True):
+            Sub-clip N+1 uses the last frame of sub-clip N as its reference image.
+            This produces smooth visual continuity across sub-clips without requiring
+            the model to re-anchor to a static reference image for each segment.
+            The first sub-clip always uses the scene's original reference image.
+            Disable via HumoConfig.sub_clip_continuity = False to revert to static
+            reference behaviour (all sub-clips share the original reference image).
+
+        Sub-clip audio segments must be pre-sliced and stored as
+        <segment_dir>/scene_XXX_sub_NN.wav by the intake pipeline.
 
         Returns:
             List of HumoOutput (one per sub-clip, or a single item for short scenes).
@@ -254,8 +261,8 @@ class HumoEngine:
             scene_id, duration, n_sub,
         )
 
-        # Sub-clip audio segments must be pre-sliced and stored as
-        # segments_vocal/scene_XXX_sub_N.wav by the intake pipeline.
+        current_reference = reference_image  # updated per sub-clip when continuity is on
+
         for i in range(n_sub):
             sub_audio = audio_segment.parent / f"{scene_id}_sub_{i:02d}.wav"
             if not sub_audio.exists():
@@ -268,13 +275,32 @@ class HumoEngine:
             sub_id = f"{scene_id}_{suffix}"
             sub_out = output_dir / f"{sub_id}.mp4"
             sub_out.parent.mkdir(parents=True, exist_ok=True)
+
             result = self.generate(HumoInput(
                 text_prompt=text_prompt,
-                reference_image=reference_image,
+                reference_image=current_reference,
                 audio_segment=sub_audio,
                 output_path=sub_out,
             ))
             outputs.append(result)
+
+            # Extract last frame for next sub-clip (continuity mode)
+            if self.config.sub_clip_continuity and i < n_sub - 1:
+                lastframe_path = output_dir / f"{sub_id}_lastframe.png"
+                try:
+                    _extract_last_frame(result.video_path, lastframe_path)
+                    current_reference = lastframe_path
+                    log.debug(
+                        "Sub-clip continuity: using %s as reference for sub-clip %d",
+                        lastframe_path.name, i + 1,
+                    )
+                except Exception as exc:
+                    log.warning(
+                        "Failed to extract last frame from %s: %s — "
+                        "falling back to original reference for sub-clip %d",
+                        result.video_path.name, exc, i + 1,
+                    )
+                    current_reference = reference_image
 
         return outputs
 
@@ -432,6 +458,38 @@ def recommend_tier(device_map: "DeviceMap") -> HumoTier:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _extract_last_frame(video_path: Path, output_path: Path) -> None:
+    """
+    Extract the last frame of a video file and save it as a PNG image.
+
+    Used by generate_scene() for sub-clip continuity: the last frame of
+    sub-clip N becomes the reference image for sub-clip N+1.
+
+    Args:
+        video_path: Source MP4 file.
+        output_path: Destination PNG file.
+
+    Raises:
+        RuntimeError: If ffmpeg fails or the video cannot be read.
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "ffmpeg", "-y",
+        "-sseof", "-0.1",          # seek to 0.1s before end
+        "-i", str(video_path),
+        "-frames:v", "1",          # grab exactly one frame
+        "-q:v", "1",               # lossless-quality JPEG; PNG overrides via extension
+        str(output_path),
+    ]
+    result = subprocess.run(cmd, capture_output=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"ffmpeg last-frame extraction failed: {result.stderr.decode()}"
+        )
+    if not output_path.exists():
+        raise RuntimeError(f"ffmpeg ran successfully but {output_path} was not created")
+
 
 def _sub_clip_suffixes(n: int) -> list[str]:
     """Generate sub-clip suffixes: a, b, c, ... aa, ab, ..."""

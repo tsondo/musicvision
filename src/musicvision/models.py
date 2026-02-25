@@ -154,6 +154,7 @@ class HumoConfig(BaseModel):
     scale_t: float = 7.5              # text guidance strength (5.0–10.0)
     denoising_steps: int = 50         # 30–40 faster, 50 best quality
     block_swap_count: int = 0         # DiT blocks to keep on CPU (0 = all on GPU)
+    sub_clip_continuity: bool = True  # pass last frame of sub-clip N as reference for sub-clip N+1
 
     @property
     def model_size(self) -> str:

@@ -18,7 +18,7 @@ The pipeline is designed around AI-generated music from **AceStep** (a text-cond
 
 **Primary output:** A rough-cut MP4 + an EDL/FCPXML timeline for DaVinci Resolve finishing.
 
-**Target hardware:** Dual-GPU workstation (RTX 5080 32 GB + RTX 3080 Ti 12 GB), with VRAM-tiered fallbacks for single-GPU and lighter configs.
+**Target hardware:** Dual-GPU workstation (RTX 5090 32 GB + RTX 4080 16 GB), with VRAM-tiered fallbacks for single-GPU and lighter configs.
 
 ---
 
@@ -77,9 +77,9 @@ Each scene gets a reference still image (FLUX.1-dev or Z-Image) that the HuMo vi
 ---
 
 ### Stage 3 — Video Generation
-**Status: Infrastructure complete; inference layer pending HuMo source release**
+**Status: Infrastructure complete; inference layer implementation pending**
 
-This is where the pipeline currently has a gap.
+The HuMo source code is fully available (Apache 2.0) at https://github.com/Phantom-video/HuMo (released Sep 10 2025). The four inference stubs are not blocked — reference implementations exist in both the official repo and kijai's ComfyUI wrapper.
 
 #### What IS fully built
 
@@ -148,9 +148,9 @@ Each stub has exact references to the source files needed:
 **Note:** `_save_mp4()` is implemented (torchvision.io.write_video + imageio fallback). The full pipeline will work end-to-end once the four inference stubs are filled in.
 
 **What's needed to close this gap:**
-1. Access to `bytedance-research/HuMo` repo (currently gated/pending release) for the exact `WanModel` forward signature and TIA conditioning hooks
-2. Or: port from kijai's ComfyUI wrapper (he reverse-engineered the same interface)
-3. Estimated effort once source is available: 1–2 days of adapter code
+1. Read `bytedance-research/HuMo` repo for the exact `WanModel` forward signature and TIA conditioning hooks — source is fully public
+2. Reference: kijai's ComfyUI wrapper (`nodes_sampler.py`, `HuMo/nodes.py`) provides a battle-tested port of the same interface
+3. Estimated effort: 1–2 days of adapter code
 
 ---
 
@@ -164,8 +164,8 @@ Each stub has exact references to the source files needed:
 - Muxes original song audio back onto the video
 - Output: `output/rough_cut.mp4`
 
-`export_edl()` → `output/timeline.edl` (CMX 3600, DaVinci Resolve compatible)
-`export_fcpxml()` → `output/timeline.fcpxml` (FCPXML 1.10, DaVinci Resolve 18+ / Final Cut Pro)
+`export_edl()` → `output/timeline.edl` (CMX 3600, DaVinci Resolve compatible — fallback format)
+`export_fcpxml()` → `output/timeline.fcpxml` (FCPXML 1.9, DaVinci Resolve 18+ / Final Cut Pro — primary format)
 
 ---
 
@@ -225,7 +225,7 @@ Everything flows through Pydantic v2 models. No raw dict manipulation anywhere.
 name, created
 song: SongInfo (audio_file, bpm, duration, keyscale, AceStep metadata)
 style_sheet: StyleSheet (visual_style, color_palette, characters[], props[], settings[])
-humo: HumoConfig (tier, resolution, scale_a, scale_t, denoising_steps, block_swap_count)
+humo: HumoConfig (tier, resolution, scale_a, scale_t, denoising_steps, block_swap_count, sub_clip_continuity)
 image_gen: ImageGenConfig (model, quant, steps, guidance_scale, lora_path)
 vocal_separation: VocalSeparationConfig (method, demucs_model, roformer_model)
 ```
@@ -253,13 +253,13 @@ HuMo (ByteDance) is a Text+Image+Audio → Video model — the only openly-avail
 
 Alternative: Wan2.1 T2V (text-only video) or Kling/Sora (commercial APIs). HuMo was chosen specifically for TIA mode.
 
-**Risk:** The HuMo source is partially gated. The inference stubs are the one blocking item.
+**Source:** Fully open (Apache 2.0) at https://github.com/Phantom-video/HuMo since Sep 10 2025. The four inference stubs are implementation-pending, not blocked — reference code is available in the official repo and kijai's ComfyUI-WanVideoWrapper.
 
 ### 2. FLUX vs Z-Image for reference images
 FLUX.1-dev produces highest quality but is gated and VRAM-heavy. Z-Image (Tongyi-MAI 6B) is open-weight, lighter, and faster — good for rapid iteration. The factory pattern (`create_engine()`) makes them interchangeable via config.
 
 ### 3. Two-GPU split
-GPU0 (RTX 5080 32 GB) handles DiT/UNet compute. GPU1 (RTX 3080 Ti 12 GB) handles T5 text encoder, VAE, Whisper encoder — all the smaller models. This is the pattern from kijai's ComfyUI wrapper.
+GPU0 (RTX 5090 32 GB) handles DiT/UNet compute. GPU1 (RTX 4080 16 GB) handles T5 text encoder, VAE, Whisper encoder — all the smaller models. This is the pattern from kijai's ComfyUI wrapper. The 4080's 16 GB headroom comfortably fits all encoder workloads simultaneously.
 
 Block swap allows the 17B HuMo DiT to fit in fewer GPU gigabytes by sequentially swapping transformer blocks between CPU and GPU during the denoising loop.
 
@@ -274,13 +274,15 @@ Block swap allows the 17B HuMo DiT to fit in fewer GPU gigabytes by sequentially
 ### 5. Vocal separation choice
 MelBandRoFormer (via `audio-separator`) is best for live/mixed recordings. Demucs htdemucs is often better for synthetically generated music (the primary use case here). Both are available; method is selectable per project.
 
-The vocal stem is used for Whisper transcription (cleaner input = better word timestamps) and then sliced per-scene to provide a cleaner audio input for HuMo.
+The vocal stem is used **only for Whisper transcription** (cleaner input = better word timestamps). HuMo TIA mode receives the **full mix** (vocals + instrumental) from `segments/` — not the isolated vocal stem. HuMo was trained with mixed audio for A/V synchronisation and performs better with the full signal.
 
 ### 6. Sub-clip architecture
 HuMo hard limit is 97 frames @ 25 fps = 3.88 seconds per clip. Longer scenes are automatically split by `generate_scene()` into sequential sub-clips with pre-sliced audio segments. The assembly stage merges them back transparently.
 
+**Sub-clip continuity** (`HumoConfig.sub_clip_continuity`, default `True`): after generating sub-clip N, the last frame is extracted (via ffmpeg) and used as the reference image for sub-clip N+1. This prevents visual discontinuity between sub-clips that share the same reference image but independently sampled diffusion paths.
+
 ### 7. DaVinci Resolve integration
-The pipeline outputs a rough-cut MP4 for immediate preview, plus CMX 3600 EDL and FCPXML 1.10 timelines for professional grading and finishing in DaVinci Resolve. This lets the AI output be a starting point for human editing rather than a final product.
+The pipeline outputs a rough-cut MP4 for immediate preview, plus CMX 3600 EDL (fallback) and FCPXML 1.9 (primary) timelines for professional grading and finishing in DaVinci Resolve. FCPXML 1.9 is the stable DR target — 1.10 support is inconsistent. This lets the AI output be a starting point for human editing rather than a final product.
 
 ---
 
@@ -360,8 +362,8 @@ All tests are GPU-free (torch lazy-imported, GPU behavior mocked).
 
 ## What's Not Built Yet
 
-- **Frontend** — no React/Vue UI. Pipeline is driven entirely via API or CLI today.
-- **HuMo inference implementation** — the four stubs (`_encode_text`, `_encode_image`, `_denoise`, `_decode_latent`). The entire surrounding infrastructure is complete.
+- **React frontend** — not yet built. Pipeline is driven entirely via API or CLI today (Swagger UI at `/docs`).
+- **HuMo inference implementation** — the four stubs (`_encode_text`, `_encode_image`, `_denoise`, `_decode_latent`). The entire surrounding infrastructure is complete. Source is available at https://github.com/Phantom-video/HuMo — implementation pending (~1–2 dev-days).
 - **LoRA training** — the pipeline supports LoRA paths for characters but doesn't train them.
 - **Scene approval UI** — the API endpoints exist (`PATCH /api/scenes/{id}`, `POST /api/scenes/approve-all`) but there's no web UI to show images side-by-side for review.
 - **Beat-locked scene boundaries** — implemented in segmentation but not yet exposed as a visual timeline in any UI.

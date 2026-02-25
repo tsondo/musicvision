@@ -10,12 +10,18 @@ HuMo (Human-Centric Video Generation via Collaborative Multi-Modal Conditioning)
 
 ## Model Variants
 
-| Model | VRAM Required | Speed (480p) | Speed (720p) | Quality |
-|-------|--------------|-------------|-------------|---------|
-| HuMo-17B | 24GB+ (with FSDP) | ~20 min | ~40 min | Best |
-| HuMo-1.7B | 24GB (single GPU) | ~8 min | ~15 min | Good (sync quality similar to 17B) |
+| Tier | Model | Format | DiT VRAM | Speed (480p) | Speed (720p) | Quality |
+|------|-------|--------|----------|-------------|-------------|---------|
+| `fp16` | HuMo-17B | FP16 safetensors | ~34 GB | ~20 min | ~40 min | Best (2× GPU FSDP) |
+| `fp8_scaled` | HuMo-17B | FP8 e4m3fn scaled | ~18 GB | ~25 min | ~50 min | Excellent (fits single RTX 4080 16 GB as fallback) |
+| `gguf_q8` | HuMo-17B | GGUF Q8_0 | ~18.5 GB | ~25 min | ~50 min | Excellent |
+| `gguf_q6` | HuMo-17B | GGUF Q6_K | ~14.4 GB | ~30 min | ~60 min | Very good |
+| `gguf_q4` | HuMo-17B | GGUF Q4_K_M | ~11.5 GB | ~35 min | ~75 min | Good |
+| `preview` | HuMo-1.7B | FP16 safetensors | ~3.4 GB | ~8 min | ~15 min | Good (sync quality similar to 17B) |
 
 The 1.7B model has lower visual quality but nearly identical audio-visual sync accuracy. Good for iteration/preview; use 17B for final render.
+
+**Note on `fp8_scaled`:** The FP8 scaled weights (`Kijai/WanVideo_comfy_fp8_scaled`) bring the 17B DiT down to ~18 GB — fitting on a single RTX 4080 (16 GB) as a secondary-GPU fallback, with model components paged via block swap.
 
 ## Installation
 
@@ -31,16 +37,28 @@ conda install -c conda-forge ffmpeg
 ## Model Weights
 
 ```bash
-# Base model (required)
+# Base model (required — includes wan.modules package)
 huggingface-cli download Wan-AI/Wan2.1-T2V-1.3B --local-dir ./weights/Wan2.1-T2V-1.3B
 
-# HuMo weights
+# HuMo weights (official repo — Apache 2.0, fully public since Sep 10 2025)
 huggingface-cli download bytedance-research/HuMo --local-dir ./weights/HuMo
+
+# FP8 scaled weights — kijai's optimized version (~18 GB, fits single 16 GB GPU)
+huggingface-cli download Kijai/WanVideo_comfy_fp8_scaled --local-dir ./weights/HuMo_fp8
 
 # Audio processing
 huggingface-cli download openai/whisper-large-v3 --local-dir ./weights/whisper-large-v3
 huggingface-cli download huangjackson/Kim_Vocal_2 --local-dir ./weights/audio_separator
 ```
+
+### Official Repository Structure
+
+The `bytedance-research/HuMo` repo contains:
+- `humo/` — Python package with model architecture
+- `main.py` — entry point
+- `scripts/infer_ta.sh`, `scripts/infer_tia.sh` (and `_1_7B` variants) — inference scripts
+- `examples/test_case.json` — input format example
+- `humo/configs/inference/generate.yaml` — inference configuration
 
 ## Input Modes
 
@@ -144,8 +162,14 @@ Set `dit.sp_size` in `generate.yaml` equal to the number of GPUs:
 
 ```yaml
 dit:
-  sp_size: 2    # For 2 GPUs
+  sp_size: 2    # For 2 GPUs (e.g. RTX 5090 32 GB + RTX 4080 16 GB)
 ```
+
+**MusicVision two-GPU split (RTX 5090 + RTX 4080):**
+- GPU 0 (RTX 5090, 32 GB): DiT/UNet computation
+- GPU 1 (RTX 4080, 16 GB): T5 text encoder, VAE, Whisper encoder — all smaller models fit comfortably at 16 GB
+
+For single-GPU setups, use `fp8_scaled` or a GGUF tier with `block_swap_count > 0` to stay within VRAM.
 
 ## Output
 
@@ -164,7 +188,12 @@ dit:
 
 ## ComfyUI Integration
 
-HuMo-17B is integrated into ComfyUI-Wan (as of Sep 2025). This could be an alternative execution backend for MusicVision if a node-based workflow is preferred.
+HuMo-17B is integrated into kijai's [ComfyUI-WanVideoWrapper](https://github.com/kijai/ComfyUI-WanVideoWrapper) (as of Sep 2025). This provides a battle-tested reference implementation including:
+- Full denoising loop in `nodes_sampler.py` (WanVideoSampler)
+- HuMoEmbeds (image + audio conditioning) in `HuMo/nodes.py`
+- GGUF support and block swapping implementation
+
+This could be an alternative execution backend for MusicVision if a node-based workflow is preferred.
 
 ## HuMoSet Dataset
 
@@ -175,6 +204,10 @@ HuMo-17B is integrated into ComfyUI-Wan (as of Sep 2025). This could be an alter
 
 ## Useful Links
 
-- ComfyUI integration: via kijai's ComfyUI-Wan
+- Official source: https://github.com/Phantom-video/HuMo (Apache 2.0)
+- HuggingFace weights: https://huggingface.co/bytedance-research/HuMo
+- FP8 scaled weights: https://huggingface.co/Kijai/WanVideo_comfy_fp8_scaled
+- ComfyUI wrapper: https://github.com/kijai/ComfyUI-WanVideoWrapper
 - HuggingFace Space: Available for quick testing without local setup
 - Stage-1 dataset (subject preservation training): Released Sep 2025
+- HuMoSet dataset (670K A/V training samples): Released Dec 2025

@@ -2,8 +2,8 @@
 Multi-GPU management for MusicVision.
 
 Strategy (from PIPELINE_SPEC):
-  GPU 0 (RTX 5080, 32GB) — DiT/UNet for FLUX and HuMo
-  GPU 1 (RTX 3080 Ti, 12GB) — text encoders, VAE, Whisper, audio separator
+  GPU 0 (RTX 5090, 32GB) — DiT/UNet for FLUX and HuMo
+  GPU 1 (RTX 4080, 16GB) — text encoders, VAE, Whisper, audio separator
 
 This module provides device mapping so engine wrappers don't hardcode device indices.
 """
