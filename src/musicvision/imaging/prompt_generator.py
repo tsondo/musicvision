@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import logging
 
-from musicvision.llm import LLMClient, LLMConfig, get_client
+import sys
+
+from musicvision.llm import LLMClient, LLMConfig, get_client, llm_available
 from musicvision.models import ProjectConfig, Scene, SceneType
 
 log = logging.getLogger(__name__)
@@ -75,6 +77,10 @@ def generate_image_prompt(
     Returns:
         FLUX-compatible image prompt string
     """
+    if not llm_available(llm_config):
+        log.warning("LLM unavailable — falling back to interactive input for %s", scene.id)
+        return _prompt_interactive_image(scene, config)
+
     client: LLMClient = get_client(llm_config)
 
     style_context = _build_style_context(config)
@@ -107,7 +113,10 @@ Scene to describe:
     user_msg += "\n\nWrite the FLUX image prompt for this scene:"
 
     log.info("Generating image prompt for %s...", scene.id)
-    return client.chat(IMAGE_PROMPT_SYSTEM, user_msg)
+    try:
+        return client.chat(IMAGE_PROMPT_SYSTEM, user_msg)
+    except ValueError:
+        return _prompt_interactive_image(scene, config)
 
 
 def generate_image_prompts_batch(
@@ -176,3 +185,66 @@ Generate a FLUX image prompt for each of the following {len(scenes)} scenes:
         ]
 
     return prompts
+
+
+# ---------------------------------------------------------------------------
+# Interactive fallback
+# ---------------------------------------------------------------------------
+
+def _prompt_interactive_image(scene: Scene, config: ProjectConfig) -> str:
+    """
+    Prompt the user to type a FLUX image prompt when no LLM is available.
+
+    If stdin is not a TTY (non-interactive / piped), returns a minimal
+    auto-generated template instead of blocking.
+    """
+    style_context = _build_style_context(config)
+    scene_type_label = "instrumental" if scene.type == SceneType.INSTRUMENTAL else "vocal"
+    divider = "─" * 60
+
+    if not sys.stdin.isatty():
+        template = _auto_template_image(scene, config)
+        log.info("Non-interactive mode — using auto-template for %s: %s", scene.id, template)
+        return template
+
+    print(f"\n{divider}")
+    print(f"LLM unavailable — image prompt required for {scene.id}")
+    print(divider)
+    print(f"Scene:    {scene.id}  |  {scene_type_label}  |  {scene.duration:.1f}s")
+    if scene.lyrics:
+        snippet = scene.lyrics[:120] + ("…" if len(scene.lyrics) > 120 else "")
+        print(f"Lyrics:   {snippet}")
+    if style_context != "(no style sheet defined)":
+        print(f"Style:    {style_context}")
+    print()
+    print("Guidelines: Concrete visual description, 2–4 sentences, 60–130 words.")
+    print("  Include:  subject appearance, environment, lighting, composition")
+    print("  Avoid:    abstract language, audio references, 'then'/'next'")
+    print()
+    print("Enter FLUX image prompt (or press Enter for auto-template):")
+
+    try:
+        response = input("> ").strip()
+    except EOFError:
+        response = ""
+
+    if not response:
+        response = _auto_template_image(scene, config)
+        print(f"  [auto-template] {response}")
+
+    return response
+
+
+def _auto_template_image(scene: Scene, config: ProjectConfig) -> str:
+    """Minimal template used when interactive input is unavailable or skipped."""
+    ss = config.style_sheet
+    style = ss.visual_style or "cinematic"
+    palette = f", {ss.color_palette}" if ss.color_palette else ""
+    subject = ss.characters[0].description if ss.characters else "a performer on stage"
+    setting = ss.settings[0].description if ss.settings else "a dramatic stage environment"
+    lyric_hint = f'evoking the mood of "{scene.lyrics[:60]}"' if scene.lyrics else "atmospheric and evocative"
+    return (
+        f"{subject.capitalize()} in {setting}, {style} aesthetic{palette}. "
+        f"Dramatic lighting, high-contrast shadows, music video composition, {lyric_hint}. "
+        f"Cinematic 16:9 framing, sharp foreground, shallow depth of field."
+    )

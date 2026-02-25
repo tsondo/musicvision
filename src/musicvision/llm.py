@@ -171,3 +171,19 @@ def get_client(config: LLMConfig | None = None) -> LLMClient:
         text = client.chat(system_prompt, user_message)
     """
     return LLMClient(config)
+
+
+def llm_available(config: LLMConfig | None = None) -> bool:
+    """
+    Return True if the configured LLM backend has the required credentials
+    present in the environment.  Does not make a network call.
+
+    Anthropic: requires ANTHROPIC_API_KEY (or explicit config.api_key)
+    OpenAI:    requires OPENAI_BASE_URL   (or explicit config.base_url)
+    """
+    cfg = config or _config_from_env()
+    if cfg.backend == "anthropic":
+        return bool(cfg.api_key or os.environ.get("ANTHROPIC_API_KEY", ""))
+    if cfg.backend == "openai":
+        return bool(cfg.base_url or os.environ.get("OPENAI_BASE_URL", ""))
+    return False
