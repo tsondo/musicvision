@@ -2,7 +2,7 @@
 Whisper transcription with word-level timestamps.
 
 Uses transformers pipeline with openai/whisper-large-v3.
-Loads on secondary GPU (3080 Ti) by default, unloads when done.
+Loads on the secondary GPU by default, unloads when done.
 
 The word timestamps are critical for scene segmentation —
 they determine where scenes can be split.
@@ -34,7 +34,7 @@ class TranscriptionResult:
 def transcribe(
     audio_path: Path,
     model_name: str = "openai/whisper-large-v3",
-    device: str = "cuda:1",
+    device: str = "cuda:0",
     language: str | None = None,
 ) -> TranscriptionResult:
     """

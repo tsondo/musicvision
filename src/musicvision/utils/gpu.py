@@ -1,16 +1,19 @@
 """
 Multi-GPU management for MusicVision.
 
-Strategy (from PIPELINE_SPEC):
-  GPU 0 (RTX 5090, 32GB) — DiT/UNet for FLUX and HuMo
-  GPU 1 (RTX 4080, 16GB) — text encoders, VAE, Whisper, audio separator
+Strategy:
+  Primary GPU (highest VRAM) — DiT/UNet for FLUX and HuMo
+  Secondary GPU — text encoders, VAE, Whisper, audio separator
 
+GPU assignment is automatic: the GPU with the most VRAM becomes primary.
+If VRAM is equal, the higher-end GPU (by name) is preferred.
 This module provides device mapping so engine wrappers don't hardcode device indices.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -38,13 +41,36 @@ class DeviceMap:
         return self.encoder_device
 
 
+def _gpu_sort_key(index: int) -> tuple:
+    """
+    Return a sort key for ranking GPUs: (vram_bytes, model_number).
+
+    Higher VRAM wins. If VRAM is equal, the higher GPU model number wins
+    (e.g. 4080 > 3080). This ensures the beefiest GPU becomes primary
+    regardless of PCIe slot / CUDA index.
+    """
+    import torch
+
+    props = torch.cuda.get_device_properties(index)
+    vram = props.total_memory
+
+    # Extract the leading numeric part of the GPU model name for tiebreaking.
+    # E.g. "NVIDIA GeForce RTX 5080" → 5080, "NVIDIA RTX A6000" → 6000
+    name = props.name
+    numbers = re.findall(r"\d+", name)
+    # Use the largest number found (handles names like "RTX 3080 Ti 12GB")
+    model_number = max((int(n) for n in numbers), default=0)
+
+    return (vram, model_number)
+
+
 def detect_devices() -> DeviceMap:
     """
     Auto-detect GPU configuration and return a DeviceMap.
 
     Rules:
-      - 2+ GPUs → GPU0 = DiT, GPU1 = encoders/VAE
-      - 1 GPU   → everything on GPU0, offload to CPU
+      - 2+ GPUs → highest-VRAM GPU = DiT (primary), next = encoders/VAE
+      - 1 GPU   → everything on that GPU, offload to CPU
       - 0 GPUs  → CPU-only (for testing / assembly-only workflows)
     """
     import torch
@@ -52,17 +78,26 @@ def detect_devices() -> DeviceMap:
     n_gpus = torch.cuda.device_count()
 
     if n_gpus >= 2:
-        gpu0 = torch.device("cuda:0")
-        gpu1 = torch.device("cuda:1")
+        # Rank GPUs: highest VRAM first, tiebreak by model number
+        ranked = sorted(range(n_gpus), key=_gpu_sort_key, reverse=True)
+        primary_idx = ranked[0]
+        secondary_idx = ranked[1]
+
+        primary = torch.device(f"cuda:{primary_idx}")
+        secondary = torch.device(f"cuda:{secondary_idx}")
         log.info(
-            "Multi-GPU detected: %s (DiT) + %s (encoders/VAE)",
-            torch.cuda.get_device_name(0),
-            torch.cuda.get_device_name(1),
+            "Multi-GPU detected: cuda:%d %s [%.1f GB] (DiT) + cuda:%d %s [%.1f GB] (encoders/VAE)",
+            primary_idx,
+            torch.cuda.get_device_name(primary_idx),
+            torch.cuda.get_device_properties(primary_idx).total_memory / 1024**3,
+            secondary_idx,
+            torch.cuda.get_device_name(secondary_idx),
+            torch.cuda.get_device_properties(secondary_idx).total_memory / 1024**3,
         )
         return DeviceMap(
-            dit_device=gpu0,
-            encoder_device=gpu1,
-            vae_device=gpu1,
+            dit_device=primary,
+            encoder_device=secondary,
+            vae_device=secondary,
             offload_device=torch.device("cpu"),
         )
 
@@ -93,7 +128,7 @@ def log_vram_usage() -> None:
     for i in range(torch.cuda.device_count()):
         allocated = torch.cuda.memory_allocated(i) / 1024**3
         reserved = torch.cuda.memory_reserved(i) / 1024**3
-        total = torch.cuda.get_device_properties(i).total_mem / 1024**3
+        total = torch.cuda.get_device_properties(i).total_memory / 1024**3
         log.info(
             "GPU %d (%s): %.1f GB allocated, %.1f GB reserved, %.1f GB total",
             i, torch.cuda.get_device_name(i), allocated, reserved, total,

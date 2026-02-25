@@ -28,6 +28,7 @@ from musicvision.intake.transcription import (
 from musicvision.models import SceneList
 from musicvision.project import ProjectService
 from musicvision.utils.audio import get_duration, slice_audio
+from musicvision.utils.gpu import DeviceMap, detect_devices
 
 log = logging.getLogger(__name__)
 
@@ -35,10 +36,9 @@ log = logging.getLogger(__name__)
 def run_intake(
     project: ProjectService,
     use_llm_segmentation: bool = True,
-    whisper_device: str = "cuda:1",
+    device_map: DeviceMap | None = None,
     skip_transcription: bool = False,
     use_vocal_separation: bool = False,
-    vocal_separation_device: str = "cuda:1",
 ) -> SceneList:
     """
     Run the full Stage 1 pipeline.
@@ -46,12 +46,16 @@ def run_intake(
     Args:
         project: The project to process
         use_llm_segmentation: Use Claude API for segmentation (vs rule-based)
-        whisper_device: Device for Whisper inference
+        device_map: GPU device mapping (auto-detected if None)
         skip_transcription: Skip Whisper if lyrics are already provided
+        use_vocal_separation: Run vocal separation before Whisper
 
     Returns:
         SceneList (also saved to project)
     """
+    if device_map is None:
+        device_map = detect_devices()
+
     config = project.config
     paths = project.paths
 
@@ -106,7 +110,7 @@ def run_intake(
             )
             separator = create_separator(
                 sep_cfg.method,
-                device=vocal_separation_device,
+                device=str(device_map.secondary),
                 roformer_model=sep_cfg.roformer_model,
                 demucs_model=sep_cfg.demucs_model.value,
             )
@@ -146,7 +150,7 @@ def run_intake(
         # User provided lyrics but we still run Whisper for timestamps,
         # then align the user's lyrics with Whisper's timing.
         log.info("Transcribing for timestamps, will align with provided lyrics")
-        transcription = transcribe(whisper_input, device=whisper_device)
+        transcription = transcribe(whisper_input, device=str(device_map.secondary))
         lyrics_text = load_lyrics_file(lyrics_path)
         words = align_lyrics_with_timestamps(lyrics_text, transcription)
         log.info("Aligned %d words from provided lyrics", len(words))
@@ -154,7 +158,7 @@ def run_intake(
     else:
         # No lyrics provided — Whisper does everything
         log.info("No lyrics file — transcribing with Whisper")
-        transcription = transcribe(whisper_input, device=whisper_device)
+        transcription = transcribe(whisper_input, device=str(device_map.secondary))
         words = transcription.words
 
         # Save transcription as lyrics file

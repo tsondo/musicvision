@@ -263,11 +263,14 @@ async def run_intake(
 ):
     """Stage 1: Analyze audio, transcribe, segment into scenes."""
     from musicvision.intake.pipeline import run_intake as _run_intake
+    from musicvision.utils.gpu import detect_devices
 
     proj = get_project()
+    device_map = detect_devices()
     scene_list = _run_intake(
         project=proj,
         use_llm_segmentation=use_llm,
+        device_map=device_map,
         skip_transcription=skip_transcription,
         use_vocal_separation=use_vocal_separation,
     )
