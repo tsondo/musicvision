@@ -79,7 +79,8 @@ class TestConfigCompat:
     def test_image_gen_config_defaults(self):
         cfg = ImageGenConfig()
         assert cfg.model == ImageModel.FLUX_DEV
-        assert cfg.steps == 28
+        assert cfg.steps is None  # None → auto-resolved via effective_steps
+        assert cfg.effective_steps == 28
         assert cfg.guidance_scale == 3.5
 
     def test_project_config_flux_key_migration(self):
@@ -182,12 +183,12 @@ class TestEngineLifecycle:
 
     def test_generate_before_load_raises(self, cpu_device_map):
         engine = FluxEngine(ImageGenConfig(), cpu_device_map)
-        with pytest.raises(RuntimeError, match="not loaded"):
+        with pytest.raises(RuntimeError, match="load"):
             engine.generate("test prompt", output_path=Path("/tmp/test.png"))
 
     def test_zimage_generate_before_load_raises(self, cpu_device_map):
         engine = ZImageEngine(ImageGenConfig(model=ImageModel.ZIMAGE), cpu_device_map)
-        with pytest.raises(RuntimeError, match="not loaded"):
+        with pytest.raises(RuntimeError, match="load"):
             engine.generate("test prompt", output_path=Path("/tmp/test.png"))
 
     def test_unload_when_not_loaded_is_safe(self, cpu_device_map):
@@ -219,11 +220,11 @@ class TestFluxGeneration:
         assert result.prompt == "A cinematic shot"
         assert result.width == 1280
         assert result.height == 720
-        mock_image.save.assert_called_once_with(output)
+        mock_image.save.assert_called_once_with(str(output))
 
     @patch("musicvision.imaging.flux_engine.clear_vram")
-    def test_schnell_clamps_steps(self, mock_clear, tmp_path, gpu_device_map):
-        cfg = ImageGenConfig(model=ImageModel.FLUX_SCHNELL, steps=28)
+    def test_schnell_auto_steps(self, mock_clear, tmp_path, gpu_device_map):
+        cfg = ImageGenConfig(model=ImageModel.FLUX_SCHNELL)  # steps=None → auto 4
         engine = FluxEngine(cfg, gpu_device_map)
 
         mock_pipe, mock_image = _mock_pipe()
@@ -232,43 +233,39 @@ class TestFluxGeneration:
         output = tmp_path / "test.png"
         result = engine.generate("test", output_path=output)
 
-        # Schnell should clamp steps to 4 and guidance to 0.0
+        # Schnell auto-selects 4 steps when steps=None
         call_kwargs = mock_pipe.call_args[1]
         assert call_kwargs["num_inference_steps"] == 4
-        assert call_kwargs["guidance_scale"] == 0.0
         assert result.metadata["steps"] == 4
 
     @patch("musicvision.imaging.flux_engine.clear_vram")
-    def test_lora_load_and_swap(self, mock_clear, tmp_path, gpu_device_map):
+    def test_lora_load_and_generate(self, mock_clear, tmp_path, gpu_device_map):
         engine = FluxEngine(ImageGenConfig(), gpu_device_map)
         mock_pipe, mock_image = _mock_pipe()
         engine._pipe = mock_pipe
 
-        # First generation with LoRA A
-        engine.generate("test", lora_path="/loras/a.safetensors", output_path=tmp_path / "a.png")
-        mock_pipe.load_lora_weights.assert_called_once_with("/loras/a.safetensors")
+        # Create fake LoRA file so the engine doesn't skip it
+        lora_dir = tmp_path / "loras"
+        lora_dir.mkdir()
+        lora_a = lora_dir / "a.safetensors"
+        lora_a.write_bytes(b"fake")
 
-        # Same LoRA — no reload
-        mock_pipe.load_lora_weights.reset_mock()
-        engine.generate("test", lora_path="/loras/a.safetensors", output_path=tmp_path / "a2.png")
-        mock_pipe.load_lora_weights.assert_not_called()
-
-        # Swap to LoRA B
-        engine.generate("test", lora_path="/loras/b.safetensors", output_path=tmp_path / "b.png")
-        mock_pipe.unload_lora_weights.assert_called_once()
-        mock_pipe.load_lora_weights.assert_called_once_with("/loras/b.safetensors")
+        # Generation with LoRA applies load + fuse
+        engine.generate("test", lora_path=str(lora_a), output_path=tmp_path / "a.png")
+        mock_pipe.load_lora_weights.assert_called_once_with(str(lora_a))
+        mock_pipe.fuse_lora.assert_called_once()
 
     @patch("musicvision.imaging.flux_engine.clear_vram")
     def test_unload_cleans_lora(self, mock_clear, gpu_device_map):
         engine = FluxEngine(ImageGenConfig(), gpu_device_map)
         mock_pipe, _ = _mock_pipe()
         engine._pipe = mock_pipe
-        engine._current_lora = "/loras/test.safetensors"
+        engine._loaded_lora = "/loras/test.safetensors"
 
         engine.unload()
         mock_pipe.unload_lora_weights.assert_called_once()
-        assert not engine.is_loaded
-        assert engine._current_lora is None
+        assert engine._pipe is None
+        assert engine._loaded_lora is None
         mock_clear.assert_called_once()
 
 

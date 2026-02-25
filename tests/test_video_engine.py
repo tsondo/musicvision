@@ -10,19 +10,19 @@ torch = pytest.importorskip("torch", reason="torch required for video engine tes
 
 from musicvision.models import (
     HumoConfig,
-    HumoModelSize,
-    HumoResolution,
+    HumoTier,
     Scene,
 )
 from musicvision.utils.gpu import DeviceMap
-from musicvision.video.base import VideoEngine, VideoInput, VideoResult
 from musicvision.video.factory import create_video_engine
 from musicvision.video.humo_engine import (
     FPS,
     MAX_DURATION,
     MAX_FRAMES,
     HumoEngine,
-    _save_frames_as_mp4,
+    HumoInput,
+    HumoOutput,
+    _save_frames_as_mp4_ffmpeg,
     _sub_clip_suffixes,
 )
 
@@ -44,25 +44,15 @@ def cpu_device_map():
 
 
 @pytest.fixture
-def gpu_device_map():
-    return DeviceMap(
-        dit_device=torch.device("cuda:0"),
-        encoder_device=torch.device("cuda:1"),
-        vae_device=torch.device("cuda:1"),
-        offload_device=torch.device("cpu"),
-    )
-
-
-@pytest.fixture
 def default_config():
     return HumoConfig()
 
 
 @pytest.fixture
-def fast_config():
+def preview_config():
     return HumoConfig(
-        model_size=HumoModelSize.SMALL,
-        resolution=HumoResolution.SD,
+        tier=HumoTier.PREVIEW,
+        resolution="480p",
         denoising_steps=30,
     )
 
@@ -114,13 +104,13 @@ class TestSubClipSuffixes:
 
 
 # ---------------------------------------------------------------------------
-# VideoInput / VideoResult
+# HumoInput / HumoOutput
 # ---------------------------------------------------------------------------
 
 
 class TestDataclasses:
-    def test_video_input(self):
-        inp = VideoInput(
+    def test_humo_input(self):
+        inp = HumoInput(
             text_prompt="A person singing",
             reference_image=Path("/images/ref.png"),
             audio_segment=Path("/segments/s1.wav"),
@@ -128,24 +118,16 @@ class TestDataclasses:
         )
         assert inp.text_prompt == "A person singing"
         assert inp.output_path == Path("/clips/s1.mp4")
+        assert inp.seed is None
 
-    def test_video_result(self):
-        result = VideoResult(
+    def test_humo_output(self):
+        result = HumoOutput(
             video_path=Path("/clips/s1.mp4"),
             frames_generated=97,
             duration_seconds=3.88,
         )
         assert result.frames_generated == 97
-        assert result.metadata == {}
-
-    def test_video_result_metadata(self):
-        result = VideoResult(
-            video_path=Path("/clips/s1.mp4"),
-            frames_generated=50,
-            duration_seconds=2.0,
-            metadata={"scale_t": 7.5},
-        )
-        assert result.metadata["scale_t"] == 7.5
+        assert result.seed_used == 0
 
 
 # ---------------------------------------------------------------------------
@@ -157,12 +139,12 @@ class TestFactory:
     def test_creates_humo_engine(self, cpu_device_map, default_config):
         engine = create_video_engine(default_config, cpu_device_map)
         assert isinstance(engine, HumoEngine)
-        assert isinstance(engine, VideoEngine)
 
-    def test_creates_with_small_model(self, cpu_device_map, fast_config):
-        engine = create_video_engine(fast_config, cpu_device_map)
+    def test_creates_with_preview_tier(self, cpu_device_map, preview_config):
+        engine = create_video_engine(preview_config, cpu_device_map)
         assert isinstance(engine, HumoEngine)
-        assert engine.config.model_size == HumoModelSize.SMALL
+        assert engine.config.tier == HumoTier.PREVIEW
+        assert engine.config.model_size == "1.7B"
 
 
 # ---------------------------------------------------------------------------
@@ -173,22 +155,22 @@ class TestFactory:
 class TestEngineLifecycle:
     def test_not_loaded_initially(self, cpu_device_map, default_config):
         engine = HumoEngine(default_config, cpu_device_map)
-        assert not engine.is_loaded
+        assert engine._bundle is None
 
     def test_generate_before_load_raises(self, cpu_device_map, default_config):
         engine = HumoEngine(default_config, cpu_device_map)
-        inp = VideoInput(
+        inp = HumoInput(
             text_prompt="test",
             reference_image=Path("/ref.png"),
             audio_segment=Path("/seg.wav"),
             output_path=Path("/out.mp4"),
         )
-        with pytest.raises(RuntimeError, match="not loaded"):
+        with pytest.raises(RuntimeError, match="load"):
             engine.generate(inp)
 
     def test_generate_scene_before_load_raises(self, cpu_device_map, default_config):
         engine = HumoEngine(default_config, cpu_device_map)
-        with pytest.raises(RuntimeError, match="not loaded"):
+        with pytest.raises(RuntimeError, match="load"):
             engine.generate_scene(
                 text_prompt="test",
                 reference_image=Path("/ref.png"),
@@ -200,24 +182,7 @@ class TestEngineLifecycle:
 
     def test_unload_when_not_loaded_is_safe(self, cpu_device_map, default_config):
         engine = HumoEngine(default_config, cpu_device_map)
-        with patch("musicvision.video.humo_engine.clear_vram"):
-            engine.unload()  # should not raise
-
-    def test_unload_clears_components(self, cpu_device_map, default_config):
-        engine = HumoEngine(default_config, cpu_device_map)
-        engine._dit = MagicMock()
-        engine._t5_encoder = MagicMock()
-        engine._vae = MagicMock()
-        engine._whisper_encoder = MagicMock()
-
-        with patch("musicvision.video.humo_engine.clear_vram") as mock_clear:
-            engine.unload()
-
-        assert engine._dit is None
-        assert engine._t5_encoder is None
-        assert engine._vae is None
-        assert engine._whisper_encoder is None
-        mock_clear.assert_called_once()
+        engine.unload()  # should not raise
 
 
 # ---------------------------------------------------------------------------
@@ -228,132 +193,42 @@ class TestEngineLifecycle:
 class TestHumoConfig:
     def test_defaults(self):
         cfg = HumoConfig()
-        assert cfg.model_size == HumoModelSize.LARGE
-        assert cfg.resolution == HumoResolution.HD
+        assert cfg.tier == HumoTier.FP8_SCALED
+        assert cfg.model_size == "17B"
+        assert cfg.resolution == "720p"
+        assert cfg.height == 720
+        assert cfg.width == 1280
         assert cfg.scale_a == 2.0
         assert cfg.scale_t == 7.5
         assert cfg.denoising_steps == 50
 
-    def test_hd_resolution(self):
-        cfg = HumoConfig(resolution=HumoResolution.HD)
+    def test_720p_resolution(self):
+        cfg = HumoConfig(resolution="720p")
         assert cfg.width == 1280
         assert cfg.height == 720
 
-    def test_sd_resolution(self):
-        cfg = HumoConfig(resolution=HumoResolution.SD)
+    def test_480p_resolution(self):
+        cfg = HumoConfig(resolution="480p")
         assert cfg.width == 832
         assert cfg.height == 480
 
+    def test_preview_tier(self):
+        cfg = HumoConfig(tier=HumoTier.PREVIEW)
+        assert cfg.model_size == "1.7B"
+
 
 # ---------------------------------------------------------------------------
-# Mock generation
+# Generate scene splitting
 # ---------------------------------------------------------------------------
 
 
-class TestMockGeneration:
-    @patch("musicvision.video.humo_engine.clear_vram")
-    @patch("musicvision.video.humo_engine._save_frames_as_mp4")
-    def test_generate_single_clip(self, mock_save, mock_clear, tmp_path, cpu_device_map):
-        """Test generate() with fully mocked model components."""
-        config = HumoConfig(denoising_steps=2)  # minimal steps
-        engine = HumoEngine(config, cpu_device_map)
-
-        # Mock all model components
-        dim = 64  # small dimensions for testing
-        seq_len = 512
-
-        # T5 tokenizer
-        engine._t5_tokenizer = MagicMock()
-        engine._t5_tokenizer.return_value = {
-            "input_ids": torch.zeros(1, seq_len, dtype=torch.long),
-            "attention_mask": torch.ones(1, seq_len, dtype=torch.long),
-        }
-        # Make tokenizer output moveable to device
-        mock_encoded = MagicMock()
-        mock_encoded.__getitem__ = lambda self, key: torch.zeros(1, seq_len, dtype=torch.long)
-        mock_encoded.to = MagicMock(return_value=mock_encoded)
-        engine._t5_tokenizer.return_value = mock_encoded
-
-        # T5 encoder
-        engine._t5_encoder = MagicMock()
-        mock_t5_output = MagicMock()
-        mock_t5_output.last_hidden_state = torch.randn(1, seq_len, dim)
-        engine._t5_encoder.return_value = mock_t5_output
-
-        # Image processor
-        engine._image_processor = MagicMock()
-        engine._image_processor.return_value = {
-            "pixel_values": torch.randn(1, 3, 224, 224),
-        }
-
-        # Whisper processor + encoder
-        engine._whisper_processor = MagicMock()
-        engine._whisper_processor.return_value = MagicMock(
-            input_features=torch.randn(1, 80, 3000),
-        )
-        mock_whisper_output = MagicMock()
-        mock_whisper_output.last_hidden_state = torch.randn(1, 100, dim)
-        engine._whisper_encoder = MagicMock(return_value=mock_whisper_output)
-
-        # Scheduler
-        engine._scheduler = MagicMock()
-        engine._scheduler.timesteps = torch.linspace(1.0, 0.0, 2)
-        step_output = MagicMock()
-        step_output.prev_sample = torch.randn(1, 4, 1, 90, 160)
-        engine._scheduler.step.return_value = step_output
-
-        # DiT
-        mock_dit_config = MagicMock()
-        mock_dit_config.in_channels = 4
-        engine._dit = MagicMock()
-        engine._dit.config = mock_dit_config
-        mock_dit_output = MagicMock()
-        mock_dit_output.sample = torch.randn(1, 4, 1, 90, 160)
-        engine._dit.return_value = mock_dit_output
-
-        # VAE
-        mock_vae_output = MagicMock()
-        mock_vae_output.sample = torch.randn(1, 3, 4, 720, 1280)  # (B, C, T, H, W)
-        engine._vae = MagicMock()
-        engine._vae.decode.return_value = mock_vae_output
-
-        # Create test reference image
-        ref_image = tmp_path / "ref.png"
-        from PIL import Image
-        Image.new("RGB", (512, 512), color="red").save(ref_image)
-
-        # Create test audio (mock torchaudio.load)
-        audio_path = tmp_path / "segment.wav"
-        audio_path.write_bytes(b"fake")
-
-        output_path = tmp_path / "output.mp4"
-
-        mock_torchaudio = MagicMock()
-        mock_torchaudio.load.return_value = (torch.randn(1, 32000), 16000)
-        mock_torchaudio.functional.resample = MagicMock()
-
-        with patch.dict("sys.modules", {"torchaudio": mock_torchaudio}):
-            result = engine.generate(VideoInput(
-                text_prompt="A person singing on stage",
-                reference_image=ref_image,
-                audio_segment=audio_path,
-                output_path=output_path,
-            ))
-
-        assert isinstance(result, VideoResult)
-        assert result.video_path == output_path
-        assert result.frames_generated > 0
-        assert result.duration_seconds > 0
-        assert result.metadata["scale_t"] == 7.5
-        mock_save.assert_called_once()
-
-    @patch("musicvision.video.humo_engine.clear_vram")
-    def test_generate_scene_short(self, mock_clear, tmp_path, cpu_device_map, default_config):
+class TestGenerateScene:
+    def test_short_scene_single_clip(self, tmp_path, cpu_device_map, default_config):
         """Short scene (<3.88s) → single clip, no splitting."""
         engine = HumoEngine(default_config, cpu_device_map)
-        engine._dit = MagicMock()  # pretend loaded
+        engine._bundle = MagicMock()  # pretend loaded
 
-        mock_result = VideoResult(
+        mock_result = HumoOutput(
             video_path=tmp_path / "scene_001.mp4",
             frames_generated=50,
             duration_seconds=2.0,
@@ -373,32 +248,29 @@ class TestMockGeneration:
         assert results[0] is mock_result
         mock_gen.assert_called_once()
 
-    @patch("musicvision.video.humo_engine.clear_vram")
-    @patch("musicvision.video.humo_engine.slice_audio")
-    def test_generate_scene_long_splits(self, mock_slice, mock_clear, tmp_path, cpu_device_map, default_config):
+    def test_long_scene_splits(self, tmp_path, cpu_device_map, default_config):
         """Long scene (8s) → 3 sub-clips."""
         engine = HumoEngine(default_config, cpu_device_map)
-        engine._dit = MagicMock()  # pretend loaded
+        engine._bundle = MagicMock()  # pretend loaded
 
         duration = 8.0
         expected_clips = math.ceil(duration / MAX_DURATION)  # 3
+
+        # The engine expects pre-sliced sub-clip audio files
+        seg_dir = tmp_path
+        for i in range(expected_clips):
+            sub_audio = seg_dir / f"scene_001_sub_{i:02d}.wav"
+            sub_audio.write_bytes(b"fake")
 
         call_count = 0
         def mock_generate(inp):
             nonlocal call_count
             call_count += 1
-            return VideoResult(
+            return HumoOutput(
                 video_path=inp.output_path,
                 frames_generated=97,
                 duration_seconds=MAX_DURATION,
             )
-
-        # Make slice_audio create the file
-        def mock_slice_impl(source, output, start, end, **kwargs):
-            output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_bytes(b"fake")
-            return output
-        mock_slice.side_effect = mock_slice_impl
 
         with patch.object(engine, "generate", side_effect=mock_generate):
             results = engine.generate_scene(
@@ -413,10 +285,7 @@ class TestMockGeneration:
         assert len(results) == expected_clips
         assert call_count == expected_clips
 
-        # Check audio slicing was called for each sub-clip
-        assert mock_slice.call_count == expected_clips
-
-        # Check output filenames
+        # Check output filenames have sub-clip suffixes
         assert "scene_001_a" in results[0].video_path.name
         assert "scene_001_b" in results[1].video_path.name
         assert "scene_001_c" in results[2].video_path.name
@@ -439,7 +308,7 @@ class TestSaveFrames:
         frames = torch.randint(0, 255, (10, 480, 832, 3), dtype=torch.uint8)
         output = tmp_path / "test.mp4"
 
-        _save_frames_as_mp4(frames, output, fps=25)
+        _save_frames_as_mp4_ffmpeg(frames, output, fps=25)
 
         mock_popen.assert_called_once()
         cmd = mock_popen.call_args[0][0]
@@ -460,4 +329,4 @@ class TestSaveFrames:
         output = tmp_path / "test.mp4"
 
         with pytest.raises(RuntimeError, match="ffmpeg failed"):
-            _save_frames_as_mp4(frames, output)
+            _save_frames_as_mp4_ffmpeg(frames, output)

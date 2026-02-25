@@ -1,221 +1,107 @@
 """
 WanT5Encoder — UMT5-XXL text encoder for HuMo video generation.
 
-Wraps the HuggingFace T5EncoderModel with Wan-AI checkpoint loading.
-The Wan-AI checkpoint uses a custom .pth format whose keys may differ
-from the HuggingFace naming scheme.
+Uses the vendored Wan-AI T5 architecture (vendor/wan_t5_arch.py) which
+matches the Wan-AI checkpoint key format exactly:
+  token_embedding, blocks.N.{norm1,attn,norm2,ffn,pos_embedding}, norm
+
+The Wan-AI checkpoint does NOT use HuggingFace T5EncoderModel naming —
+it has its own custom T5Encoder with different layer names and structure.
 """
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional
 
 log = logging.getLogger(__name__)
 
-# UMT5-XXL config that matches Wan-AI weights
-_UMT5_XXL_CONFIG = dict(
-    d_model=4096,
-    d_ff=10240,
-    num_heads=64,
-    d_kv=64,
-    num_layers=24,
-    vocab_size=256384,
-    relative_attention_num_buckets=32,
-    relative_attention_max_distance=128,
-    dropout_rate=0.0,
-    dense_act_fn="gelu_new",
-    is_gated_act=True,
-    feed_forward_proj="gated-gelu",
-)
-
-
-def _remap_wan_t5_keys(state_dict: dict) -> dict:
-    """
-    Remap Wan-AI T5 checkpoint keys to HuggingFace T5EncoderModel key names.
-
-    The Wan-AI checkpoint stores the text encoder under various possible
-    prefixes.  HuggingFace T5EncoderModel expects keys rooted at "encoder.".
-
-    Strategy:
-      1. If keys already start with "encoder.", return as-is.
-      2. Strip known leading prefixes ("text_model.", "model.", "t5.").
-      3. Map "layer.N." → "block.N." as used in the HF encoder stack.
-      4. Fall through unchanged — strict=False in load_state_dict handles
-         any residual mismatches gracefully.
-
-    Args:
-        state_dict: Raw state dict loaded from the .pth checkpoint.
-
-    Returns:
-        Remapped state dict.
-    """
-    # Sample a few keys to determine current naming convention
-    sample_keys = list(state_dict.keys())[:8]
-    log.debug("T5 checkpoint sample keys: %s", sample_keys)
-
-    # If already in HF format, nothing to do
-    if any(k.startswith("encoder.") for k in sample_keys):
-        log.debug("T5 keys already in HuggingFace format — no remapping needed")
-        return state_dict
-
-    # Known prefixes used by Wan-AI / ComfyUI checkpoints
-    strip_prefixes = ("text_model.", "model.", "t5.", "transformer.")
-
-    new_sd: dict = {}
-    for key, val in state_dict.items():
-        new_key = key
-
-        # Strip leading wrapper prefix
-        for prefix in strip_prefixes:
-            if new_key.startswith(prefix):
-                new_key = new_key[len(prefix):]
-                break
-
-        # HF T5EncoderModel uses "block.N" for transformer layers
-        # Some checkpoints use "layer.N" instead
-        if new_key.startswith("layer."):
-            new_key = "block." + new_key[len("layer."):]
-
-        # Some checkpoints omit the "encoder." root that HF expects
-        if not new_key.startswith("encoder.") and not new_key.startswith("shared."):
-            new_key = "encoder." + new_key
-
-        new_sd[new_key] = val
-
-    if new_sd.keys() != state_dict.keys():
-        log.info(
-            "T5 key remapping: %d keys remapped (sample before→after: %s → %s)",
-            len(new_sd),
-            sample_keys[0] if sample_keys else "<empty>",
-            list(new_sd.keys())[0] if new_sd else "<empty>",
-        )
-    else:
-        log.debug("T5 key remapping: no keys changed")
-
-    return new_sd
+# Default text sequence length (matches Wan-AI training config)
+_DEFAULT_TEXT_LEN = 512
 
 
 class WanT5Encoder:
     """
     UMT5-XXL text encoder for Wan-AI / HuMo video generation.
 
+    Wraps the vendored Wan-AI T5EncoderModel which builds the correct
+    architecture and loads checkpoints with no key remapping needed.
+
     Usage::
 
         encoder = WanT5Encoder(device=torch.device("cuda:1"))
-        encoder.load(Path("~/.cache/musicvision/weights/humo/shared/t5/umt5_xxl.pth"))
-        pos_emb, neg_emb = encoder.encode_pair("a musician playing guitar", "")
-        # pos_emb: [1, 512, 4096]
+        encoder.load(Path("~/.cache/musicvision/weights/shared/t5/models_t5_umt5-xxl-enc-bf16.pth"))
+        context = encoder.encode("a musician playing guitar")
+        # context: list of [L_i, 4096] tensors (variable length, trimmed by attention mask)
     """
 
-    def __init__(self, device, dtype=None) -> None:
-        """
-        Args:
-            device: Target torch.device (or str) for the model.
-            dtype:  Weight dtype.  Defaults to torch.bfloat16.
-        """
-        import torch  # lazy — follows project convention
+    def __init__(self, device, dtype=None, text_len: int = _DEFAULT_TEXT_LEN) -> None:
+        import torch
 
         self.device = torch.device(device) if isinstance(device, str) else device
         self.dtype = dtype if dtype is not None else torch.bfloat16
-        self.tokenizer = None
-        self.model = None
-
-    # ------------------------------------------------------------------
-    # Loading
-    # ------------------------------------------------------------------
+        self.text_len = text_len
+        self._model = None  # Wan-AI T5EncoderModel instance
 
     def load(self, weights_path: Path) -> None:
         """
-        Load tokenizer and model weights from a Wan-AI .pth checkpoint.
+        Build the Wan-AI T5Encoder, load checkpoint weights, and init tokenizer.
 
-        The tokenizer is pulled from HuggingFace (google/umt5-xxl); only the
-        model weights come from the local checkpoint.  We use strict=False so
-        that any key mismatches after remapping degrade gracefully rather than
-        raising an error.
-
-        Args:
-            weights_path: Path to the Wan-AI T5 .pth weight file.
+        The vendored T5EncoderModel handles everything: model construction,
+        weight loading (strict), and tokenizer init.
         """
-        import torch
-        from transformers import AutoTokenizer, T5Config, T5EncoderModel
+        from musicvision.video.vendor.wan_t5_arch import T5EncoderModel
 
-        log.info("Loading WanT5Encoder tokenizer from google/umt5-xxl …")
-        self.tokenizer = AutoTokenizer.from_pretrained("google/umt5-xxl")
+        log.info("Loading WanT5Encoder from %s onto %s (dtype=%s) …",
+                 weights_path.name, self.device, self.dtype)
 
-        log.info("Building UMT5-XXL model (d_model=4096, num_layers=24) …")
-        config = T5Config(**_UMT5_XXL_CONFIG)
-        self.model = T5EncoderModel(config)
-
-        log.info("Loading T5 weights from %s …", weights_path)
-        state_dict = torch.load(
-            weights_path,
-            map_location="cpu",
-            weights_only=False,  # .pth may contain non-tensor objects
+        self._model = T5EncoderModel(
+            text_len=self.text_len,
+            dtype=self.dtype,
+            device=self.device,
+            checkpoint_path=str(weights_path),
+            tokenizer_path='google/umt5-xxl',
         )
-        # Unwrap common checkpoint wrappers
-        if isinstance(state_dict, dict):
-            for wrapper_key in ("state_dict", "model_state_dict", "model"):
-                if wrapper_key in state_dict:
-                    state_dict = state_dict[wrapper_key]
-                    log.debug("Unwrapped checkpoint key: %s", wrapper_key)
-                    break
 
-        state_dict = _remap_wan_t5_keys(state_dict)
-
-        missing, unexpected = self.model.load_state_dict(state_dict, strict=False)
-        if missing:
-            log.warning("T5 load — %d missing keys (first 5: %s)", len(missing), missing[:5])
-        if unexpected:
-            log.warning(
-                "T5 load — %d unexpected keys (first 5: %s)", len(unexpected), unexpected[:5]
-            )
-
-        log.info("Moving T5 model to %s (dtype=%s) …", self.device, self.dtype)
-        self.model = self.model.to(device=self.device, dtype=self.dtype)
-        self.model.eval()
         log.info("WanT5Encoder ready.")
 
-    # ------------------------------------------------------------------
-    # Encoding
-    # ------------------------------------------------------------------
+    def _pad_context(self, context_list: list) -> "torch.Tensor":
+        """
+        Pad variable-length T5 outputs to fixed [1, text_len, 4096].
 
-    def encode(self, prompt: str, max_length: int = 512) -> "torch.Tensor":
+        The Wan-AI T5EncoderModel returns a list of [L_i, 4096] tensors
+        (one per input string, trimmed to actual token count). Our DiT
+        (wan_model.py, ported from ComfyUI) expects pre-padded
+        [B, text_len, 4096] tensors, so we zero-pad here.
+        """
+        import torch
+
+        # context_list is a list with one element per input string
+        # Each element is [L_i, 4096] where L_i <= text_len
+        padded = torch.stack([
+            torch.cat([
+                u,
+                u.new_zeros(self.text_len - u.size(0), u.size(1)),
+            ])
+            for u in context_list
+        ])  # [B, text_len, 4096]
+        return padded
+
+    def encode(self, prompt: str) -> "torch.Tensor":
         """
         Encode a text prompt into T5 hidden states.
 
         Args:
-            prompt:     Input text string.
-            max_length: Token sequence length (padded/truncated).  512 matches
-                        the Wan-AI training setup.
+            prompt: Input text string.
 
         Returns:
-            Tensor of shape [1, max_length, 4096] on self.device.
+            Tensor of shape [1, text_len, 4096] zero-padded to text_len.
         """
-        import torch
-
-        if self.tokenizer is None or self.model is None:
+        if self._model is None:
             raise RuntimeError("WanT5Encoder.load() must be called before encode().")
 
-        tokens = self.tokenizer(
-            prompt,
-            return_tensors="pt",
-            padding="max_length",
-            truncation=True,
-            max_length=max_length,
-        )
-        input_ids = tokens["input_ids"].to(self.device)
-        attention_mask = tokens["attention_mask"].to(self.device)
-
-        with torch.no_grad():
-            outputs = self.model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-            )
-
-        # last_hidden_state: [1, max_length, 4096]
-        return outputs.last_hidden_state
+        context_list = self._model([prompt], self.device)
+        return self._pad_context(context_list)
 
     def encode_pair(
         self, positive: str, negative: str = ""
@@ -228,23 +114,18 @@ class WanT5Encoder:
             negative: Negative conditioning text (empty string for unconditional).
 
         Returns:
-            Tuple of (positive_embeds, negative_embeds), each [1, 512, 4096].
+            Tuple of (pos_embeds, neg_embeds), each [1, text_len, 4096].
         """
-        pos_emb = self.encode(positive)
-        neg_emb = self.encode(negative)
-        return pos_emb, neg_emb
-
-    # ------------------------------------------------------------------
-    # Lifecycle helpers
-    # ------------------------------------------------------------------
+        pos = self.encode(positive)
+        neg = self.encode(negative)
+        return pos, neg
 
     def unload(self) -> None:
         """Release model from VRAM."""
         import gc
         import torch
 
-        self.model = None
-        self.tokenizer = None
+        self._model = None
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
