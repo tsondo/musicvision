@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from musicvision.intake.audio_analysis import detect_bpm, get_beat_times
+from musicvision.intake.audio_analysis import create_separator, detect_bpm, get_beat_times
 from musicvision.intake.segmentation import segment_scenes, segment_scenes_simple
 from musicvision.intake.transcription import (
     TranscriptionResult,
@@ -37,6 +37,8 @@ def run_intake(
     use_llm_segmentation: bool = True,
     whisper_device: str = "cuda:1",
     skip_transcription: bool = False,
+    use_vocal_separation: bool = False,
+    vocal_separation_device: str = "cuda:1",
 ) -> SceneList:
     """
     Run the full Stage 1 pipeline.
@@ -86,6 +88,41 @@ def run_intake(
     beat_times = get_beat_times(audio_path)
     log.info("Detected %d beats", len(beat_times))
 
+    # --- Optional: vocal separation before Whisper ---
+    # Separates the full mix → vocal stem → cleaner Whisper input.
+    # The vocal stem is also sliced per-scene after segmentation.
+    vocal_audio_path: Path | None = None
+    if use_vocal_separation and not skip_transcription:
+        vocal_full_path = paths.input_dir / "audio_vocal.wav"
+        if vocal_full_path.exists():
+            log.info("Reusing existing vocal stem: %s", vocal_full_path.name)
+            vocal_audio_path = vocal_full_path
+        else:
+            sep_cfg = config.vocal_separation
+            log.info(
+                "Running vocal separation (method=%s, model=%s)…",
+                sep_cfg.method.value,
+                sep_cfg.demucs_model.value if sep_cfg.method.value == "demucs" else sep_cfg.roformer_model,
+            )
+            separator = create_separator(
+                sep_cfg.method,
+                device=vocal_separation_device,
+                roformer_model=sep_cfg.roformer_model,
+                demucs_model=sep_cfg.demucs_model.value,
+            )
+            separator.load()
+            try:
+                vocal_audio_path = separator.separate(
+                    audio_path,
+                    output_vocal_path=vocal_full_path,
+                )
+            finally:
+                separator.unload()
+            log.info("Vocal separation complete")
+
+    # Use isolated vocals for Whisper when available (better timestamps)
+    whisper_input = vocal_audio_path if vocal_audio_path is not None else audio_path
+
     # --- Transcription / Lyrics ---
     words: list[WordTimestamp] = []
 
@@ -109,7 +146,7 @@ def run_intake(
         # User provided lyrics but we still run Whisper for timestamps,
         # then align the user's lyrics with Whisper's timing.
         log.info("Transcribing for timestamps, will align with provided lyrics")
-        transcription = transcribe(audio_path, device=whisper_device)
+        transcription = transcribe(whisper_input, device=whisper_device)
         lyrics_text = load_lyrics_file(lyrics_path)
         words = align_lyrics_with_timestamps(lyrics_text, transcription)
         log.info("Aligned %d words from provided lyrics", len(words))
@@ -117,7 +154,7 @@ def run_intake(
     else:
         # No lyrics provided — Whisper does everything
         log.info("No lyrics file — transcribing with Whisper")
-        transcription = transcribe(audio_path, device=whisper_device)
+        transcription = transcribe(whisper_input, device=whisper_device)
         words = transcription.words
 
         # Save transcription as lyrics file
@@ -157,6 +194,14 @@ def run_intake(
         segment_path = paths.segment_path(scene.id)
         slice_audio(audio_path, segment_path, scene.time_start, scene.time_end)
         scene.audio_segment = str(segment_path.relative_to(paths.root))
+
+    # --- Slice vocal stem into per-scene segments (if separation was run) ---
+    if vocal_audio_path is not None:
+        log.info("Slicing vocal stem into per-scene segments...")
+        for scene in scene_list.scenes:
+            vocal_seg = paths.vocal_segment_path(scene.id)
+            slice_audio(vocal_audio_path, vocal_seg, scene.time_start, scene.time_end)
+            scene.audio_segment_vocal = str(vocal_seg.relative_to(paths.root))
 
     # --- Save ---
     project.config = config

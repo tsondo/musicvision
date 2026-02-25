@@ -102,3 +102,49 @@ def clear_vram() -> None:
     torch.cuda.empty_cache()
     torch.cuda.synchronize()
     log.info("VRAM cleared")
+
+
+def recommend_tier(device_map: DeviceMap) -> "HumoTier":
+    """
+    Suggest the best HumoTier for the detected hardware.
+
+    Conservative: selects the highest-quality tier that fits comfortably,
+    leaving headroom for text encoder, VAE, and Whisper on the secondary device.
+    """
+    from musicvision.models import HumoTier
+
+    try:
+        primary_gb = torch.cuda.get_device_properties(device_map.dit_device).total_memory / 1024**3
+        n_gpus = torch.cuda.device_count()
+    except Exception:
+        log.warning("CUDA not available — recommending preview tier (CPU-only not supported)")
+        return HumoTier.PREVIEW
+
+    if n_gpus >= 2 and primary_gb >= 24:
+        return HumoTier.FP16
+    if primary_gb >= 20:
+        return HumoTier.FP8_SCALED
+    if primary_gb >= 16:
+        return HumoTier.GGUF_Q6
+    if primary_gb >= 12:
+        return HumoTier.GGUF_Q4
+    return HumoTier.PREVIEW
+
+
+def vram_info() -> list[dict]:
+    """Return VRAM info for all GPUs as a list of dicts (for CLI/API output)."""
+    result = []
+    for i in range(torch.cuda.device_count()):
+        props = torch.cuda.get_device_properties(i)
+        total_gb = props.total_memory / 1024**3
+        allocated_gb = torch.cuda.memory_allocated(i) / 1024**3
+        free_gb = total_gb - allocated_gb
+        result.append({
+            "index": i,
+            "name": props.name,
+            "total_gb": round(total_gb, 1),
+            "allocated_gb": round(allocated_gb, 1),
+            "free_gb": round(free_gb, 1),
+            "compute_capability": f"{props.major}.{props.minor}",
+        })
+    return result

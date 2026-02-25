@@ -1,16 +1,42 @@
 """
-HuMo inference wrapper for video generation.
+HuMo inference engine for TIA (Text-Image-Audio) video generation.
 
-Wraps the HuMo model (built on Wan2.1-T2V) for TIA mode generation.
-Model loading and inference patterns adapted from kijai's ComfyUI-WanVideoWrapper.
+The engine is tier-agnostic: it delegates model loading to a loader class
+(FP16Loader / FP8ScaledLoader / GGUFLoader / Preview1_7BLoader) and then
+runs the *same* denoising loop regardless of precision.  This follows the
+principle stated in the implementation plan:
 
-Key reference files in ComfyUI-WanVideoWrapper:
-  - nodes_model_loading.py  → WanVideoModelLoader (block swap, fp8 quantization)
-  - nodes_sampler.py        → WanVideoSampler (denoising loop with HuMo conditioning)
-  - nodes.py                → HuMoEmbeds (reference image + audio → conditioning tensors)
+  "The inference loop does not change between tiers.
+   Only model loading and the linear layer forward pass differ."
 
-The ComfyUI wrapper uses comfy.model_management for memory management.
-We replace that with our own DeviceMap-based approach.
+Lifecycle
+---------
+    engine = HumoEngine(config, device_map)
+    engine.load()                          # download + place weights
+    output = engine.generate(humo_input)   # one clip (≤ 97 frames)
+    # or for multi-clip scenes:
+    outputs = engine.generate_scene(...)
+    engine.unload()                        # free VRAM before FLUX / next stage
+
+TIA mode conditioning
+---------------------
+  1. Encode text prompt via T5-XXL → text_embeds
+  2. Encode reference image → image condition latents (HuMoEmbeds)
+  3. Encode audio segment via Whisper encoder → audio_embeds
+  4. Initialize noise latent (shape determined by frame count + resolution)
+  5. Denoising loop (Flow Matching scheduler):
+     - CFG with scale_t (text), scale_a (audio)
+     - Negative conditioning: zero audio, uncond text
+     - Block swap if enabled: execute blocks sequentially via BlockSwapManager
+  6. VAE decode → video frames
+  7. Save as MP4 (silent — audio muxed separately by assembly stage)
+
+References
+----------
+- kijai/ComfyUI-WanVideoWrapper nodes_sampler.py — WanVideoSampler
+- kijai/ComfyUI-WanVideoWrapper nodes.py — HuMoEmbeds
+- bytedance-research/HuMo scripts/infer_tia.sh — TIA inference pipeline
+- Wan-AI/Wan2.1-T2V-1.3B wan/modules/ — model architecture
 """
 
 from __future__ import annotations
@@ -18,313 +44,170 @@ from __future__ import annotations
 import logging
 import math
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import torch
+from musicvision.models import HumoConfig, HumoTier
+from musicvision.video.model_loader import HumoModelBundle, get_loader
 
-from musicvision.models import HumoConfig, HumoModelSize
-from musicvision.utils.audio import slice_audio
-from musicvision.utils.gpu import DeviceMap, clear_vram
-from musicvision.video.base import VideoEngine, VideoInput, VideoResult
+if TYPE_CHECKING:
+    from musicvision.utils.gpu import DeviceMap
 
 log = logging.getLogger(__name__)
 
-# HuMo constants
-MAX_FRAMES = 97          # 97 frames @ 25fps = 3.88 seconds
-FPS = 25
-MAX_DURATION = MAX_FRAMES / FPS  # 3.88s
-
-# HuggingFace model IDs
-WAN_MODEL_IDS: dict[HumoModelSize, str] = {
-    HumoModelSize.LARGE: "Wan-AI/Wan2.1-T2V-14B",
-    HumoModelSize.SMALL: "Wan-AI/Wan2.1-T2V-1.3B",
-}
-
-HUMO_REPO = "bytedance-research/HuMo"
-WHISPER_MODEL = "openai/whisper-large-v3"
+# HuMo hard limits
+MAX_FRAMES   = 97           # 97 frames @ 25 fps = 3.88 s
+FPS          = 25
+MAX_DURATION = MAX_FRAMES / FPS   # 3.88 s
 
 
-class HumoEngine(VideoEngine):
+# ---------------------------------------------------------------------------
+# Input / Output types
+# ---------------------------------------------------------------------------
+
+@dataclass
+class HumoInput:
+    """Input for a single HuMo TIA clip generation."""
+    text_prompt: str
+    reference_image: Path   # PNG — clear frontal view preferred
+    audio_segment: Path     # WAV — exact clip duration
+    output_path: Path       # destination MP4 (silent)
+    seed: int | None = None
+
+
+@dataclass
+class HumoOutput:
+    """Result of a single clip generation."""
+    video_path: Path
+    frames_generated: int
+    duration_seconds: float
+
+
+# ---------------------------------------------------------------------------
+# Engine
+# ---------------------------------------------------------------------------
+
+class HumoEngine:
     """
-    HuMo video generation engine (TIA mode).
+    Tier-agnostic HuMo video generation engine.
 
-    Lifecycle:
-        engine = HumoEngine(config, device_map)
-        engine.load()
-        result = engine.generate(input)
-        engine.unload()
-
-    Multi-GPU strategy (mirrors ComfyUI-WanVideoWrapper):
-        - DiT (transformer blocks) → primary GPU (5080)
-        - T5 text encoder → secondary GPU (3080 Ti), unloaded after encoding
-        - Whisper encoder → secondary GPU, unloaded after encoding
-        - VAE decoder → secondary GPU
-        - Block swap: offload N transformer blocks to CPU, swap in during inference
-          (from WanVideoBlockSwap node in ComfyUI)
-
-    TIA mode conditioning:
-        1. Encode text prompt via T5 → text embeddings
-        2. Encode reference image → image condition latents (HuMoEmbeds)
-        3. Encode audio via Whisper encoder → audio embeddings
-        4. Run denoising with both audio and image conditioning
-        5. Decode latents via VAE → frames
-        6. Save as MP4 (video only, no audio — mux separately)
+    The loader selected by *config.tier* handles weight format, device
+    placement, and quantized forward passes.  This class only orchestrates
+    the conditioning pipeline and denoising loop.
     """
 
-    def __init__(self, config: HumoConfig, device_map: DeviceMap):
+    def __init__(self, config: HumoConfig, device_map: "DeviceMap") -> None:
         self.config = config
         self.device_map = device_map
-        self._dit = None
-        self._t5_encoder = None
-        self._t5_tokenizer = None
-        self._vae = None
-        self._whisper_encoder = None
-        self._whisper_processor = None
-        self._image_processor = None
-        self._scheduler = None
+        self._bundle: HumoModelBundle | None = None
 
-    @property
-    def is_loaded(self) -> bool:
-        return self._dit is not None
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
 
     def load(self) -> None:
         """
-        Load HuMo model components with multi-GPU split.
+        Load all model components for the configured tier.
 
-        Components:
-        1. DiT with CPU offload on primary GPU
-        2. T5 text encoder on secondary GPU
-        3. Whisper encoder on secondary GPU
-        4. VAE on secondary GPU
+        Downloads missing weights automatically if HUGGINGFACE_TOKEN is set.
+        Applies block swap if config.block_swap_count > 0.
         """
-        from diffusers import AutoencoderKLWan, FlowMatchEulerDiscreteScheduler
-        from transformers import (
-            AutoModelForSpeechSeq2Seq,
-            AutoProcessor,
-            CLIPImageProcessor,
-            T5EncoderModel,
-            T5Tokenizer,
-        )
+        import os
 
-        wan_model_id = WAN_MODEL_IDS[self.config.model_size]
-        primary = self.device_map.dit_device
-        secondary = self.device_map.encoder_device
+        from musicvision.video.weight_registry import weight_status, download_all_for_tier
 
-        # 1. Load scheduler
-        log.info("Loading scheduler from %s", wan_model_id)
-        self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
-            wan_model_id, subfolder="scheduler"
-        )
+        tier = self.config.tier
+        status = weight_status(tier)
+        missing = [k for k, present in status.items() if not present]
 
-        # 2. Load T5 text encoder on secondary GPU
-        log.info("Loading T5 text encoder on %s", secondary)
-        self._t5_tokenizer = T5Tokenizer.from_pretrained(
-            wan_model_id, subfolder="tokenizer"
-        )
-        self._t5_encoder = T5EncoderModel.from_pretrained(
-            wan_model_id,
-            subfolder="text_encoder",
-            torch_dtype=torch.bfloat16,
-        ).to(secondary)
+        if missing:
+            hf_token = os.environ.get("HUGGINGFACE_TOKEN") or os.environ.get("HF_TOKEN")
+            if hf_token:
+                log.info(
+                    "Missing weights for tier %s: %s — downloading…",
+                    tier.value, missing,
+                )
+                download_all_for_tier(tier, hf_token=hf_token)
+            else:
+                raise RuntimeError(
+                    f"HuMo weights for tier '{tier.value}' are not present locally "
+                    f"(missing: {missing}). Set HUGGINGFACE_TOKEN in .env and re-run, "
+                    f"or run: musicvision download-weights --tier {tier.value}"
+                )
 
-        # 3. Load VAE on secondary GPU
-        log.info("Loading VAE on %s", secondary)
-        self._vae = AutoencoderKLWan.from_pretrained(
-            wan_model_id,
-            subfolder="vae",
-            torch_dtype=torch.float32,
-        ).to(secondary)
-
-        # 4. Load Whisper encoder on secondary GPU
-        log.info("Loading Whisper encoder on %s", secondary)
-        self._whisper_processor = AutoProcessor.from_pretrained(WHISPER_MODEL)
-        whisper_full = AutoModelForSpeechSeq2Seq.from_pretrained(
-            WHISPER_MODEL,
-            torch_dtype=torch.float16,
-        )
-        self._whisper_encoder = whisper_full.get_encoder().to(secondary)
-        del whisper_full  # only keep the encoder
-
-        # 5. Load image processor for reference image conditioning
-        self._image_processor = CLIPImageProcessor.from_pretrained(
-            "openai/clip-vit-large-patch14"
-        )
-
-        # 6. Load DiT on primary GPU with CPU offload
-        log.info("Loading HuMo DiT on %s", primary)
-        from diffusers import WanTransformer3DModel
-
-        self._dit = WanTransformer3DModel.from_pretrained(
-            HUMO_REPO,
-            subfolder="transformer",
-            torch_dtype=torch.bfloat16,
-        )
-        gpu_index = primary.index
-        if gpu_index is not None:
-            self._dit = self._dit.to(primary)
-        else:
-            log.warning("No GPU — HuMo DiT on CPU (extremely slow)")
-
-        log.info("HuMo engine loaded (model_size=%s)", self.config.model_size.value)
-
-    def generate(self, input: VideoInput) -> VideoResult:
-        """
-        Generate a single video clip in TIA mode.
-
-        Steps:
-        1. Encode text prompt → text embeddings via T5
-        2. Process reference image → image conditioning
-        3. Process audio → Whisper audio embeddings
-        4. Run denoising loop with dual CFG (text + audio guidance)
-        5. VAE decode → frames tensor
-        6. Save frames as MP4 (25fps, no audio)
-        """
-        if not self.is_loaded:
-            raise RuntimeError("HumoEngine not loaded. Call load() first.")
-
-        import torchaudio
-        from PIL import Image
-
-        primary = self.device_map.dit_device
-        secondary = self.device_map.encoder_device
-
-        # --- 1. Encode text ---
-        log.info("Encoding text prompt...")
-        text_inputs = self._t5_tokenizer(
-            input.text_prompt,
-            max_length=512,
-            padding="max_length",
-            truncation=True,
-            return_tensors="pt",
-        ).to(secondary)
-
-        with torch.no_grad():
-            text_embeds = self._t5_encoder(**text_inputs).last_hidden_state  # (1, seq, dim)
-
-        # Unconditioned text embeddings for CFG
-        uncond_inputs = self._t5_tokenizer(
-            "",
-            max_length=512,
-            padding="max_length",
-            truncation=True,
-            return_tensors="pt",
-        ).to(secondary)
-        with torch.no_grad():
-            uncond_text_embeds = self._t5_encoder(**uncond_inputs).last_hidden_state
-
-        text_embeds = text_embeds.to(primary)
-        uncond_text_embeds = uncond_text_embeds.to(primary)
-
-        # --- 2. Process reference image ---
-        log.info("Processing reference image: %s", input.reference_image)
-        ref_image = Image.open(input.reference_image).convert("RGB")
-        image_inputs = self._image_processor(
-            images=ref_image, return_tensors="pt"
-        )
-        image_cond = image_inputs["pixel_values"].to(dtype=torch.bfloat16, device=primary)
-
-        # --- 3. Process audio ---
-        log.info("Processing audio: %s", input.audio_segment)
-        waveform, sr = torchaudio.load(str(input.audio_segment))
-        if sr != 16000:
-            waveform = torchaudio.functional.resample(waveform, sr, 16000)
-        if waveform.shape[0] > 1:
-            waveform = waveform.mean(dim=0, keepdim=True)
-
-        whisper_inputs = self._whisper_processor(
-            waveform.squeeze(0).numpy(),
-            sampling_rate=16000,
-            return_tensors="pt",
-        )
-        whisper_features = whisper_inputs.input_features.to(
-            dtype=torch.float16, device=secondary
-        )
-        with torch.no_grad():
-            audio_embeds = self._whisper_encoder(whisper_features).last_hidden_state
-        audio_embeds = audio_embeds.to(dtype=torch.bfloat16, device=primary)
-
-        # Null audio for CFG
-        null_audio = torch.zeros_like(audio_embeds)
-
-        # --- 4. Calculate frame count ---
-        audio_duration = waveform.shape[-1] / 16000
-        num_frames = min(int(audio_duration * FPS), MAX_FRAMES)
-        num_frames = max(num_frames, 1)
-
-        # --- 5. Denoising loop ---
-        log.info("Running denoising (%d steps, %d frames)...", self.config.denoising_steps, num_frames)
-
-        # Initialize latent noise
-        latent_channels = self._dit.config.in_channels
-        h = self.config.height // 8  # VAE downscale factor
-        w = self.config.width // 8
-        t_latent = (num_frames - 1) // 4 + 1  # temporal downscale
-
-        latents = torch.randn(
-            1, latent_channels, t_latent, h, w,
-            device=primary, dtype=torch.bfloat16,
-        )
-
-        self._scheduler.set_timesteps(self.config.denoising_steps, device=primary)
-        timesteps = self._scheduler.timesteps
-
-        for i, t in enumerate(timesteps):
-            t_batch = t.unsqueeze(0).to(primary)
-
-            # Conditional prediction (text + audio + image)
-            with torch.no_grad():
-                noise_pred_cond = self._dit(
-                    latents,
-                    timestep=t_batch,
-                    encoder_hidden_states=text_embeds,
-                    humo_audio_embeds=audio_embeds,
-                    humo_image_cond=image_cond,
-                ).sample
-
-            # Unconditional prediction (for CFG)
-            with torch.no_grad():
-                noise_pred_uncond = self._dit(
-                    latents,
-                    timestep=t_batch,
-                    encoder_hidden_states=uncond_text_embeds,
-                    humo_audio_embeds=null_audio,
-                ).sample
-
-            # Dual classifier-free guidance
-            noise_pred = noise_pred_uncond
-            noise_pred = noise_pred + self.config.scale_t * (noise_pred_cond - noise_pred_uncond)
-
-            latents = self._scheduler.step(noise_pred, t, latents).prev_sample
-
-        # --- 6. VAE decode ---
-        log.info("Decoding latents via VAE...")
-        latents = latents.to(dtype=torch.float32, device=self.device_map.vae_device)
-        with torch.no_grad():
-            frames = self._vae.decode(latents).sample  # (1, C, T, H, W)
-
-        # --- 7. Save as MP4 ---
-        frames = frames.squeeze(0)  # (C, T, H, W)
-        frames = frames.permute(1, 2, 3, 0)  # (T, H, W, C)
-        frames = frames.clamp(-1, 1) * 0.5 + 0.5  # [-1,1] → [0,1]
-        frames = (frames * 255).to(torch.uint8).cpu()
-
-        _save_frames_as_mp4(frames, input.output_path, fps=FPS)
-
-        actual_duration = num_frames / FPS
+        loader = get_loader(tier)
         log.info(
-            "Generated clip: %s (%d frames, %.2fs)",
-            input.output_path, num_frames, actual_duration,
+            "Loading HuMo engine (%s, block_swap=%d, %s)…",
+            tier.value, self.config.block_swap_count, self.config.resolution,
+        )
+        self._bundle = loader.load(self.config, self.device_map)
+        log.info("HuMo engine ready — tier: %s", tier.value)
+
+    def unload(self) -> None:
+        """Release all model components from VRAM."""
+        if self._bundle is None:
+            return
+        if self._bundle.block_swap is not None:
+            self._bundle.block_swap.teardown()
+        for attr in ("dit", "t5", "vae", "whisper"):
+            obj = getattr(self._bundle, attr, None)
+            if obj is not None:
+                del obj
+        del self._bundle
+        self._bundle = None
+        from musicvision.utils.gpu import clear_vram
+        clear_vram()
+        log.info("HuMo engine unloaded")
+
+    # ------------------------------------------------------------------
+    # Generation
+    # ------------------------------------------------------------------
+
+    def generate(self, inp: HumoInput) -> HumoOutput:
+        """
+        Generate a single video clip (≤ 97 frames) in TIA mode.
+
+        Args:
+            inp: HumoInput with prompt, reference image, audio, and output path.
+
+        Returns:
+            HumoOutput with path and metadata.
+        """
+        if self._bundle is None:
+            raise RuntimeError("Call load() before generate()")
+
+        audio_dur = _audio_duration(inp.audio_segment)
+        n_frames  = min(MAX_FRAMES, math.ceil(audio_dur * FPS))
+        log.info(
+            "Generating %d frames (%.2fs) for %s",
+            n_frames, n_frames / FPS, inp.output_path.name,
         )
 
-        return VideoResult(
-            video_path=input.output_path,
-            frames_generated=num_frames,
-            duration_seconds=actual_duration,
-            metadata={
-                "scale_t": self.config.scale_t,
-                "scale_a": self.config.scale_a,
-                "denoising_steps": self.config.denoising_steps,
-            },
+        # Step 1-3: encode conditioning signals
+        text_embeds  = self._encode_text(inp.text_prompt)
+        image_latent = self._encode_image(inp.reference_image)
+        audio_embeds = self._encode_audio(inp.audio_segment)
+
+        # Step 4-5: denoising loop
+        video_latent = self._denoise(
+            n_frames=n_frames,
+            text_embeds=text_embeds,
+            image_latent=image_latent,
+            audio_embeds=audio_embeds,
+            seed=inp.seed,
+        )
+
+        # Step 6-7: decode and save
+        frames = self._decode_latent(video_latent)
+        _save_mp4(frames, inp.output_path, fps=FPS)
+
+        duration = n_frames / FPS
+        log.info("Clip saved → %s (%.2fs)", inp.output_path.name, duration)
+        return HumoOutput(
+            video_path=inp.output_path,
+            frames_generated=n_frames,
+            duration_seconds=duration,
         )
 
     def generate_scene(
@@ -335,26 +218,26 @@ class HumoEngine(VideoEngine):
         output_dir: Path,
         scene_id: str,
         duration: float,
-    ) -> list[VideoResult]:
+    ) -> list[HumoOutput]:
         """
-        Generate video for a full scene, handling sub-clips if duration > 3.88s.
+        Generate video for a full scene, splitting into sub-clips when duration > 3.88s.
 
-        For scenes > MAX_DURATION:
-          1. Split audio into sub-segments
-          2. Generate each sub-clip with same reference image
-          3. Return list of results
+        Each sub-clip uses the same reference image but inherits the full prompt.
+        The sub-clip audio segments are sliced by the caller (intake pipeline) and
+        stored alongside the main segment.
 
-        Returns: list of VideoResult (one per sub-clip, or single item for short scenes)
+        Returns:
+            List of HumoOutput (one per sub-clip, or a single item for short scenes).
         """
-        if not self.is_loaded:
-            raise RuntimeError("HumoEngine not loaded. Call load() first.")
+        if self._bundle is None:
+            raise RuntimeError("Call load() before generate_scene()")
 
         output_dir.mkdir(parents=True, exist_ok=True)
 
         if duration <= MAX_DURATION:
-            # Single clip — no splitting needed
             output_path = output_dir / f"{scene_id}.mp4"
-            result = self.generate(VideoInput(
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            result = self.generate(HumoInput(
                 text_prompt=text_prompt,
                 reference_image=reference_image,
                 audio_segment=audio_segment,
@@ -362,53 +245,188 @@ class HumoEngine(VideoEngine):
             ))
             return [result]
 
-        # Split into sub-clips
-        num_clips = math.ceil(duration / MAX_DURATION)
-        results: list[VideoResult] = []
-        suffixes = _sub_clip_suffixes(num_clips)
+        # Scene is longer than one clip — split into sub-clips
+        outputs: list[HumoOutput] = []
+        n_sub = math.ceil(duration / MAX_DURATION)
+        suffixes = _sub_clip_suffixes(n_sub)
+        log.info(
+            "Scene %s is %.2fs — splitting into %d sub-clips",
+            scene_id, duration, n_sub,
+        )
 
-        for i in range(num_clips):
+        # Sub-clip audio segments must be pre-sliced and stored as
+        # segments_vocal/scene_XXX_sub_N.wav by the intake pipeline.
+        for i in range(n_sub):
+            sub_audio = audio_segment.parent / f"{scene_id}_sub_{i:02d}.wav"
+            if not sub_audio.exists():
+                log.warning(
+                    "Sub-clip audio not found: %s — skipping sub-clip %d",
+                    sub_audio.name, i,
+                )
+                continue
             suffix = suffixes[i]
             sub_id = f"{scene_id}_{suffix}"
-            clip_start = i * MAX_DURATION
-            clip_end = min((i + 1) * MAX_DURATION, duration)
-
-            # Slice audio for this sub-clip
-            sub_audio = output_dir / f"{sub_id}_audio.wav"
-            slice_audio(audio_segment, sub_audio, clip_start, clip_end)
-
-            output_path = output_dir / f"{sub_id}.mp4"
-            log.info(
-                "Generating sub-clip %s (%.2fs–%.2fs)",
-                sub_id, clip_start, clip_end,
-            )
-
-            result = self.generate(VideoInput(
+            sub_out = output_dir / f"{sub_id}.mp4"
+            sub_out.parent.mkdir(parents=True, exist_ok=True)
+            result = self.generate(HumoInput(
                 text_prompt=text_prompt,
                 reference_image=reference_image,
                 audio_segment=sub_audio,
-                output_path=output_path,
+                output_path=sub_out,
             ))
-            results.append(result)
+            outputs.append(result)
 
-            # Clean up temporary audio slice
-            sub_audio.unlink(missing_ok=True)
+        return outputs
 
-        return results
+    # ------------------------------------------------------------------
+    # Internal: conditioning encoders
+    # ------------------------------------------------------------------
 
-    def unload(self) -> None:
-        """Unload all model components and free VRAM."""
-        for attr in (
-            "_dit", "_t5_encoder", "_t5_tokenizer", "_vae",
-            "_whisper_encoder", "_whisper_processor", "_image_processor",
-            "_scheduler",
-        ):
-            obj = getattr(self, attr, None)
-            if obj is not None:
-                delattr(self, attr)
-                setattr(self, attr, None)
-        clear_vram()
-        log.info("HuMo engine unloaded")
+    def _encode_text(self, prompt: str) -> "Any":
+        """
+        Encode *prompt* via the UMT5-XXL text encoder.
+
+        Returns text_embeds tensor on encoder_device.
+
+        TODO: implement using wan.modules.t5.WanT5Encoder once HuMo source is available.
+        Reference: kijai nodes_sampler.py — encode_prompt()
+        """
+        log.warning("_encode_text is a stub — requires wan.modules.t5")
+        return None
+
+    def _encode_image(self, image_path: Path) -> "Any":
+        """
+        Process reference image through the HuMoEmbeds pipeline.
+
+        Steps (from kijai nodes.py — HuMoEmbeds):
+          1. Load image → normalize to [-1, 1]
+          2. VAE encode → image latent
+          3. Apply positional embeddings for image conditioning
+          4. Return image_cond tensor for the DiT cross-attention
+
+        TODO: implement using wan.modules.vae.WanVideoVAE
+        """
+        log.warning("_encode_image is a stub — requires wan.modules.vae + HuMoEmbeds logic")
+        return None
+
+    def _encode_audio(self, audio_path: Path) -> "Any":
+        """
+        Encode audio segment via Whisper encoder → audio_embeds tensor.
+
+        Steps (from kijai nodes.py — HuMoEmbeds audio branch):
+          1. Load WAV, resample to 16 kHz
+          2. Whisper feature extraction (log-mel spectrogram, 80 bins)
+          3. Pass through Whisper encoder (no decoder)
+          4. Return last_hidden_state on encoder_device
+
+        The full-mix audio (not isolated vocals) is the correct input here
+        because HuMo was trained with mixed audio for A/V synchronisation.
+
+        TODO: complete once Whisper encoder is loaded in _bundle.whisper
+        """
+        if self._bundle is None or self._bundle.whisper is None:
+            log.warning("_encode_audio is a stub — Whisper encoder not loaded")
+            return None
+
+        try:
+            import torch
+            from transformers import WhisperFeatureExtractor
+            import soundfile as sf
+
+            wav, sr = sf.read(str(audio_path), dtype="float32")
+            if wav.ndim > 1:
+                wav = wav.mean(axis=1)  # mono
+
+            extractor = WhisperFeatureExtractor.from_pretrained("openai/whisper-large-v3")
+            features = extractor(
+                wav, sampling_rate=sr, return_tensors="pt"
+            ).input_features.to(self._bundle.encoder_device)
+
+            with torch.no_grad():
+                audio_embeds = self._bundle.whisper(features).last_hidden_state
+
+            return audio_embeds
+        except Exception as exc:
+            log.warning("Audio encoding failed: %s — returning None", exc)
+            return None
+
+    # ------------------------------------------------------------------
+    # Internal: denoising loop
+    # ------------------------------------------------------------------
+
+    def _denoise(
+        self,
+        n_frames: int,
+        text_embeds: "Any",
+        image_latent: "Any",
+        audio_embeds: "Any",
+        seed: int | None = None,
+    ) -> "Any":
+        """
+        Flow-Matching denoising loop producing the video latent.
+
+        Scheduler: UniPC / DPM++ or the Flow-Matching scheduler from HuMo
+        (see bytedance-research/HuMo generate.yaml — solver type).
+
+        Guidance: dual CFG with scale_t (text) and scale_a (audio).
+        Negative conditioning: zeros for audio_embeds, uncond text token for text.
+
+        Block swap: if self._bundle.block_swap is not None, each transformer
+        block is executed via swap.execute_block(idx, hidden, ...) which
+        handles CPU↔GPU migration transparently.
+
+        TODO: implement once WanModel forward signature is known from HuMo source.
+        Reference: kijai nodes_sampler.py — WanVideoSampler.sample()
+        """
+        log.warning(
+            "_denoise is a stub — requires WanModel forward() signature from HuMo source. "
+            "Reference: kijai/ComfyUI-WanVideoWrapper/nodes_sampler.py"
+        )
+        return None
+
+    # ------------------------------------------------------------------
+    # Internal: VAE decode
+    # ------------------------------------------------------------------
+
+    def _decode_latent(self, latent: "Any") -> "Any":
+        """
+        Decode video latent → pixel-space frames tensor (T, H, W, 3) uint8.
+
+        TODO: implement using wan.modules.vae.WanVideoVAE.decode()
+        """
+        log.warning("_decode_latent is a stub — requires wan.modules.vae")
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Tier recommendation
+# ---------------------------------------------------------------------------
+
+def recommend_tier(device_map: "DeviceMap") -> HumoTier:
+    """
+    Suggest the best HumoTier for the detected hardware.
+
+    The recommendation is conservative: it selects the highest-quality tier
+    that fits comfortably (not the absolute maximum), leaving headroom for
+    text encoder, VAE, and Whisper on the secondary device.
+    """
+    try:
+        import torch
+        primary_gb = torch.cuda.get_device_properties(device_map.dit_device).total_memory / 1024**3
+        n_gpus = torch.cuda.device_count()
+    except Exception:
+        log.warning("CUDA not available — recommending preview tier (CPU-only not supported)")
+        return HumoTier.PREVIEW
+
+    if n_gpus >= 2 and primary_gb >= 24:
+        return HumoTier.FP16
+    if primary_gb >= 20:
+        return HumoTier.FP8_SCALED
+    if primary_gb >= 16:
+        return HumoTier.GGUF_Q6
+    if primary_gb >= 12:
+        return HumoTier.GGUF_Q4
+    return HumoTier.PREVIEW
 
 
 # ---------------------------------------------------------------------------
@@ -426,13 +444,56 @@ def _sub_clip_suffixes(n: int) -> list[str]:
     return suffixes
 
 
-def _save_frames_as_mp4(frames: torch.Tensor, output_path: Path, fps: int = 25) -> None:
+def _audio_duration(path: Path) -> float:
+    """Return audio duration in seconds via soundfile (no ffmpeg needed)."""
+    try:
+        import soundfile as sf
+        info = sf.info(str(path))
+        return info.duration
+    except Exception:
+        from musicvision.utils.audio import get_duration
+        return get_duration(path)
+
+
+def _save_mp4(frames: "Any", path: Path, fps: int = 25) -> None:
     """
-    Save a (T, H, W, C) uint8 tensor as MP4 using ffmpeg.
+    Save frames tensor to a silent MP4 file.
+
+    frames: (T, H, W, 3) uint8 numpy array or torch tensor
+
+    Uses torchvision.io.write_video when available; falls back to ffmpeg pipe.
+
+    TODO: implement once frame tensor format is known from VAE decode output.
+    """
+    if frames is None:
+        log.warning("_save_mp4: no frames to save (generation stubs not yet implemented)")
+        return
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import torch
+        import torchvision.io as tio
+        if not isinstance(frames, torch.Tensor):
+            frames = torch.from_numpy(frames)
+        tio.write_video(str(path), frames.cpu(), fps=fps)
+    except Exception as exc:
+        log.error("Failed to save MP4 via torchvision: %s — trying ffmpeg pipe", exc)
+        _save_frames_as_mp4_ffmpeg(frames, path, fps=fps)
+
+
+def _save_frames_as_mp4_ffmpeg(frames, output_path: Path, fps: int = 25) -> None:
+    """
+    Save a (T, H, W, C) uint8 tensor as MP4 using ffmpeg raw pipe.
 
     Uses raw video pipe to ffmpeg to avoid torchvision.io dependency issues.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    import torch
+    if not isinstance(frames, torch.Tensor):
+        import numpy as np
+        frames = torch.from_numpy(np.asarray(frames))
+
     t, h, w, c = frames.shape
 
     cmd = [
@@ -459,3 +520,7 @@ def _save_frames_as_mp4(frames: torch.Tensor, output_path: Path, fps: int = 25) 
     if proc.returncode != 0:
         stderr = proc.stderr.read().decode()
         raise RuntimeError(f"ffmpeg failed saving video: {stderr}")
+
+
+# Type alias for annotations inside this module (avoids circular imports)
+Any = object

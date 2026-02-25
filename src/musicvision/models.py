@@ -29,31 +29,84 @@ class SceneType(str, Enum):
     INSTRUMENTAL = "instrumental"
 
 
+class SeparationMethod(str, Enum):
+    ROFORMER = "roformer"   # MelBandRoFormer via audio-separator (best for live recordings)
+    DEMUCS   = "demucs"     # Demucs htdemucs/mdx via demucs library (often superior on AI-generated music)
+
+
+class DemucsModel(str, Enum):
+    HTDEMUCS    = "htdemucs"       # Hybrid Transformer — best overall, recommended default
+    HTDEMUCS_FT = "htdemucs_ft"    # Fine-tuned on pop/rock — tighter transients
+    MDX_EXTRA   = "mdx_extra"      # MDX STFT-based — excellent vocal isolation (may need CPU fallback)
+    MDX_EXTRA_Q = "mdx_extra_q"    # MDX quantised — cleanest output; requires diffq
+
+
 class ApprovalStatus(str, Enum):
     PENDING = "pending"
     APPROVED = "approved"
     REJECTED = "rejected"
 
 
-class HumoModelSize(str, Enum):
-    LARGE = "17B"
-    SMALL = "1.7B"
+class HumoTier(str, Enum):
+    """
+    HuMo precision tier.  Ordered from highest quality → lowest VRAM requirement.
+
+    Tier          Model   Format               DiT VRAM   Min GPU
+    ─────────────────────────────────────────────────────────────
+    fp16          17B     FP16 safetensors     ~34 GB     2× GPU (FSDP)
+    fp8_scaled    17B     FP8 e4m3fn scaled    ~18 GB     16 GB (single GPU)
+    gguf_q8       17B     GGUF Q8_0            ~18.5 GB   20 GB
+    gguf_q6       17B     GGUF Q6_K            ~14.4 GB   16 GB
+    gguf_q4       17B     GGUF Q4_K_M          ~11.5 GB   12 GB
+    preview       1.7B    FP16 safetensors     ~3.4 GB    8 GB (fast iteration)
+    """
+    FP16       = "fp16"
+    FP8_SCALED = "fp8_scaled"
+    GGUF_Q8    = "gguf_q8"
+    GGUF_Q6    = "gguf_q6"
+    GGUF_Q4    = "gguf_q4"
+    PREVIEW    = "preview"
 
 
-class HumoResolution(str, Enum):
-    HD = "720p"
-    SD = "480p"
+TIER_MODEL_SIZE: dict[str, str] = {
+    "fp16":       "17B",
+    "fp8_scaled": "17B",
+    "gguf_q8":    "17B",
+    "gguf_q6":    "17B",
+    "gguf_q4":    "17B",
+    "preview":    "1.7B",
+}
+
+TIER_VRAM_GB: dict[str, float] = {
+    "fp16":       34.0,
+    "fp8_scaled": 18.0,
+    "gguf_q8":    18.5,
+    "gguf_q6":    14.4,
+    "gguf_q4":    11.5,
+    "preview":     3.4,
+}
 
 
 class ImageModel(str, Enum):
-    FLUX_DEV = "flux-dev"
+    FLUX_DEV    = "flux-dev"
     FLUX_SCHNELL = "flux-schnell"
-    ZIMAGE = "z-image"
+    ZIMAGE      = "z-image"
     ZIMAGE_TURBO = "z-image-turbo"
+
+    # Backward-compat short aliases (so FluxModel.DEV / FluxModel.SCHNELL still work)
+    DEV     = "flux-dev"
+    SCHNELL = "flux-schnell"
 
 
 # Backward-compat alias
 FluxModel = ImageModel
+
+
+class FluxQuant(str, Enum):
+    AUTO = "auto"   # pick based on available VRAM at load time
+    BF16 = "bf16"   # full precision — needs ≥24 GB per device
+    FP8  = "fp8"    # fp8 quantized transformer — needs ≥12 GB (Ada/Hopper only)
+    INT8 = "int8"   # int8 quantized transformer — needs ≥10 GB, any GPU
 
 
 # ---------------------------------------------------------------------------
@@ -95,25 +148,39 @@ class StyleSheet(BaseModel):
 # ---------------------------------------------------------------------------
 
 class HumoConfig(BaseModel):
-    model_size: HumoModelSize = HumoModelSize.LARGE
-    resolution: HumoResolution = HumoResolution.HD
-    scale_a: float = 2.0        # audio guidance strength (1.0–3.0)
-    scale_t: float = 7.5        # text guidance strength (5.0–10.0)
-    denoising_steps: int = 50   # 30–40 faster, 50 best quality
+    tier: HumoTier = HumoTier.FP8_SCALED
+    resolution: str = "720p"          # "720p" or "480p"
+    scale_a: float = 2.0              # audio guidance strength (1.0–3.0)
+    scale_t: float = 7.5              # text guidance strength (5.0–10.0)
+    denoising_steps: int = 50         # 30–40 faster, 50 best quality
+    block_swap_count: int = 0         # DiT blocks to keep on CPU (0 = all on GPU)
+
+    @property
+    def model_size(self) -> str:
+        return TIER_MODEL_SIZE[self.tier.value]
 
     @property
     def height(self) -> int:
-        return 720 if self.resolution == HumoResolution.HD else 480
+        return 720 if self.resolution == "720p" else 480
 
     @property
     def width(self) -> int:
-        return 1280 if self.resolution == HumoResolution.HD else 832
+        return 1280 if self.resolution == "720p" else 832
 
 
 class ImageGenConfig(BaseModel):
     model: ImageModel = ImageModel.FLUX_DEV
-    steps: int = 28
+    quant: FluxQuant = FluxQuant.AUTO
+    steps: Optional[int] = None         # None → auto: 4 for schnell, 28 for dev
     guidance_scale: float = 3.5
+    lora_path: Optional[str] = None     # project-level style LoRA (relative to project root)
+    lora_weight: float = 0.8
+
+    @property
+    def effective_steps(self) -> int:
+        if self.steps is not None:
+            return self.steps
+        return 4 if self.model == ImageModel.FLUX_SCHNELL else 28
 
 
 # Backward-compat alias
@@ -151,6 +218,12 @@ class SongInfo(BaseModel):
 # Project config (project.yaml)
 # ---------------------------------------------------------------------------
 
+class VocalSeparationConfig(BaseModel):
+    method: SeparationMethod = SeparationMethod.ROFORMER
+    demucs_model: DemucsModel = DemucsModel.HTDEMUCS
+    roformer_model: str = "MelBandRoformer.ckpt"
+
+
 class ProjectConfig(BaseModel):
     name: str = "Untitled Project"
     created: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -158,6 +231,7 @@ class ProjectConfig(BaseModel):
     style_sheet: StyleSheet = Field(default_factory=StyleSheet)
     humo: HumoConfig = Field(default_factory=HumoConfig)
     image_gen: ImageGenConfig = Field(default_factory=ImageGenConfig)
+    vocal_separation: VocalSeparationConfig = Field(default_factory=VocalSeparationConfig)
 
     @model_validator(mode="before")
     @classmethod

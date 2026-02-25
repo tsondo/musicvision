@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 
 from musicvision.llm import LLMClient, LLMConfig, get_client
-from musicvision.models import ProjectConfig, Scene, SceneType
+from musicvision.models import ProjectConfig, Scene, SceneType, StyleSheet
 
 log = logging.getLogger(__name__)
 
@@ -134,3 +134,38 @@ Scene to animate:
 
     log.info("Generating video prompt for %s...", scene.id)
     return client.chat(VIDEO_PROMPT_SYSTEM, user_msg)
+
+
+def generate_video_prompts_batch(
+    scenes: list[Scene],
+    style_sheet: StyleSheet,
+    config: ProjectConfig | None = None,
+    llm_config: LLMConfig | None = None,
+) -> list[str]:
+    """
+    Generate video prompts for a list of scenes, calling generate_video_prompt per scene.
+
+    Stores prompts directly on scene.video_prompt.
+    Returns a list of prompt strings in the same order as input.
+
+    Args:
+        scenes: Scenes needing video prompts
+        style_sheet: Style sheet for visual context
+        config: Full project config (creates a minimal one from style_sheet if None)
+        llm_config: Explicit LLM config; falls back to env vars if None
+    """
+    if config is None:
+        config = ProjectConfig(style_sheet=style_sheet)
+
+    prompts: list[str] = []
+    for scene in scenes:
+        try:
+            prompt = generate_video_prompt(scene, config, llm_config=llm_config)
+            scene.video_prompt = prompt
+            prompts.append(prompt)
+        except Exception as exc:
+            log.error("Failed to generate video prompt for %s: %s", scene.id, exc)
+            fallback = scene.effective_image_prompt or scene.lyrics or f"Scene {scene.id}"
+            scene.video_prompt = fallback
+            prompts.append(fallback)
+    return prompts

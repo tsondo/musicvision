@@ -256,7 +256,11 @@ async def approve_all_scenes():
 # ---------------------------------------------------------------------------
 
 @app.post("/api/pipeline/intake")
-async def run_intake(use_llm: bool = True, skip_transcription: bool = False):
+async def run_intake(
+    use_llm: bool = True,
+    skip_transcription: bool = False,
+    use_vocal_separation: bool = False,
+):
     """Stage 1: Analyze audio, transcribe, segment into scenes."""
     from musicvision.intake.pipeline import run_intake as _run_intake
 
@@ -265,6 +269,7 @@ async def run_intake(use_llm: bool = True, skip_transcription: bool = False):
         project=proj,
         use_llm_segmentation=use_llm,
         skip_transcription=skip_transcription,
+        use_vocal_separation=use_vocal_separation,
     )
     return {"status": "complete", "scene_count": len(scene_list.scenes)}
 

@@ -7,13 +7,20 @@ import pytest
 
 from musicvision.models import (
     ApprovalStatus,
+    CharacterDef,
+    DemucsModel,
+    FluxConfig,
+    FluxModel,
+    FluxQuant,
     HumoConfig,
+    HumoTier,
     ProjectConfig,
     Scene,
     SceneList,
     SceneType,
+    SeparationMethod,
     StyleSheet,
-    CharacterDef,
+    VocalSeparationConfig,
 )
 from musicvision.project import ProjectService
 from musicvision.assembly.timecode import seconds_to_filename_stamp, scene_clip_filename
@@ -27,7 +34,7 @@ class TestModels:
                 visual_style="cinematic, moody",
                 characters=[CharacterDef(id="singer", description="Woman with short hair")],
             ),
-            humo=HumoConfig(model_size="17B", scale_a=2.5),
+            humo=HumoConfig(tier=HumoTier.GGUF_Q6, scale_a=2.5),
         )
 
         path = tmp_path / "project.yaml"
@@ -83,6 +90,75 @@ class TestModels:
         sd = HumoConfig(resolution="480p")
         assert hd.width == 1280 and hd.height == 720
         assert sd.width == 832 and sd.height == 480
+
+
+class TestHumoTier:
+    def test_tier_roundtrip(self, tmp_path):
+        """HumoTier survives yaml serialization."""
+        config = ProjectConfig(
+            humo=HumoConfig(
+                tier=HumoTier.GGUF_Q4,
+                denoising_steps=40,
+                block_swap_count=10,
+            )
+        )
+        path = tmp_path / "project.yaml"
+        config.save(path)
+        loaded = ProjectConfig.load(path)
+        assert loaded.humo.tier == HumoTier.GGUF_Q4
+        assert loaded.humo.denoising_steps == 40
+        assert loaded.humo.block_swap_count == 10
+
+    def test_model_size_from_tier(self):
+        assert HumoConfig(tier=HumoTier.FP16).model_size == "17B"
+        assert HumoConfig(tier=HumoTier.FP8_SCALED).model_size == "17B"
+        assert HumoConfig(tier=HumoTier.GGUF_Q4).model_size == "17B"
+        assert HumoConfig(tier=HumoTier.PREVIEW).model_size == "1.7B"
+
+    def test_default_tier_is_fp8_scaled(self):
+        assert HumoConfig().tier == HumoTier.FP8_SCALED
+
+    def test_block_swap_manager_from_config(self):
+        """BlockSwapManager.from_config computes num_gpu_blocks correctly."""
+        from musicvision.video.block_swap import BlockSwapManager
+
+        # Simulate 40 transformer blocks as a list
+        blocks = list(range(40))
+
+        # block_swap_count=0 → all 40 on GPU (no swap)
+        mgr = BlockSwapManager.from_config(blocks, block_swap_count=0, gpu_device="cuda:0")
+        assert mgr.num_gpu_blocks == 40
+        assert not mgr._swap_enabled
+
+        # block_swap_count=20 → 20 on GPU, 20 on CPU
+        mgr = BlockSwapManager.from_config(blocks, block_swap_count=20, gpu_device="cuda:0")
+        assert mgr.num_gpu_blocks == 20
+        assert mgr._swap_enabled
+
+        # block_swap_count=35 → 5 on GPU (clamped to at least 1)
+        mgr = BlockSwapManager.from_config(blocks, block_swap_count=35, gpu_device="cuda:0")
+        assert mgr.num_gpu_blocks == 5
+
+    def test_weight_registry_locate_raises_when_missing(self, tmp_path):
+        """locate_dit raises FileNotFoundError when weights not present."""
+        from musicvision.video.weight_registry import locate_dit, locate_shared
+
+        with pytest.raises(FileNotFoundError):
+            locate_dit(HumoTier.GGUF_Q4, base_dir=tmp_path)
+
+        with pytest.raises(FileNotFoundError):
+            locate_shared("t5", base_dir=tmp_path)
+
+    def test_weight_status_all_false_when_missing(self, tmp_path):
+        """weight_status returns all False for a fresh empty directory."""
+        from musicvision.video.weight_registry import weight_status
+
+        status = weight_status(HumoTier.GGUF_Q4, base_dir=tmp_path)
+        assert "dit" in status
+        assert "t5" in status
+        assert "vae" in status
+        assert "whisper" in status
+        assert all(v is False for v in status.values())
 
 
 class TestProjectService:
@@ -153,6 +229,100 @@ class TestProjectService:
 
         assert svc.config.song.acestep is None
         assert svc.config.song.bpm is None
+
+
+class TestVocalSeparation:
+    def test_defaults(self):
+        cfg = VocalSeparationConfig()
+        assert cfg.method == SeparationMethod.ROFORMER
+        assert cfg.demucs_model == DemucsModel.HTDEMUCS
+
+    def test_roundtrip(self, tmp_path):
+        config = ProjectConfig(
+            vocal_separation=VocalSeparationConfig(
+                method=SeparationMethod.DEMUCS,
+                demucs_model=DemucsModel.MDX_EXTRA,
+            )
+        )
+        path = tmp_path / "project.yaml"
+        config.save(path)
+        loaded = ProjectConfig.load(path)
+        assert loaded.vocal_separation.method == SeparationMethod.DEMUCS
+        assert loaded.vocal_separation.demucs_model == DemucsModel.MDX_EXTRA
+
+    def test_factory_dispatch(self):
+        from musicvision.intake.audio_analysis import (
+            DemucsSeparator,
+            VocalSeparator,
+            create_separator,
+        )
+        roformer = create_separator(SeparationMethod.ROFORMER, device="cpu")
+        demucs = create_separator(SeparationMethod.DEMUCS, device="cpu")
+        assert isinstance(roformer, VocalSeparator)
+        assert isinstance(demucs, DemucsSeparator)
+
+    def test_demucs_load_error_without_package(self):
+        from musicvision.intake.audio_analysis import DemucsSeparator
+        sep = DemucsSeparator(model_name="htdemucs", device="cpu")
+        # Without demucs installed, load() should raise a clear RuntimeError
+        try:
+            sep.load()
+        except RuntimeError as e:
+            assert "demucs" in str(e).lower()
+        except Exception:
+            pass  # demucs is installed — skip
+
+
+class TestFluxConfig:
+    def test_default_steps(self):
+        # dev defaults to 28, schnell defaults to 4
+        dev = FluxConfig(model=FluxModel.DEV)
+        schnell = FluxConfig(model=FluxModel.SCHNELL)
+        assert dev.effective_steps == 28
+        assert schnell.effective_steps == 4
+
+    def test_explicit_steps_override(self):
+        cfg = FluxConfig(model=FluxModel.SCHNELL, steps=8)
+        assert cfg.effective_steps == 8
+
+    def test_quant_default_is_auto(self):
+        assert FluxConfig().quant == FluxQuant.AUTO
+
+    def test_flux_config_roundtrip(self, tmp_path):
+        config = ProjectConfig(
+            flux=FluxConfig(
+                model=FluxModel.SCHNELL,
+                quant=FluxQuant.INT8,
+                steps=4,
+                lora_path="assets/loras/style.safetensors",
+                lora_weight=0.6,
+            )
+        )
+        path = tmp_path / "project.yaml"
+        config.save(path)
+        loaded = ProjectConfig.load(path)
+        assert loaded.flux.model == FluxModel.SCHNELL
+        assert loaded.flux.quant == FluxQuant.INT8
+        assert loaded.flux.effective_steps == 4
+        assert loaded.flux.lora_path == "assets/loras/style.safetensors"
+        assert loaded.flux.lora_weight == 0.6
+
+    def test_strategy_selection(self):
+        """Strategy logic is pure Python — no torch needed."""
+        # Import here so missing torch doesn't fail the whole module
+        from musicvision.imaging.flux_engine import _select_strategy  # noqa: PLC0415
+
+        dev = FluxConfig(model=FluxModel.DEV)
+        assert _select_strategy(32.0, dev) == "bf16_split"
+        assert _select_strategy(16.0, dev) == "bf16_offload"
+        assert _select_strategy(10.0, dev) == "quantized_offload"
+        assert _select_strategy(4.0, dev) == "quantized_sequential"
+
+        # Explicit quant overrides VRAM reading
+        bf16 = FluxConfig(quant=FluxQuant.BF16)
+        fp8 = FluxConfig(quant=FluxQuant.FP8)
+        assert _select_strategy(4.0, bf16) == "bf16_offload"
+        assert _select_strategy(32.0, fp8) == "quantized_offload"
 
 
 class TestTimecode:

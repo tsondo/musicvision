@@ -2,6 +2,9 @@
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [project]
 name = "musicvision"
 version = "0.1.0"
@@ -46,6 +49,25 @@ ml = [
     "accelerate>=0.30",
     "safetensors>=0.4",
     "sentencepiece>=0.2",   # T5 tokenizer for HuMo/Wan
+    # --- Quantization (FLUX fp8/int8 on limited VRAM) ---
+    "optimum-quanto>=0.2",  # fp8/int8 quantization for FLUX transformer
+    # --- HuMo weight management ---
+    "huggingface-hub>=0.21",  # hf_hub_download / snapshot_download for weight registry
+    "gguf>=0.6",              # GGUF dequantization for GGUFLoader (Q6_K, Q4_K_M)
+    # --- Demucs vocal separation ---
+    # Pin to tested v4.0.1 from StemForge (matches demucs.apply/demucs.audio API used here).
+    # demucs.pretrained.get_model auto-downloads weights (~300 MB) on first use.
+    "demucs @ git+https://github.com/facebookresearch/demucs.git@v4.0.1",
+    "julius==0.2.7",    # demucs dep: efficient audio resampling (julius.resample_frac)
+    "lameenc==1.8.1",   # demucs dep: optional mp3 encode
+    "openunmix==1.3.0", # demucs dep: UMX separation backend
+    "dora-search==0.1.12", # demucs dep: experiment runner
+    "submitit==1.5.4",  # demucs dep
+    "diffq==0.2.4",     # required by mdx_extra_q only (quantised MDX model)
+    # --- MelBandRoFormer vocal separation ---
+    # audio-separator must be installed separately with GPU support:
+    # pip install "audio-separator[gpu]"
+    # (not listed here because it pulls onnxruntime-gpu which conflicts on some systems)
 ]
 dev = [
     "pytest>=8.0",
