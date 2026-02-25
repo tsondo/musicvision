@@ -8,7 +8,7 @@ MusicVision is a music video production pipeline that combines open-source AI to
 
 - **Primary GPU**: NVIDIA RTX 5090 (32GB VRAM) — runs UNet/DiT for both FLUX and HuMo
 - **Secondary GPU**: NVIDIA RTX 4080 (16GB VRAM) — offloads text encoders, VAE, Whisper, audio separator
-- **Multi-GPU Strategy**: Proven in ComfyUI. DiT/UNet on GPU0 (5090), everything else on GPU1 (4080). This allows running HuMo-17B comfortably and FLUX-dev at full quality. The 4080's 16 GB headroom is sufficient for T5, CLIP, VAE, and Whisper simultaneously.
+- **Multi-GPU Strategy**: Proven in ComfyUI. DiT/UNet on GPU0 (5090), everything else on GPU1 (4080). This allows running HuMo-17B comfortably and FLUX-dev at full quality.
 - **Model Swapping**: FLUX and HuMo run in different pipeline stages (not simultaneously). Within each stage, model components are split across both GPUs.
 - **Storage**: ~50GB for model weights (FLUX + HuMo + Whisper + VAE + audio separator). Additional space for project assets.
 - **Python**: 3.11+ (HuMo requirement)
@@ -70,17 +70,14 @@ style_sheet:
       reference_image: "assets/settings/stage_ref.png"
 
 humo:
-  tier: "fp8_scaled"         # fp16 | fp8_scaled | gguf_q6 | gguf_q4 | preview
+  model_size: "17B"          # "17B" or "1.7B"
   resolution: "720p"         # "720p" or "480p"
-  scale_a: 2.0               # Audio guidance strength (1.0–3.0)
-  scale_t: 7.5               # Text guidance strength (5.0–10.0)
+  scale_a: 2.0               # Audio guidance strength
+  scale_t: 7.5               # Text guidance strength
   denoising_steps: 50
-  block_swap_count: 0        # DiT blocks kept on CPU (0 = all on GPU)
-  sub_clip_continuity: true  # Use last frame of sub-clip N as reference for N+1
-
-image_gen:
-  model: "flux-dev"          # flux-dev | flux-schnell | z-image | z-image-turbo
-  # model: "z-image"         # Open-weight alternative: ~12GB fp16, no HF token required
+  
+flux:
+  model: "flux-dev"          # or flux-schnell for faster iteration
   steps: 28
   guidance_scale: 3.5
 ```
@@ -132,21 +129,20 @@ Scene: 8 seconds (time 10.0 → 18.0)
   └── sub_clip_c: frames 0-30   (17.76 → 18.0s)  ← partial, padded or trimmed
 ```
 
-**Sub-clip continuity** (`HumoConfig.sub_clip_continuity`, default `true`): after generating sub-clip N, the engine extracts its last frame (saved as `clips/sub/scene_XXX_a_lastframe.png`) and uses it as the `reference_image` for sub-clip N+1. This prevents the jarring visual reset that would occur if every sub-clip re-anchored to the original static reference image. The first sub-clip always uses the scene's original reference image. Disable with `sub_clip_continuity: false` to revert to static reference behaviour.
+Sub-clips share the same reference image but may get slightly varied video prompts (e.g., camera angle shift) to add visual interest within a scene.
 
 ## Stage 1: Intake & Segmentation
 
 ### Inputs
 - Audio file (WAV/MP3/FLAC)
 - Lyrics text file (optional — Whisper can transcribe)
-- **AceStep JSON companion file** (optional): if an AceStep-generated song is detected alongside the audio, its metadata is auto-imported. AceStep provides: BPM, key signature, full lyrics with section markers (verse/chorus/bridge), and genre/mood descriptions. This enriches the segmentation step and can seed style sheet suggestions automatically.
 
 ### Process
 
 1. **Audio Analysis**
-   - Vocal separation using MelBandRoFormer or Demucs (isolate vocals from instrumental)
-   - BPM detection via librosa
-   - Whisper transcription with word-level timestamps (if lyrics not provided); vocal stem fed to Whisper for cleaner transcription — **the vocal stem is only used here, not as HuMo input**
+   - Vocal separation using Kim_Vocal_2 (isolate vocals from instrumental)
+   - BPM detection
+   - Whisper transcription with word-level timestamps (if lyrics not provided)
    - User reviews/corrects lyrics and timestamps
 
 2. **Scene Segmentation** (LLM-assisted)
@@ -157,19 +153,19 @@ Scene: 8 seconds (time 10.0 → 18.0)
      - Prefer cuts on musical phrase boundaries
      - Instrumental sections get their own scenes (type: "instrumental")
      - Chorus repetitions can reuse imagery with variations
-   - AceStep section markers (if present) are used as strong segmentation hints
    - Output: `scenes.json` with timestamps and types
    - User reviews and adjusts scene boundaries
 
 3. **Audio Slicing**
-   - ffmpeg splits the full audio into per-scene WAV segments (`segments/`)
-   - Vocal-separated per-scene stems also sliced (`segments_vocal/`) — used only for Whisper quality; HuMo TIA mode receives the **full mix** (vocals + instrumental) from `segments/`
+   - ffmpeg splits the full audio into per-scene segments
+   - Each segment saved as WAV at original sample rate
+   - Vocal-separated versions also sliced (for HuMo's audio input)
 
 ### Outputs
 - `project.yaml` (initial)
 - `scenes.json` (scene list with timestamps)
-- `segments/` directory with full-mix audio clips (used by HuMo)
-- `segments_vocal/` directory with vocal-only clips (used by Whisper only)
+- `segments/` directory with audio clips
+- `segments_vocal/` directory with vocal-only clips
 
 ## Stage 2: Image Generation & Storyboard
 
@@ -182,17 +178,8 @@ Scene: 8 seconds (time 10.0 → 18.0)
      - Maintains narrative coherence across scenes
      - Accounts for scene type (vocal scenes show singer; instrumental scenes show environment/abstract)
 
-2. **Image Generation** (FLUX or Z-Image, selectable via `image_gen.model`)
-
-   | Engine | Model | VRAM | Quality | Notes |
-   |--------|-------|------|---------|-------|
-   | **FLUX.1-dev** | `flux-dev` | ~24 GB | Highest | Gated — requires HuggingFace token + accepted terms |
-   | **FLUX.1-schnell** | `flux-schnell` | ~24 GB | High | Gated, 4-step distilled, very fast |
-   | **Z-Image** | `z-image` | ~12 GB fp16 | Good | Open-weight (Tongyi-MAI 6B), no token required, faster iteration |
-   | **Z-Image Turbo** | `z-image-turbo` | ~12 GB | Good | Distilled variant, fastest iteration |
-
-   The `create_engine()` factory selects the engine from `ImageGenConfig.model`. All engines implement the same `ImageEngine` interface.
-
+2. **Image Generation** (FLUX)
+   - Generate reference image per scene using FLUX
    - Apply character LoRA if specified
    - Resolution: match HuMo input requirements (720p aspect ratio)
    - User can:
@@ -224,9 +211,9 @@ Scene: 8 seconds (time 10.0 → 18.0)
    - Follows HuMo's preferred prompt style (see HUMO_REFERENCE.md)
 
 2. **HuMo Inference** (TIA mode)
-   - Input per scene: text prompt + reference image + **full-mix audio segment** (from `segments/`, NOT vocal-separated)
-   - Config from `project.yaml` (resolution, guidance scales, steps, tier, block swap)
-   - For scenes > 3.88s: generate sub-clips sequentially with last-frame continuity (see Sub-clips section)
+   - Input per scene: text prompt + reference image + audio segment
+   - Config from `project.yaml` (resolution, guidance scales, steps)
+   - For scenes > 4s: generate sub-clips sequentially
 
 3. **Scene Review**
    - User reviews each generated video clip
@@ -256,10 +243,11 @@ Scene: 8 seconds (time 10.0 → 18.0)
    - **Rough Cut**: Single MP4 file, full song, all scenes assembled
    - **Individual Scenes**: Numbered clips with timecode in filename
      - Format: `scene_001_00m00s000_00m03s880.mp4`
-   - **DaVinci Resolve / NLE timeline** — three formats supported:
-     - **FCPXML 1.9** (primary/recommended): richer metadata (clip names, frame rate, markers). DaVinci Resolve 18+ imports via File → Import → Timeline. Version 1.9 specifically — Resolve's support for 1.10 is inconsistent.
-     - **EDL (CMX 3600)** (fallback): maximum compatibility, single video track, limited metadata.
-     - **OTIO** (optional): if `opentimelineio` Python package is installed, exports `.otio`/`.otioz`. Supported in DaVinci Resolve 18.5+.
+   - **DaVinci Resolve Project**: XML (FCPXML) or EDL file with:
+     - All clips on timeline at correct positions
+     - Original audio on separate track
+     - Scene markers/labels
+     - Clips referenced by relative path for easy import
 
 ### Outputs
 - `output/rough_cut.mp4`
@@ -310,8 +298,14 @@ my_music_video/
 musicvision/
 ├── __init__.py
 ├── cli.py                    # CLI entry point (batch/headless)
-├── ui/                       # Planned React frontend (not yet built)
-│   └── ...                   # React components calling the FastAPI REST endpoints
+├── app.py                    # Gradio UI entry point
+├── config.py                 # Project/scene config loading
+├── ui/
+│   ├── __init__.py
+│   ├── setup_tab.py          # Project setup, song upload, style sheet
+│   ├── segmentation_tab.py   # Lyrics + scene boundary editing
+│   ├── storyboard_tab.py     # Main grid: image gen, video gen, approve/reject
+│   └── export_tab.py         # Assembly preview, export controls
 ├── intake/
 │   ├── __init__.py
 │   ├── audio_analysis.py     # BPM detection, vocal separation
@@ -339,26 +333,22 @@ musicvision/
     └── paths.py              # Project directory management
 ```
 
-## UI Architecture (React + FastAPI)
-
-The backend is a FastAPI server (`musicvision serve <project-dir>`) with 25+ REST endpoints covering the full pipeline lifecycle. CORS is configured for React dev servers (localhost:5173 / localhost:3000). The React frontend is planned but not yet built; the pipeline is fully operable via the CLI and the auto-generated Swagger UI at `/docs`.
-
-### Planned React UI — Tab Structure
+## UI Architecture (Gradio)
 
 ### Tab 1: Project Setup
 - Song upload (WAV/MP3/FLAC) + lyrics upload or paste
 - Style sheet editor (visual style, color palette, characters, props, settings)
 - LoRA management (upload, assign to characters)
-- HuMo tier + image engine config (tier, guidance scales, resolution)
+- HuMo/FLUX config (model size, guidance scales, resolution)
 
 ### Tab 2: Segmentation
 - Lyrics display with word-level timestamps (from Whisper)
 - Editable scene boundary markers
 - Scene list with type labels (vocal/instrumental)
-- "Re-segment" button (calls `POST /api/pipeline/intake`)
+- "Re-segment" button
 
 ### Tab 3: Storyboard (main workflow)
-Grid layout — one row per scene, all data from `GET /api/scenes`:
+Grid layout — one row per scene:
 
 | Column | Content | Interactive |
 |--------|---------|------------|
@@ -367,19 +357,19 @@ Grid layout — one row per scene, all data from `GET /api/scenes`:
 | 3. Image Prompt | Editable textbox with generated prompt | User editable + "Regenerate" button |
 | 4. Video Conditioning | Editable textbox + LoRA selector dropdown | User editable + "Regenerate" button |
 | 5. Video Clip | Generated video player | Click to play + "Regenerate" button |
-| 6. Status | Approve/reject checkboxes for image and video | Toggle (calls `PATCH /api/scenes/{id}`) |
+| 6. Status | Approve/reject checkboxes for image and video | Toggle |
 
 - Each row operates independently — regenerating scene 5 doesn't touch scene 4
-- Batch operations: "Generate All Images" (`POST /api/pipeline/generate-images`), "Generate All Videos" (`POST /api/pipeline/generate-videos`), "Approve All" (`POST /api/scenes/approve-all`)
+- Batch operations: "Generate All Images", "Generate All Videos", "Approve All"
 - Visual indicators: green checkmark (approved), yellow (pending), red (rejected/needs regen)
 
 ### Tab 4: Assembly & Export
 - Full rough-cut video player with audio
 - Scene-by-scene timeline scrubber
-- Export controls (calls `POST /api/pipeline/assemble`):
+- Export controls:
   - Rough cut MP4
   - Individual scene clips (with timecoded filenames)
-  - DaVinci Resolve timeline (FCPXML 1.9 primary, EDL fallback)
+  - DaVinci Resolve project file (FCPXML/EDL)
   - Project notes export
 
 ## Open Questions / Future Work
