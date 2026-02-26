@@ -104,7 +104,7 @@ LORA_SPECS: dict[str, WeightSpec] = {
         filename="lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors",
         fmt="safetensors",
         expected_gb=0.4,
-        subfolder="loras",
+        subfolder="Lightx2v",
         local_subdir="lora",
     ),
 }
