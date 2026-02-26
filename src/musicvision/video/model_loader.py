@@ -87,19 +87,29 @@ def _patch_fp8_linears(model: Any, state: dict, fp8_weight_keys: set) -> None:
         setattr(parent, parts[-1], new_module)
 
     patched = 0
+    unscaled = 0
     for weight_key in fp8_weight_keys:
-        # weight_key is like "blocks.0.self_attn.q_proj.weight"
-        # module_path is "blocks.0.self_attn.q_proj"
+        # weight_key is like "blocks.0.cross_attn.q.weight"
+        # module_path is "blocks.0.cross_attn.q"
         module_path = weight_key[:-len(".weight")]
-        scale_key = weight_key[:-len("weight")] + "scale"
-        if scale_key not in state:
-            scale_key = module_path + "_scale_weight"
-        if scale_key not in state:
-            # Try with _scale suffix
-            scale_key = weight_key + "_scale_weight"
+        # Kijai checkpoint format: "blocks.0.cross_attn.q.scale_weight"
+        scale_candidates = [
+            module_path + ".scale_weight",     # Kijai: blocks.0.cross_attn.q.scale_weight
+            weight_key[:-len("weight")] + "scale",  # generic: blocks.0.cross_attn.q.scale
+            module_path + "_scale_weight",     # alt: blocks.0.cross_attn.q_scale_weight
+        ]
+        scale_key = None
+        for candidate in scale_candidates:
+            if candidate in state:
+                scale_key = candidate
+                break
 
         weight_fp8 = state[weight_key]
-        scale = state.get(scale_key, torch.tensor(1.0, dtype=torch.float32))
+        if scale_key is not None:
+            scale = state[scale_key]
+        else:
+            scale = torch.tensor(1.0, dtype=torch.float32, device=weight_fp8.device)
+            unscaled += 1
 
         # Get bias if present
         bias_key = module_path + ".bias"
@@ -111,7 +121,7 @@ def _patch_fp8_linears(model: Any, state: dict, fp8_weight_keys: set) -> None:
         except AttributeError:
             log.debug("FP8 patch: could not find module at path %s", module_path)
 
-    log.info("FP8 patched %d linear layers", patched)
+    log.info("FP8 patched %d linear layers (%d without scale)", patched, unscaled)
 
 
 def _gguf_name_to_pt_key(name: str) -> str:
@@ -226,19 +236,15 @@ class BaseHumoLoader(ABC):
 
         import torch
 
-        try:
-            path = locate_shared("whisper", weights_dir)
-            model = WhisperModel.from_pretrained(
-                str(path.parent),
-                torch_dtype=torch.float16,
-            ).encoder.to(device)
-        except FileNotFoundError:
-            log.info("Whisper weights not found locally — downloading via HuggingFace transformers (openai/whisper-large-v3, ~1.5 GB)…")
-            # transformers handles its own cache (~/.cache/huggingface); no token needed
-            model = WhisperModel.from_pretrained(
-                "openai/whisper-large-v3",
-                torch_dtype=torch.float16,
-            ).encoder.to(device)
+        log.info("Loading Whisper encoder onto %s", device)
+        # Use transformers' from_pretrained with the repo ID — it handles
+        # download + caching in ~/.cache/huggingface/hub/. Our weight_registry
+        # entry for whisper only downloads model.safetensors (no config.json),
+        # which isn't enough for from_pretrained with a local path.
+        model = WhisperModel.from_pretrained(
+            "openai/whisper-large-v3",
+            torch_dtype=torch.float16,
+        ).encoder.to(device)
 
         model.eval()
         log.info("Whisper encoder ready on %s", device)
@@ -374,27 +380,48 @@ class FP8ScaledLoader(BaseHumoLoader):
         from safetensors.torch import load_file
         from musicvision.video.wan_model import WanModel
 
-        log.info("Loading FP8 DiT from %s", weight_path.name)
-        state = load_file(str(weight_path), device="cpu")
+        log.info("Loading FP8 DiT from %s onto %s", weight_path.name, dit_device)
+        state = load_file(str(weight_path), device=str(dit_device))
 
         # Separate weight tensors from scale tensors
         weight_keys = {k for k in state if not k.endswith("_scale_weight") and not k.endswith(".scale")}
         scale_keys = {k for k in state if k.endswith("_scale_weight") or k.endswith(".scale")}
         log.debug("FP8 state dict: %d weight keys, %d scale keys", len(weight_keys), len(scale_keys))
 
-        # Build base model in bfloat16 (no weights yet — we'll patch linears)
+        # Build model on meta device (no memory), load weights via assign
         model = WanModel.from_config("14B")
-        model = model.to(torch.bfloat16)
 
-        # Load non-FP8 weights (norms, embeddings, etc.) with strict=False
+        # Load non-FP8 weights (norms, embeddings, etc.) directly onto the model.
+        # assign=True replaces meta tensors with the state_dict tensors (already on dit_device).
         non_fp8_state = {k: v for k, v in state.items() if not k.endswith("_scale_weight") and not k.endswith(".scale")}
-        model.load_state_dict(non_fp8_state, strict=False)
+        model.load_state_dict(non_fp8_state, strict=False, assign=True)
 
         # Patch nn.Linear layers that have FP8 weights in the checkpoint
-        fp8_weight_keys = {k for k in state if state[k].dtype == torch.float8_e4m3fn}
+        _FP8_DTYPES = (torch.float8_e4m3fn, torch.float8_e5m2)
+        fp8_weight_keys = {k for k in state if state[k].dtype in _FP8_DTYPES}
         _patch_fp8_linears(model, state, fp8_weight_keys)
+        log.info("Patched %d FP8 linear layers", len(fp8_weight_keys))
 
-        model = model.to(dit_device)
+        # Cast remaining non-FP8 parameters (embeddings, text_embedding projections)
+        # from float32 to bfloat16 to match the denoising dtype.
+        # SKIP norm layer weights — WanLayerNorm/WanRMSNorm cast input to float32
+        # internally and require float32 weight/bias.
+        # FP8ScaledLinear modules use buffers (not parameters), so this is safe.
+        cast_count = 0
+        for name, param in model.named_parameters():
+            if param.dtype == torch.float32:
+                # Keep norm params as float32
+                if ".norm" in name or name.startswith("norm"):
+                    continue
+                param.data = param.data.to(torch.bfloat16)
+                cast_count += 1
+        if cast_count:
+            log.info("Cast %d remaining float32 params to bfloat16 (norms kept f32)", cast_count)
+
+        # Recompute RoPE frequencies — created during __init__ on meta device,
+        # not in checkpoint, so must be materialized on the real device.
+        model.materialize_freqs(device=dit_device)
+
         model.eval()
         log.info("FP8 WanModel loaded on %s", dit_device)
         return model
@@ -438,14 +465,16 @@ class FP8ScaledLinear(__import__("torch").nn.Module):
             out = torch.nn.functional.linear(x.to(torch.bfloat16), w_bf16, self.bias)
             return out
 
-        x_fp8 = x.to(torch.float8_e4m3fn)
-        # weight is (out, in) — transpose to (in, out) for scaled_mm
-        w_t = self.weight.t().contiguous()
+        x_fp8 = x.to(torch.float8_e4m3fn).contiguous()
+        # weight is (out, in) contiguous (row-major).
+        # .t() yields (in, out) in column-major — exactly what cuBLASLt needs.
+        # Do NOT call .contiguous() on the transpose — that would make it row-major.
+        w_t = self.weight.t()
         # scale_a: per-tensor scale for input; scale_b: per-tensor scale for weight
         scale_a = torch.ones(1, device=x.device, dtype=torch.float32)
         scale_b = self.scale
         out = torch._scaled_mm(
-            x_fp8.view(-1, x_fp8.shape[-1]),
+            x_fp8.view(-1, x_fp8.shape[-1]).contiguous(),
             w_t,
             scale_a=scale_a,
             scale_b=scale_b,

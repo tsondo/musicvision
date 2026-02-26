@@ -80,6 +80,22 @@ class WanModel(_WanModel):
         with torch.device(device):
             return cls(**cfg)
 
+    def materialize_freqs(self, device=None):
+        """Recompute RoPE frequencies on a real device.
+
+        Required after from_config(device="meta") + load_state_dict because
+        self.freqs is a plain tensor (not buffer/parameter) and therefore
+        not in the checkpoint.
+        """
+        d = self.dim // self.num_heads
+        self.freqs = torch.cat([
+            rope_params(1024, d - 4 * (d // 6)),
+            rope_params(1024, 2 * (d // 6)),
+            rope_params(1024, 2 * (d // 6))
+        ], dim=1)
+        if device is not None:
+            self.freqs = self.freqs.to(device)
+
     # ------------------------------------------------------------------
     # Block-swap-compatible interface
     # ------------------------------------------------------------------

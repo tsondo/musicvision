@@ -25,8 +25,9 @@ dependencies = [
     "librosa>=0.10",        # BPM detection, audio analysis
     "soundfile>=0.12",      # audio I/O
     # --- AI / ML (installed separately due to CUDA) ---
-    # torch, torchvision, torchaudio  → install via pip with --index-url cu124
-    # flash_attn==2.6.3               → install separately
+    # torch, torchvision, torchaudio  → install via pip with --index-url cu128
+    # flash_attn                      → NOT required; vendored DiT uses SDPA fallback
+    #                                   FA2 lacks sm_120 (Blackwell) kernels as of Feb 2026
     # transformers                     → for Whisper
     # diffusers                        → for FLUX
     # accelerate                       → for model offloading
@@ -41,9 +42,9 @@ dependencies = [
 
 [project.optional-dependencies]
 ml = [
-    "torch==2.5.1",
-    "torchvision==0.20.1",
-    "torchaudio==2.5.1",
+    "torch>=2.7",
+    "torchvision>=0.22",
+    "torchaudio>=2.7",
     "transformers>=4.40",
     "diffusers>=0.30",
     "accelerate>=0.30",

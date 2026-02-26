@@ -206,8 +206,10 @@ class HumoAudioEncoder:
             sampling_rate=_WHISPER_SR,
             return_tensors="pt",
         )
+        # Match Whisper model dtype (float16) to avoid conv1d input/bias mismatch
+        model_dtype = next(self.whisper_model.parameters()).dtype
         input_features = inputs["input_features"].to(
-            device=self.device, dtype=torch.float32
+            device=self.device, dtype=model_dtype
         )
         # input_features: [1, n_mels=128, time_frames=3000]
 

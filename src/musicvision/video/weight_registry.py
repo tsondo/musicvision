@@ -58,7 +58,7 @@ _DIT_SPECS: dict[HumoTier, WeightSpec] = {
     ),
     HumoTier.FP8_SCALED: WeightSpec(
         repo_id="Kijai/WanVideo_comfy_fp8_scaled",
-        filename="HuMo_14B_fp8_e4m3fn_scaled.safetensors",
+        filename="Wan2_1-HuMo-14B_fp8_e5m2_scaled_KJ.safetensors",
         fmt="safetensors",
         expected_gb=18.0,
         subfolder="HuMo",
@@ -148,17 +148,34 @@ def locate_dit(tier: HumoTier, base_dir: Path | None = None) -> Path:
     """
     base = base_dir or weights_dir()
     spec = _DIT_SPECS[tier]
-    p = base / "humo" / spec.local_subdir / spec.filename
-    if not p.exists():
-        # For directory specs (fp16 / preview), the path is the directory itself
-        p_dir = base / "humo" / spec.local_subdir
-        if p_dir.is_dir() and any(p_dir.iterdir()):
-            return p_dir
-        raise FileNotFoundError(
-            f"HuMo weights for tier '{tier.value}' not found at {p}. "
-            f"Run: musicvision download-weights --tier {tier.value}"
-        )
-    return p
+    local_root = base / "humo" / spec.local_subdir
+
+    # Direct path (no subfolder)
+    p = local_root / spec.filename
+    if p.exists():
+        return p
+
+    # Path with HF subfolder (hf_hub_download preserves subfolder structure)
+    if spec.subfolder:
+        p_sub = local_root / spec.subfolder / spec.filename
+        if p_sub.exists():
+            return p_sub
+
+    # For directory specs (fp16 / preview), the path is the directory itself
+    if local_root.is_dir() and any(local_root.iterdir()):
+        # Check if directory contains any weight files (not just metadata)
+        weight_exts = (".safetensors", ".gguf", ".pth", ".bin")
+        for child in local_root.rglob("*"):
+            if child.is_file() and child.suffix in weight_exts:
+                if not spec.filename.endswith("/"):
+                    # Single-file spec but file is nested — return the found file
+                    return child
+                return local_root
+
+    raise FileNotFoundError(
+        f"HuMo weights for tier '{tier.value}' not found at {p}. "
+        f"Run: musicvision download-weights --tier {tier.value}"
+    )
 
 
 def locate_shared(key: str, base_dir: Path | None = None) -> Path:

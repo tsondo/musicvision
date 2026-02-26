@@ -250,10 +250,16 @@ def _t5(name, encoder_only=False, return_tokenizer=False,
     else:
         raise NotImplementedError("Only encoder_only=True is supported")
 
-    with torch.device(device):
-        model = model_cls(**kwargs)
-
-    model = model.to(dtype=dtype, device=device)
+    # Construct directly in target dtype to avoid float32 peak allocation.
+    # Without this, a float32 UMT5-XXL (~18GB) would OOM a 16GB GPU
+    # before .to(dtype) can downcast it.
+    prev_dtype = torch.get_default_dtype()
+    torch.set_default_dtype(dtype)
+    try:
+        with torch.device(device):
+            model = model_cls(**kwargs)
+    finally:
+        torch.set_default_dtype(prev_dtype)
 
     if return_tokenizer:
         tokenizer = HuggingfaceTokenizer(f'google/{name}', **tokenizer_kwargs)
