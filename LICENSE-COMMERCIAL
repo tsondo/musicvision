@@ -1,0 +1,186 @@
+# MusicVision Licensing & Pricing
+
+MusicVision uses a hybrid licensing model designed to support hobbyists, researchers, indie developers, and commercial teams. Non‑commercial use is free. Commercial and enterprise use require a paid license.
+
+---
+
+## License Tiers
+
+### Non‑Commercial License — Free
+For personal, academic, research, and hobby use. No revenue may be generated from products or services using MusicVision.
+
+Rights included:
+- Use MusicVision locally
+- Modify for personal or research use
+- Publish non‑commercial results
+
+Restrictions:
+- No commercial distribution
+- No integration into paid products or services
+
+---
+
+### Commercial License — $2,000/year
+For individuals, startups, and small teams using MusicVision in a revenue‑generating product or service.
+
+Rights included:
+- Commercial use
+- Internal modification
+- Distribution as part of a commercial product
+- Use in cloud/on‑prem deployments
+- Access to updates and bug fixes
+
+Restrictions:
+- No sublicensing
+- No redistribution of the standalone model or weights
+- No competing products built on top of MusicVision
+
+---
+
+### Enterprise License — $10,000/year
+For companies requiring scale, support, or redistribution rights.
+
+Everything in Commercial, plus:
+- Priority support
+- Faster response times
+- Multi‑deployment rights
+- Internal redistribution across teams
+- Optional custom terms
+
+---
+
+### OEM / Custom Licensing — $25,000+
+For hardware vendors, DAW companies, cloud platforms, or large-scale integrations.
+
+Includes:
+- Full redistribution rights
+- Source‑level access (optional)
+- Dedicated support
+- Custom SLAs
+- Long‑term licensing options
+
+Contact: **tsondo@gmail.com**
+
+---
+
+## How to Purchase
+Submit the Order Form below to initiate licensing. Invoices are issued with **Net 30** payment terms.
+
+---
+
+# MusicVision Commercial Order Form
+
+**MusicVision Commercial License — Order Form**
+
+**Company Name:** ___________________________________________
+
+**Contact Name:** ___________________________________________
+
+**Email:** _________________________________________________
+
+**Address:** _______________________________________________
+
+**License Tier (select one):**
+- ☐ Commercial License — $2,000/year
+- ☐ Enterprise License — $10,000/year
+- ☐ OEM / Custom — Contact for quote
+
+**Intended Product or Service:**
+_____________________________________________________________
+
+**Number of Deployments (if applicable):**
+_____________________________________________________________
+
+**Effective Date:** __________________________________________
+
+**Payment Method:**
+- ☐ Bank transfer
+- ☐ Credit card
+- ☐ Other: ________________________________________________
+
+**Signature (Licensee):** ____________________________________
+**Date:** ___________________
+
+**Signature (Licensor):** ____________________________________
+**Date:** ___________________
+
+---
+
+# MusicVision Commercial License Agreement
+
+This Commercial License Agreement (“Agreement”) is entered into between **[LICENSOR NAME]** (“Licensor”) and the entity or individual identified in the Order Form (“Licensee”).
+
+## 1. Grant of License
+Upon payment of applicable fees, Licensor grants Licensee a **non‑exclusive**, **worldwide**, **non‑transferable**, **non‑sublicensable** license to:
+
+- Use MusicVision in a commercial product or service
+- Modify MusicVision for internal commercial use
+- Distribute MusicVision only as an integrated component of Licensee’s product
+- Receive updates and bug fixes during the license term
+
+No rights are granted except those expressly stated.
+
+## 2. License Scope
+The license tier selected in the Order Form determines permitted usage:
+
+- **Commercial License ($2,000/year):** single organization, unlimited internal users, distribution as part of one commercial product.
+- **Enterprise License ($10,000/year):** multi‑team internal use, multi‑deployment rights, priority support.
+- **OEM / Custom ($25,000+):** redistribution rights, large‑scale integration, optional source access.
+
+Any use outside the selected tier requires a separate license.
+
+## 3. Fees and Payment
+Fees are specified in the Order Form.
+
+- Payment terms: **Net 30**
+- Fees are **non‑refundable**
+- Late payments accrue **1.5% monthly interest** or the maximum allowed by law
+
+## 4. Term
+This Agreement begins on the Effective Date and continues for **one (1) year**, automatically renewing unless either party provides 30 days’ written notice.
+
+## 5. Restrictions
+Licensee may not:
+
+- Sublicense or resell MusicVision
+- Redistribute the standalone model, weights, or source code
+- Remove copyright notices
+- Use MusicVision to build a directly competing product
+- Exceed the scope of the selected license tier
+
+## 6. Intellectual Property
+MusicVision remains the sole property of Licensor. No ownership rights are transferred.
+
+## 7. Termination
+Licensor may terminate this Agreement if Licensee:
+
+- Fails to pay fees within 45 days
+- Materially breaches this Agreement and fails to cure within 30 days
+- Becomes insolvent or enters bankruptcy
+
+Upon termination, Licensee must cease all use and destroy all copies.
+
+## 8. Warranty and Support
+MusicVision is provided **“as is”**.
+
+Support levels depend on license tier:
+
+- Commercial: updates + reasonable‑effort bug fixes
+- Enterprise: priority support + faster response times
+- OEM: custom SLA
+
+## 9. Limitation of Liability
+Licensor’s total liability is limited to **fees paid in the preceding 12 months**. Neither party is liable for indirect or consequential damages.
+
+## 10. Governing Law
+This Agreement is governed by the laws of **Delaware, USA**, unless otherwise agreed in writing.
+
+## 11. Entire Agreement
+This Agreement and the Order Form constitute the entire agreement between the parties.
+
+---
+
+**Licensor:** ___________________________ Date: ____________
+**Licensee:** ___________________________ Date: ____________
+**Title:** ___________________________
+**Company:** ___________________________
