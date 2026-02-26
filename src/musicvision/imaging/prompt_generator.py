@@ -9,6 +9,7 @@ Backend controlled by LLM_BACKEND env var. See musicvision/llm.py for config.
 
 from __future__ import annotations
 
+import json
 import logging
 
 import sys
@@ -21,6 +22,7 @@ log = logging.getLogger(__name__)
 IMAGE_PROMPT_SYSTEM = """You are a music video art director writing image generation prompts for FLUX.
 
 Each prompt describes a single cinematic still frame for one scene of a music video.
+Images are 1280×720 (16:9 widescreen) — compose for cinematic widescreen framing.
 
 Guidelines:
 - Be concrete and visual — describe what the camera literally sees
@@ -28,6 +30,9 @@ Guidelines:
 - Length: 2–4 sentences, 60–130 words
 - Match the emotional tone of the scene's lyrics
 - If the scene is instrumental, focus on atmosphere and setting
+- If characters from the style sheet are referenced, describe their appearance exactly as \
+specified in the style sheet — do not invent or contradict character details
+- If the style sheet specifies a color palette, reflect it in lighting, wardrobe, and environment
 - Avoid: abstract concepts, song/audio references, temporal language ("then", "next")
 - Do NOT include any intro, commentary, or markdown — output only the prompt text itself"""
 
@@ -136,10 +141,9 @@ def generate_image_prompts_batch(
 
     system = IMAGE_PROMPT_SYSTEM + """
 
-When generating multiple scene prompts, output them as a numbered list:
-1. <prompt for scene 1>
-2. <prompt for scene 2>
-...and so on. One prompt per line per scene number. No other text."""
+When generating multiple scene prompts, output them as a JSON array of strings:
+["prompt for scene 1", "prompt for scene 2", ...]
+One string per scene, in order. Output ONLY the JSON array — no other text."""
 
     scene_lines = []
     for i, scene in enumerate(scenes, 1):
@@ -159,19 +163,26 @@ Generate a FLUX image prompt for each of the following {len(scenes)} scenes:
     log.info("Generating image prompts for %d scenes (batch)...", len(scenes))
     raw = client.chat(system, user_msg)
 
-    # Parse numbered list
-    prompts: list[str] = []
-    lines = [line.strip() for line in raw.splitlines() if line.strip()]
-    for line in lines:
-        # Strip leading "N. " or "N) "
-        if line and line[0].isdigit():
-            dot = line.find(".")
-            paren = line.find(")")
-            sep = min(x for x in [dot, paren] if x > 0) if (dot > 0 or paren > 0) else -1
-            if sep > 0:
-                prompts.append(line[sep + 1:].strip())
-                continue
-        prompts.append(line)
+    # Strip markdown code block fences if present
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+        raw = raw.strip()
+
+    # Parse JSON array
+    try:
+        prompts = json.loads(raw)
+        if not isinstance(prompts, list) or not all(isinstance(p, str) for p in prompts):
+            raise ValueError("Expected a JSON array of strings")
+    except (json.JSONDecodeError, ValueError) as exc:
+        log.warning(
+            "Batch prompt JSON parse failed (%s). Falling back to individual calls.", exc,
+        )
+        return [
+            generate_image_prompt(scene, config, llm_config=llm_config)
+            for scene in scenes
+        ]
 
     if len(prompts) != len(scenes):
         log.warning(

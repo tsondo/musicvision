@@ -25,7 +25,7 @@ Given lyrics with word-level timestamps, produce a JSON list of scenes.
 Rules:
 - Each scene has a time_start and time_end in seconds
 - Minimum scene duration: 2.0 seconds
-- Maximum scene duration: 10.0 seconds  
+- Maximum scene duration: 10.0 seconds
 - Prefer cutting on phrase/line boundaries — don't split mid-word or mid-phrase
 - Consecutive lines that form one thought can be one scene
 - Instrumental gaps (no lyrics) get their own scene with type "instrumental"
@@ -34,6 +34,17 @@ Rules:
 - Verse/chorus/bridge sections should be noted
 - Chorus repetitions should be marked so imagery can be reused with variations
 - Number scenes sequentially: scene_001, scene_002, etc.
+
+Section markers (AceStep):
+- When the lyrics include section markers like (Verse 1), (Hook), (Bridge), (Outro), \
+use them directly as the "section" field values (e.g. "Verse 1", "Hook", "Bridge"). \
+Do NOT invent new section labels — mirror the markers from the input exactly.
+
+Section boundary rules:
+- Scenes must NOT cross section boundaries. If a section boundary falls within a \
+scene's time range, split the scene at that boundary (respecting the minimum duration).
+- Instrumental intros, outros, and instrumental breaks between vocal sections should \
+each be their own scene with type "instrumental".
 
 Output format (JSON array):
 [
@@ -47,7 +58,7 @@ Output format (JSON array):
     "section": "intro"
   },
   {
-    "id": "scene_002", 
+    "id": "scene_002",
     "order": 2,
     "time_start": 3.5,
     "time_end": 7.2,
