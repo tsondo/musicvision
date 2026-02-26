@@ -286,14 +286,22 @@ def phase_hardware(args, results: Results) -> tuple:
         tier = recommend_tier(device_map)
         log.info("Auto-selected tier: %s", tier.value)
 
-    humo_cfg = HumoConfig(
-        tier=tier,
-        resolution=args.resolution,
-        denoising_steps=args.steps,
-        block_swap_count=args.block_swap,
-        scale_a=2.0,
-        scale_t=7.5,
-    )
+    if getattr(args, "fast", False):
+        from musicvision.models import HumoQuality
+        humo_cfg = HumoConfig.from_quality(
+            HumoQuality.FAST,
+            block_swap_count=args.block_swap,
+            denoising_steps=args.steps,
+        )
+    else:
+        humo_cfg = HumoConfig(
+            tier=tier,
+            resolution=args.resolution,
+            denoising_steps=args.steps,
+            block_swap_count=args.block_swap,
+            scale_a=2.0,
+            scale_t=7.5,
+        )
 
     results.record("GPU detected", torch.cuda.is_available(), time.time() - t0,
                    f"tier={tier.value}, {vram_snapshot()}")
@@ -639,12 +647,14 @@ def main():
                         help="DiT blocks to keep on CPU (default: 0 = all on GPU)")
     parser.add_argument("--out-dir",    type=Path, default=None, dest="out_dir",
                         help="Output directory (default: ./test_output/<timestamp>)")
-    parser.add_argument("--resolution", default="480p", choices=["720p", "480p"],
+    parser.add_argument("--resolution", default="480p", choices=["720p", "480p", "384p"],
                         help="Output resolution (default: 480p)")
     parser.add_argument("--preview",    action="store_true",
                         help="Quick smoke test: preview tier + 480p + 10 steps")
     parser.add_argument("--draft",      action="store_true",
                         help="Iteration mode: fp8_scaled tier + 480p + 15 steps")
+    parser.add_argument("--fast",       action="store_true",
+                        help="Lightx2V LoRA mode: fp8_scaled + 384p + 6 steps + CFG=1")
     parser.add_argument("--phase",      type=int, default=0,
                         help="Run only this phase (1=hw, 2=single, 3=scene, 4=assembly; 0=all)")
     args = parser.parse_args()
@@ -654,6 +664,10 @@ def main():
         args.tier = args.tier or "preview"
         args.resolution = "480p"
         args.steps = 10
+    elif args.fast:
+        args.tier = args.tier or "fp8_scaled"
+        args.resolution = "384p"
+        args.steps = 6
     elif args.draft:
         args.tier = args.tier or "fp8_scaled"
         args.resolution = "480p"
@@ -680,11 +694,15 @@ def main():
         if not audio_path.exists():
             sys.exit(f"Audio file not found: {audio_path}")
 
+    # Resolution dimensions for test image generation
+    _RES_DIMS = {"720p": (1280, 720), "480p": (832, 480), "384p": (688, 384)}
+    img_w, img_h = _RES_DIMS.get(args.resolution, (832, 480))
+
     image_path = args.image
     if image_path is None:
         image_path = assets_dir / "test_ref.png"
         if not image_path.exists():
-            make_test_image(image_path)
+            make_test_image(image_path, width=img_w, height=img_h)
     else:
         image_path = image_path.resolve()
         if not image_path.exists():
@@ -704,9 +722,18 @@ def main():
         from musicvision.utils.gpu import detect_devices
         from musicvision.models import HumoTier, HumoConfig
         device_map = detect_devices()
-        tier = HumoTier(args.tier) if args.tier else HumoTier.FP8_SCALED
-        humo_cfg = HumoConfig(tier=tier, resolution=args.resolution, denoising_steps=args.steps, block_swap_count=args.block_swap)
-        tier_name = tier.value
+        if getattr(args, "fast", False):
+            from musicvision.models import HumoQuality
+            humo_cfg = HumoConfig.from_quality(
+                HumoQuality.FAST,
+                block_swap_count=args.block_swap,
+                denoising_steps=args.steps,
+            )
+            tier_name = humo_cfg.tier.value
+        else:
+            tier = HumoTier(args.tier) if args.tier else HumoTier.FP8_SCALED
+            humo_cfg = HumoConfig(tier=tier, resolution=args.resolution, denoising_steps=args.steps, block_swap_count=args.block_swap)
+            tier_name = tier.value
 
     clip_paths: list[Path] = []
 
