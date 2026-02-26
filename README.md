@@ -1,4 +1,4 @@
-# MusicVision
+<p align="center"><img src="MusicVision.png" alt="MusicVision" width="480"></p>
 
 AI-powered music video production pipeline. Feed it a song; get back a fully timed rough cut with reference images, video clips, and a DaVinci Resolve-ready timeline.
 
