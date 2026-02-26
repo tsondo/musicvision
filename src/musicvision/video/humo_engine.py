@@ -564,7 +564,10 @@ class HumoEngine:
         # uses the CUDA RNG exclusively, so manual_seed alone is not sufficient.
         if seed is not None:
             torch.manual_seed(seed)
-            torch.cuda.manual_seed(seed)
+            if dit_device.type == "cuda":
+                torch.cuda.manual_seed(seed)
+            elif dit_device.type == "mps":
+                torch.mps.manual_seed(seed)
         noise = torch.randn(
             1, 16, total_lat_f, lat_h, lat_w,
             device=dit_device, dtype=torch.bfloat16,
@@ -709,6 +712,14 @@ class HumoEngine:
         pixels = (pixels.clamp(0, 1) * 255).to(torch.uint8)
 
         return pixels  # (T, H, W, 3) uint8
+
+
+# ---------------------------------------------------------------------------
+# Tier recommendation — canonical implementation is in musicvision.utils.gpu
+# ---------------------------------------------------------------------------
+
+# Re-export so existing callers that imported from here continue to work.
+from musicvision.utils.gpu import recommend_tier  # noqa: E402, F401
 
 
 # ---------------------------------------------------------------------------

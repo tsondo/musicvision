@@ -142,7 +142,16 @@ class WanModel(_WanModel):
         seq_lens = torch.tensor([seq_len] * B, dtype=torch.long, device=device)
 
         # 2. Time embedding + projection
-        with torch.amp.autocast('cuda', dtype=torch.float32):
+        # autocast to float32 for numerical stability; use CPU context on non-CUDA
+        # devices (MPS) since torch.amp.autocast requires a matching device type.
+        import contextlib as _contextlib
+        _dev_type = self.patch_embedding.weight.device.type
+        _autocast_ctx = (
+            torch.amp.autocast(_dev_type, dtype=torch.float32)
+            if _dev_type == "cuda"
+            else _contextlib.nullcontext()
+        )
+        with _autocast_ctx:
             time_emb_raw = self.time_embedding(
                 sinusoidal_embedding_1d(self.freq_dim, timestep).float()
             ).float()

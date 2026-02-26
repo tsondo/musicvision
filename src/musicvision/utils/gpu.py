@@ -71,11 +71,23 @@ def detect_devices() -> DeviceMap:
     Auto-detect GPU configuration and return a DeviceMap.
 
     Rules:
-      - 2+ GPUs → highest-VRAM GPU = DiT (primary), next = encoders/VAE
-      - 1 GPU   → everything on that GPU, offload to CPU
-      - 0 GPUs  → CPU-only (for testing / assembly-only workflows)
+      - Apple Silicon MPS → single MPS device for all components
+      - 2+ CUDA GPUs → highest-VRAM GPU = DiT (primary), next = encoders/VAE
+      - 1 CUDA GPU   → everything on that GPU, offload to CPU
+      - 0 GPUs       → CPU-only (for testing / assembly-only workflows)
     """
     import torch
+
+    # Apple Silicon MPS — single unified memory device
+    if torch.backends.mps.is_available():
+        mps = torch.device("mps")
+        log.info("Apple Silicon MPS detected — single-device mode (all components on MPS)")
+        return DeviceMap(
+            dit_device=mps,
+            encoder_device=mps,
+            vae_device=mps,
+            offload_device=torch.device("cpu"),
+        )
 
     n_gpus = torch.cuda.device_count()
 
@@ -124,8 +136,22 @@ def detect_devices() -> DeviceMap:
 
 
 def log_vram_usage() -> None:
-    """Log current VRAM usage for all GPUs."""
+    """Log current VRAM/RAM usage for available accelerators."""
     import torch
+
+    if torch.backends.mps.is_available():
+        allocated = torch.mps.current_allocated_memory() / 1024**3
+        try:
+            import psutil
+            total = psutil.virtual_memory().total / 1024**3
+            available = psutil.virtual_memory().available / 1024**3
+        except ImportError:
+            total = available = float("nan")
+        log.info(
+            "MPS: %.2f GB allocated by PyTorch, %.1f GB system RAM available (%.1f GB total)",
+            allocated, available, total,
+        )
+        return
 
     for i in range(torch.cuda.device_count()):
         allocated = torch.cuda.memory_allocated(i) / 1024**3
@@ -138,14 +164,17 @@ def log_vram_usage() -> None:
 
 
 def clear_vram() -> None:
-    """Aggressively free VRAM. Call between pipeline stages (FLUX → HuMo swap)."""
+    """Aggressively free VRAM/RAM. Call between pipeline stages (FLUX → HuMo swap)."""
     import gc
     import torch
 
     gc.collect()
     try:
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+        elif torch.backends.mps.is_available():
+            torch.mps.empty_cache()
     except Exception:
         pass
     log.info("VRAM cleared")
@@ -157,9 +186,19 @@ def recommend_tier(device_map: DeviceMap) -> "HumoTier":
 
     Conservative: selects the highest-quality tier that fits comfortably,
     leaving headroom for text encoder, VAE, and Whisper on the secondary device.
+
+    Platform notes:
+      - Apple Silicon MPS: preview tier only (initial release; FP8 not supported on MPS)
+      - Single GPU ≥48 GB (A100 80GB, H100, H200): qualifies for FP16 tier
+      - Dual GPU ≥24 GB primary (RTX 5090 + 4080): FP16 tier
     """
     import torch
     from musicvision.models import HumoTier
+
+    # MPS: preview tier only (no FP8, limited quantization support)
+    if device_map.dit_device.type == "mps":
+        log.info("Apple Silicon MPS detected — recommending preview tier")
+        return HumoTier.PREVIEW
 
     try:
         primary_gb = torch.cuda.get_device_properties(device_map.dit_device).total_memory / 1024**3
@@ -169,7 +208,10 @@ def recommend_tier(device_map: DeviceMap) -> "HumoTier":
         return HumoTier.PREVIEW
 
     # FP16 needs ~34 GB weights — only viable with FSDP across 2+ GPUs
+    # or single high-memory datacenter GPUs (A100 80GB, H100, H200)
     if n_gpus >= 2 and primary_gb >= 40:
+        return HumoTier.FP16
+    if n_gpus == 1 and primary_gb >= 48:   # A100 80GB / H100 / H200 single-GPU
         return HumoTier.FP16
     # FP8 scaled needs ~18 GB — fits on 20+ GB with headroom for activations
     if primary_gb >= 20:
@@ -182,8 +224,26 @@ def recommend_tier(device_map: DeviceMap) -> "HumoTier":
 
 
 def vram_info() -> list[dict]:
-    """Return VRAM info for all GPUs as a list of dicts (for CLI/API output)."""
+    """Return VRAM/RAM info for available accelerators as a list of dicts (for CLI/API output)."""
     import torch
+
+    if torch.backends.mps.is_available():
+        allocated_gb = torch.mps.current_allocated_memory() / 1024**3
+        try:
+            import psutil
+            vm = psutil.virtual_memory()
+            total_gb = vm.total / 1024**3
+            free_gb = vm.available / 1024**3
+        except ImportError:
+            total_gb = free_gb = float("nan")
+        return [{
+            "index": 0,
+            "name": "Apple Silicon MPS (unified memory)",
+            "total_gb": round(total_gb, 1),
+            "allocated_gb": round(allocated_gb, 2),
+            "free_gb": round(free_gb, 1),
+            "compute_capability": "mps",
+        }]
 
     result = []
     for i in range(torch.cuda.device_count()):

@@ -204,7 +204,9 @@ class BaseHumoLoader(ABC):
             path = download_shared("t5", base_dir=weights_dir)
 
         log.info("Loading T5 encoder from %s onto %s", path.name, device)
-        encoder = WanT5Encoder(device=device, dtype=torch.bfloat16)
+        # MPS does not support bfloat16 on M1/M2; use float16 instead.
+        t5_dtype = torch.float16 if device.type == "mps" else torch.bfloat16
+        encoder = WanT5Encoder(device=device, dtype=t5_dtype)
         encoder.load(path)
         log.info("T5 encoder ready on %s", device)
         return encoder
@@ -281,8 +283,9 @@ class FP16Loader(BaseHumoLoader):
     """
     Load HuMo-17B in full FP16 precision.
 
-    For single GPU ≥24 GB or dual GPU ≥48 GB combined.
-    On multi-GPU: uses FSDP to shard the DiT across both devices.
+    For dual GPU with ≥24 GB primary (e.g. RTX 5090 + 4080) or single GPU ≥48 GB
+    (A100 80 GB, H100, H200). On multi-GPU, the DiT is placed on the primary GPU;
+    full FSDP sharding across GPUs is not implemented.
 
     Weight source: bytedance-research/HuMo — diffusion_models/*.safetensors
     Reference: HuMo's scripts/infer_tia.sh (sp_size parameter)
@@ -775,6 +778,18 @@ class Preview1_7BLoader(BaseHumoLoader):
 
 def get_loader(tier: HumoTier) -> BaseHumoLoader:
     """Return the correct loader for *tier*."""
+    import torch
+
+    # FP8 requires CUDA with compute capability ≥ 8.9.
+    # Block it early on MPS with a clear message rather than failing inside the loader.
+    if tier == HumoTier.FP8_SCALED:
+        if not torch.cuda.is_available() and torch.backends.mps.is_available():
+            raise RuntimeError(
+                "FP8_SCALED tier is not supported on Apple Silicon MPS "
+                "(float8_e4m3fn is a CUDA-only dtype). "
+                "Use 'preview' tier on Mac: --tier preview"
+            )
+
     match tier:
         case HumoTier.FP16:
             return FP16Loader()

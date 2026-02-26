@@ -1,4 +1,4 @@
-# MusicVision
+<p align="center"><img src="MusicVision.png" alt="MusicVision" width="480"></p>
 
 AI-powered music video production pipeline. Feed it a song; get back a fully timed rough cut with reference images, video clips, and a DaVinci Resolve-ready timeline.
 
@@ -11,6 +11,8 @@ audio + lyrics  →  scene segmentation  →  reference images  →  video clips
 ---
 
 ## Hardware Requirements
+
+### Linux / Windows (CUDA)
 
 | Component | Minimum | Recommended |
 |-----------|---------|-------------|
@@ -26,6 +28,16 @@ audio + lyrics  →  scene segmentation  →  reference images  →  video clips
 - FLUX and HuMo run sequentially (different stages), never simultaneously. Weights fully unloaded between stages.
 
 **Optional LLM server:** A separate GPU (e.g. RTX 3090 Ti 24 GB) can run vLLM for local prompt generation, eliminating the Claude API dependency.
+
+### Apple Silicon (MPS)
+
+| Component | Minimum | Recommended |
+|-----------|---------|-------------|
+| Chip | M1 | M3 Max or M4 Max |
+| Unified RAM | 24 GB | 36 GB+ |
+| Storage | 100 GB SSD | 500 GB NVMe |
+
+HuMo is limited to the `preview` (1.7B) tier on MPS. See the [Apple Silicon section](#apple-silicon-mac) below for full details.
 
 ---
 
@@ -53,6 +65,70 @@ pip install "audio-separator[gpu]"
 # Or use the full setup script
 bash setup_env.sh
 ```
+
+---
+
+## Apple Silicon (Mac)
+
+MusicVision runs on Apple Silicon (M1 and later) via the MPS backend. The full pipeline works — scene segmentation, FLUX image generation, HuMo video generation, and assembly — with the constraints below.
+
+### What works and what doesn't
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| MPS acceleration | ✅ | Auto-detected; all models placed on `mps` device |
+| FLUX image generation | ✅ | bf16 on M3+, fp16 fallback on M1/M2; no CPU offload (unified RAM) |
+| HuMo video generation | ✅ | Preview tier (1.7B) only — see below |
+| Whisper transcription | ✅ | |
+| T5 text encoding | ✅ | fp16 (bfloat16 not supported on M1/M2) |
+| Vocal separation (Demucs) | ✅ | CPU inference (MPS backend in Demucs is untested) |
+| `fp8_scaled` / GGUF tiers | ❌ | `float8_e4m3fn` is CUDA-only; use `preview` tier |
+| `flash_attn` | ❌ | CUDA-only; SDPA fallback is used automatically |
+| `optimum-quanto` quantization | ❌ | CUDA-only; FLUX uses bf16/fp16 instead |
+
+**HuMo tier:** Only `preview` (1.7B, ~3.4 GB) is supported on MPS in the initial release. The 14B tiers require FP8 or GGUF quantization, both of which depend on CUDA. `recommend_tier` returns `preview` automatically on MPS.
+
+**Memory:** MPS uses unified system RAM. A 36 GB M3 Max or larger is recommended for the full pipeline. The 1.7B DiT (~3.4 GB) + T5 (~10 GB) + VAE (~0.4 GB) + Whisper (~1.5 GB) totals ~15 GB active at peak, plus FLUX (~8–16 GB depending on image size).
+
+### Installation
+
+Use `pyproject.toml.MAC` instead of the default `pyproject.toml` — it omits `optimum-quanto` and targets the PyPI torch wheels (MPS-enabled) rather than the CUDA index.
+
+```bash
+# Clone
+git clone git@github.com:tsondo/musicvision.git
+cd musicvision
+
+# Copy the Mac-specific pyproject to the active one
+cp pyproject.toml.MAC pyproject.toml
+
+# Install CPU deps + dev tools
+uv sync --extra dev
+
+# Install ML deps — use PyPI default wheels (MPS-enabled, no --index-url needed)
+uv run pip install torch torchvision torchaudio
+
+# Audio separator — use CPU ONNX runtime (no onnxruntime-gpu on macOS)
+pip install "audio-separator[cpu]"
+```
+
+> **Do not** add `--index-url https://download.pytorch.org/whl/cu124` — that index serves Linux CUDA wheels only and will install a version without MPS support.
+
+### Running the GPU integration test on Mac
+
+```bash
+# Preview tier is auto-selected, or specify explicitly
+python scripts/test_gpu_pipeline.py --tier preview
+
+# Reduce steps for faster iteration on slower hardware
+python scripts/test_gpu_pipeline.py --tier preview --steps 10
+```
+
+### Known limitations
+
+- **Block swap and MPS:** Block swap moves tensors between MPS and CPU. This works but is slower than the CUDA equivalent due to MPS transfer bandwidth. Keep `block_swap_count = 0` if you have enough RAM.
+- **RoPE precision:** The vendored DiT architecture previously used `float64` for RoPE frequency computation, which MPS does not support. This is fixed in the `PLATFORM_SUPPORT` branch (downgraded to `float32`/`complex64`, which is numerically sufficient for RoPE).
+- **No bfloat16 on M1/M2:** The T5 encoder and Whisper use `float16` on MPS instead of `bfloat16`. FLUX probes at runtime and falls back to `float16` on chips that don't support it.
 
 ---
 
