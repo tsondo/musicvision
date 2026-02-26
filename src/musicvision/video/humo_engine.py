@@ -499,7 +499,10 @@ class HumoEngine:
         # uses the CUDA RNG exclusively, so manual_seed alone is not sufficient.
         if seed is not None:
             torch.manual_seed(seed)
-            torch.cuda.manual_seed(seed)
+            if dit_device.type == "cuda":
+                torch.cuda.manual_seed(seed)
+            elif dit_device.type == "mps":
+                torch.mps.manual_seed(seed)
         noise = torch.randn(
             1, 16, total_lat_f, lat_h, lat_w,
             device=dit_device, dtype=torch.bfloat16,
@@ -628,34 +631,11 @@ class HumoEngine:
 
 
 # ---------------------------------------------------------------------------
-# Tier recommendation
+# Tier recommendation — canonical implementation is in musicvision.utils.gpu
 # ---------------------------------------------------------------------------
 
-def recommend_tier(device_map: "DeviceMap") -> HumoTier:
-    """
-    Suggest the best HumoTier for the detected hardware.
-
-    The recommendation is conservative: it selects the highest-quality tier
-    that fits comfortably (not the absolute maximum), leaving headroom for
-    text encoder, VAE, and Whisper on the secondary device.
-    """
-    try:
-        import torch
-        primary_gb = torch.cuda.get_device_properties(device_map.dit_device).total_memory / 1024**3
-        n_gpus = torch.cuda.device_count()
-    except Exception:
-        log.warning("CUDA not available — recommending preview tier (CPU-only not supported)")
-        return HumoTier.PREVIEW
-
-    if n_gpus >= 2 and primary_gb >= 24:
-        return HumoTier.FP16
-    if primary_gb >= 20:
-        return HumoTier.FP8_SCALED
-    if primary_gb >= 16:
-        return HumoTier.GGUF_Q6
-    if primary_gb >= 12:
-        return HumoTier.GGUF_Q4
-    return HumoTier.PREVIEW
+# Re-export so existing callers that imported from here continue to work.
+from musicvision.utils.gpu import recommend_tier  # noqa: E402
 
 
 # ---------------------------------------------------------------------------

@@ -133,7 +133,10 @@ class BlockSwapManager:
         for block in self.blocks:
             block.to(cpu)
         gc.collect()
-        torch.cuda.empty_cache()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        elif torch.backends.mps.is_available():
+            torch.mps.empty_cache()
         log.debug("BlockSwap: all blocks moved to CPU, cache cleared")
 
     @classmethod

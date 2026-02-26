@@ -37,6 +37,7 @@ dependencies = [
     # --- Utilities ---
     "Pillow>=10.0",
     "numpy>=1.26",
+    "psutil>=5.9",              # MPS VRAM reporting (unified system RAM on Apple Silicon)
 ]
 
 [project.optional-dependencies]
@@ -52,8 +53,10 @@ ml = [
     "ftfy>=6.0",             # text cleaning for Wan-AI tokenizer
     "regex>=2023.0",         # Wan-AI tokenizer uses regex (not re)
     "einops>=0.7",           # Wan-AI VAE uses einops.rearrange
-    # --- Quantization (FLUX fp8/int8 on limited VRAM) ---
-    "optimum-quanto>=0.2",  # fp8/int8 quantization for FLUX transformer
+    # --- Quantization (FLUX fp8/int8 on limited VRAM, CUDA-only) ---
+    # On Apple Silicon (MPS) install without optimum-quanto; FLUX uses bf16/fp16 instead.
+    # On Linux CUDA:  pip install -e ".[ml]" (includes optimum-quanto)
+    "optimum-quanto>=0.2",  # fp8/int8 quantization for FLUX transformer (CUDA only)
     # --- HuMo weight management ---
     "huggingface-hub>=0.21",  # hf_hub_download / snapshot_download for weight registry
     "gguf>=0.6",              # GGUF dequantization for GGUFLoader (Q6_K, Q4_K_M)

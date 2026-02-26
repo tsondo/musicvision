@@ -97,13 +97,21 @@ class FluxEngine(ImageEngine):
         strategy = _select_strategy(free_gb, self.config)
 
         log.info(
-            "Loading FLUX (%s) — free VRAM %.1f GB → strategy: %s",
+            "Loading FLUX (%s) — free VRAM/RAM %.1f GB → strategy: %s",
             self.config.model.value, free_gb, strategy,
         )
 
-        if strategy == "bf16_split" and self.device_map.dit_device != self.device_map.encoder_device:
+        if primary.type == "mps":
+            # MPS: optimum-quanto is CUDA-only; use bf16 (fp16 fallback on M1/M2), no offload.
+            log.info("MPS device: using bf16 no-offload (optimum-quanto not supported on MPS)")
+            self._pipe = self._load_bf16_no_offload(model_id, hf_token, primary)
+        elif strategy == "bf16_split" and self.device_map.dit_device != self.device_map.encoder_device:
+            # Multi-GPU: split transformer + encoders across devices
             self._pipe = self._load_split(model_id, hf_token)
-        elif strategy in ("bf16_split", "bf16_offload"):
+        elif strategy == "bf16_split":
+            # Single GPU with ≥28 GB free (e.g. A100 80GB, H100): no offload needed
+            self._pipe = self._load_bf16_no_offload(model_id, hf_token, primary)
+        elif strategy == "bf16_offload":
             self._pipe = self._load_bf16_offload(model_id, hf_token)
         else:
             # quantized (fp8 or int8)
@@ -215,6 +223,33 @@ class FluxEngine(ImageEngine):
         pipe.vae.to(self.device_map.vae_device)
         return pipe
 
+    def _load_bf16_no_offload(self, model_id: str, token: Optional[str], device=None):
+        """Single GPU ≥28 GB or MPS: bf16, all components on device, no CPU offload."""
+        import torch
+        from diffusers import FluxPipeline
+
+        target = device or self.device_map.dit_device
+
+        # MPS on M1/M2 does not support bfloat16; probe at runtime.
+        if target.type == "mps":
+            try:
+                _probe = torch.zeros(1, dtype=torch.bfloat16, device=target)
+                del _probe
+                dtype = torch.bfloat16
+            except (RuntimeError, TypeError):
+                dtype = torch.float16
+                log.info("MPS: bfloat16 not supported on this chip — using float16 for FLUX")
+        else:
+            dtype = torch.bfloat16
+
+        pipe = FluxPipeline.from_pretrained(
+            model_id,
+            torch_dtype=dtype,
+            token=token,
+        )
+        pipe.to(target)
+        return pipe
+
     def _load_bf16_offload(self, model_id: str, token: Optional[str]):
         """Tier B (single GPU, ≥14 GB): bf16, model cpu offload for T5."""
         import torch
@@ -290,11 +325,15 @@ class FluxEngine(ImageEngine):
 # ------------------------------------------------------------------
 
 def _free_vram_gb(device) -> float:
-    """Return free VRAM in GB on the given device. Returns 0 for CPU."""
+    """Return free VRAM/RAM in GB on the given device. Returns 0 for CPU."""
     try:
         import torch
         if device.type == "cpu":
             return 0.0
+        if device.type == "mps":
+            # MPS uses unified system RAM; report available system memory.
+            import psutil
+            return psutil.virtual_memory().available / 1024**3
         free_bytes, _ = torch.cuda.mem_get_info(device)
         return free_bytes / 1024**3
     except Exception:
@@ -345,6 +384,10 @@ def _supports_fp8(device) -> bool:
 
 def _pick_quant_type(device, quant: FluxQuant):
     """Return the quanto quantization type appropriate for the device and config."""
+    # optimum-quanto is CUDA-only as of 0.2.x; MPS must use bf16/fp16 path.
+    if device.type == "mps":
+        return None
+
     from optimum.quanto import qfloat8, qint8
 
     if quant == FluxQuant.FP8:
