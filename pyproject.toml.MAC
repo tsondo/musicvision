@@ -24,9 +24,10 @@ dependencies = [
     # --- Audio ---
     "librosa>=0.10",        # BPM detection, audio analysis
     "soundfile>=0.12",      # audio I/O
-    # --- AI / ML (installed separately due to CUDA) ---
-    # torch, torchvision, torchaudio  → install via pip with --index-url cu124
-    # flash_attn==2.6.3               → install separately
+    # --- AI / ML (installed separately — use Apple Silicon wheel) ---
+    # torch, torchvision, torchaudio  → pip install torch torchvision torchaudio
+    #                                    (PyPI default wheels are MPS-enabled on macOS)
+    # flash_attn                       → NOT supported on MPS; omit entirely
     # transformers                     → for Whisper
     # diffusers                        → for FLUX
     # accelerate                       → for model offloading
@@ -37,13 +38,16 @@ dependencies = [
     # --- Utilities ---
     "Pillow>=10.0",
     "numpy>=1.26",
+    "psutil>=5.9",          # MPS VRAM reporting — reads unified system RAM via psutil
 ]
 
 [project.optional-dependencies]
 ml = [
-    "torch==2.5.1",
-    "torchvision==0.20.1",
-    "torchaudio==2.5.1",
+    # Use default PyPI torch wheels — they include MPS support on macOS.
+    # Do NOT use --index-url cu124; that index only serves CUDA Linux wheels.
+    "torch>=2.5",
+    "torchvision>=0.20",
+    "torchaudio>=2.5",
     "transformers>=4.40",
     "diffusers>=0.30",
     "accelerate>=0.30",
@@ -52,8 +56,9 @@ ml = [
     "ftfy>=6.0",             # text cleaning for Wan-AI tokenizer
     "regex>=2023.0",         # Wan-AI tokenizer uses regex (not re)
     "einops>=0.7",           # Wan-AI VAE uses einops.rearrange
-    # --- Quantization (FLUX fp8/int8 on limited VRAM) ---
-    "optimum-quanto>=0.2",  # fp8/int8 quantization for FLUX transformer
+    # --- Quantization ---
+    # optimum-quanto is CUDA-only (as of 0.2.x) and must NOT be installed on MPS.
+    # FLUX falls back to bf16/fp16 on MPS automatically; no quantization needed.
     # --- HuMo weight management ---
     "huggingface-hub>=0.21",  # hf_hub_download / snapshot_download for weight registry
     "gguf>=0.6",              # GGUF dequantization for GGUFLoader (Q6_K, Q4_K_M)
@@ -68,9 +73,9 @@ ml = [
     "submitit==1.5.4",  # demucs dep
     "diffq==0.2.4",     # required by mdx_extra_q only (quantised MDX model)
     # --- MelBandRoFormer vocal separation ---
-    # audio-separator must be installed separately with GPU support:
-    # pip install "audio-separator[gpu]"
-    # (not listed here because it pulls onnxruntime-gpu which conflicts on some systems)
+    # audio-separator must be installed separately:
+    # pip install "audio-separator[cpu]"   (MPS uses the CPU ONNX runtime)
+    # (not listed here because it pulls onnxruntime which varies by platform)
 ]
 dev = [
     "pytest>=8.0",
