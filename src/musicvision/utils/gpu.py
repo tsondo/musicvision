@@ -64,6 +64,8 @@ def _gpu_sort_key(index: int) -> tuple:
     return (vram, model_number)
 
 
+
+
 def detect_devices() -> DeviceMap:
     """
     Auto-detect GPU configuration and return a DeviceMap.
@@ -166,8 +168,10 @@ def recommend_tier(device_map: DeviceMap) -> "HumoTier":
         log.warning("CUDA not available — recommending preview tier (CPU-only not supported)")
         return HumoTier.PREVIEW
 
-    if n_gpus >= 2 and primary_gb >= 24:
+    # FP16 needs ~34 GB weights — only viable with FSDP across 2+ GPUs
+    if n_gpus >= 2 and primary_gb >= 40:
         return HumoTier.FP16
+    # FP8 scaled needs ~18 GB — fits on 20+ GB with headroom for activations
     if primary_gb >= 20:
         return HumoTier.FP8_SCALED
     if primary_gb >= 16:

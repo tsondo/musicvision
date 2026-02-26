@@ -87,6 +87,19 @@ TIER_VRAM_GB: dict[str, float] = {
 }
 
 
+class HumoQuality(str, Enum):
+    """
+    Quality presets for HuMo video generation.
+
+    PREVIEW — 1.7B model + 480p + 10 steps: seconds per clip, for layout checks.
+    DRAFT   — FP8 14B + 480p + 15 steps: quick iteration with real model quality.
+    FINAL   — FP8 14B + 720p + 50 steps: full quality for final render.
+    """
+    PREVIEW = "preview"
+    DRAFT   = "draft"
+    FINAL   = "final"
+
+
 class ImageModel(str, Enum):
     FLUX_DEV    = "flux-dev"
     FLUX_SCHNELL = "flux-schnell"
@@ -155,6 +168,30 @@ class HumoConfig(BaseModel):
     denoising_steps: int = 50         # 30–40 faster, 50 best quality
     block_swap_count: int = 0         # DiT blocks to keep on CPU (0 = all on GPU)
     sub_clip_continuity: bool = True  # pass last frame of sub-clip N as reference for sub-clip N+1
+
+    @classmethod
+    def from_quality(cls, quality: HumoQuality | str, **overrides) -> "HumoConfig":
+        """Create a HumoConfig from a quality preset.
+
+        Any keyword argument overrides the preset defaults (e.g.
+        ``HumoConfig.from_quality("draft", block_swap_count=20)``).
+        """
+        if isinstance(quality, str):
+            quality = HumoQuality(quality)
+        presets: dict[HumoQuality, dict] = {
+            HumoQuality.PREVIEW: dict(
+                tier=HumoTier.PREVIEW, resolution="480p", denoising_steps=10,
+            ),
+            HumoQuality.DRAFT: dict(
+                tier=HumoTier.FP8_SCALED, resolution="480p", denoising_steps=15,
+            ),
+            HumoQuality.FINAL: dict(
+                tier=HumoTier.FP8_SCALED, resolution="720p", denoising_steps=50,
+            ),
+        }
+        params = presets[quality]
+        params.update(overrides)
+        return cls(**params)
 
     @property
     def model_size(self) -> str:

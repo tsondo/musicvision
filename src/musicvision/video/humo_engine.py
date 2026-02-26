@@ -45,6 +45,7 @@ import logging
 import math
 import random
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -103,6 +104,11 @@ class HumoEngine:
         self.config = config
         self.device_map = device_map
         self._bundle: HumoModelBundle | None = None
+
+    @property
+    def _is_dual_gpu(self) -> bool:
+        """True when encoders and DiT are on separate GPUs."""
+        return self.device_map.encoder_device != self.device_map.dit_device
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -202,15 +208,19 @@ class HumoEngine:
             n_frames, n_frames / FPS, inp.output_path.name,
         )
 
-        # Step 1-3: encode conditioning signals (sequential — no CUDA stream overlap)
-        # T5 encoding runs on GPU1 (~0.3–1s/scene) and noise init on GPU0 are
-        # independent, but stream overlap adds complexity for minimal gain at
-        # single-scene throughput.  Re-evaluate if batching multiple scenes.
-        # Future: VAE decode (GPU1) could overlap the next scene's T5 encode.
-        # TODO: measure T5 encode time on GPU to quantify the opportunity.
+        # Step 1-3: encode conditioning signals sequentially.
+        # On single-GPU setups, offload T5/Whisper to CPU between uses to
+        # free ~9 GB for VAE / DiT activations. On dual-GPU setups the
+        # encoder GPU has plenty of headroom (~16 GB for ~11 GB of models)
+        # so skip the pointless CPU round-trips.
         text_embeds  = self._encode_text(inp.text_prompt)
+        if not self._is_dual_gpu:
+            self._offload("t5")
+
         image_cond   = self._encode_image(inp.reference_image, n_frames)
         audio_embeds = self._encode_audio(inp.audio_segment, n_frames)
+        if not self._is_dual_gpu:
+            self._offload("whisper")
 
         # Resolve seed: use provided seed or generate a random one so the result
         # is always reproducible.  The used seed is recorded in HumoOutput.
@@ -334,6 +344,58 @@ class HumoEngine:
         return outputs
 
     # ------------------------------------------------------------------
+    # VRAM management: offload / reload models on encoder GPU
+    # ------------------------------------------------------------------
+
+    def _get_nn_module(self, name: str):
+        """Get the underlying nn.Module for a bundle component."""
+        model = getattr(self._bundle, name, None)
+        if model is None:
+            return None
+        # WanT5Encoder: ._model.model is the nn.Module (T5Encoder)
+        if hasattr(model, '_model') and hasattr(model._model, 'model'):
+            return model._model.model
+        # WanVideoVAE: .model is the nn.Module
+        if hasattr(model, 'model'):
+            return model.model
+        # Whisper encoder: is directly an nn.Module
+        return model
+
+    def _offload(self, name: str) -> None:
+        """Move a model component from GPU to CPU to free VRAM."""
+        import torch, gc
+
+        if self._bundle is None:
+            return
+        nn_mod = self._get_nn_module(name)
+        if nn_mod is None:
+            return
+        nn_mod.to("cpu")
+        torch.cuda.empty_cache()
+        gc.collect()
+        log.debug("Offloaded %s to CPU", name)
+
+    def _reload(self, name: str) -> None:
+        """Move a model component back from CPU to encoder GPU (no-op if already there)."""
+        import torch
+
+        if self._bundle is None:
+            return
+        device = self._bundle.encoder_device
+        nn_mod = self._get_nn_module(name)
+        if nn_mod is None:
+            return
+        # Check if already on the right device
+        try:
+            first_param = next(nn_mod.parameters())
+            if first_param.device == torch.device(device):
+                return  # already on GPU
+        except StopIteration:
+            return
+        nn_mod.to(device)
+        log.debug("Reloaded %s to %s", name, device)
+
+    # ------------------------------------------------------------------
     # Internal: conditioning encoders
     # ------------------------------------------------------------------
 
@@ -344,6 +406,7 @@ class HumoEngine:
         """
         if self._bundle is None or self._bundle.t5 is None:
             raise RuntimeError("T5 encoder not loaded — call load() first")
+        self._reload("t5")  # no-op if already on GPU
         pos_embeds, neg_embeds = self._bundle.t5.encode_pair(prompt, "")
         return pos_embeds, neg_embeds
 
@@ -414,6 +477,7 @@ class HumoEngine:
         """
         if self._bundle is None or self._bundle.whisper is None:
             raise RuntimeError("Whisper encoder not loaded — call load() first")
+        self._reload("whisper")  # no-op if already on GPU
 
         from musicvision.video.audio_encoder import HumoAudioEncoder
 
@@ -469,15 +533,16 @@ class HumoEngine:
         pos_text, neg_text = text_embeds        # each [1, 512, 4096]
         image_cond_pos, image_cond_neg = image_cond  # each [1, 20, total_lat_f, lat_h, lat_w]
 
-        # Move text embeds to dit device
-        pos_text = pos_text.to(dit_device)
-        neg_text = neg_text.to(dit_device)
-        image_cond_pos = image_cond_pos.to(dit_device)
-        image_cond_neg = image_cond_neg.to(dit_device)
+        # Move all conditioning to dit device in bfloat16 (denoising dtype)
+        _bf16 = torch.bfloat16
+        pos_text = pos_text.to(dit_device, dtype=_bf16)
+        neg_text = neg_text.to(dit_device, dtype=_bf16)
+        image_cond_pos = image_cond_pos.to(dit_device, dtype=_bf16)
+        image_cond_neg = image_cond_neg.to(dit_device, dtype=_bf16)
 
         # Audio features — move to dit device, create zero version
         if audio_embeds is not None:
-            audio_embeds = audio_embeds.to(dit_device)
+            audio_embeds = audio_embeds.to(dit_device, dtype=_bf16)
             audio_zeros = torch.zeros_like(audio_embeds)
         else:
             audio_zeros = None
@@ -521,9 +586,13 @@ class HumoEngine:
         )
 
         use_swap = self._bundle.block_swap is not None
+        total_steps = self.config.denoising_steps
+        denoise_t0 = time.monotonic()
+        peak_vram = 0.0
 
         with torch.no_grad():
-            for step_idx in range(self.config.denoising_steps):
+            for step_idx in range(total_steps):
+                step_t0 = time.monotonic()
                 t = scheduler.sigmas[step_idx].to(dit_device)
                 timestep = t.expand(1)
 
@@ -549,9 +618,24 @@ class HumoEngine:
 
                 z = scheduler.step(v_pred, z, step_idx)
 
-                if (step_idx + 1) % 10 == 0:
-                    log.debug("Denoising step %d/%d", step_idx + 1, self.config.denoising_steps)
+                # Per-step progress at INFO level
+                step_dur = time.monotonic() - step_t0
+                elapsed = time.monotonic() - denoise_t0
+                alloc_gb = torch.cuda.memory_allocated(dit_device) / 1024**3
+                total_gb = torch.cuda.get_device_properties(dit_device).total_memory / 1024**3
+                peak_vram = max(peak_vram, alloc_gb)
+                log.info(
+                    "Step %d/%d [%.1fs] (elapsed: %.1fs) GPU%s %.1f/%.1f GB",
+                    step_idx + 1, total_steps, step_dur, elapsed,
+                    dit_device.index if dit_device.index is not None else 0,
+                    alloc_gb, total_gb,
+                )
 
+        total_denoise = time.monotonic() - denoise_t0
+        log.info(
+            "Denoising complete: %d steps in %.1fs (%.2fs/step), peak VRAM %.1f GB",
+            total_steps, total_denoise, total_denoise / total_steps, peak_vram,
+        )
         return z  # [1, 16, total_lat_f, lat_h, lat_w]
 
     def _forward_with_swap(
@@ -625,37 +709,6 @@ class HumoEngine:
         pixels = (pixels.clamp(0, 1) * 255).to(torch.uint8)
 
         return pixels  # (T, H, W, 3) uint8
-
-
-# ---------------------------------------------------------------------------
-# Tier recommendation
-# ---------------------------------------------------------------------------
-
-def recommend_tier(device_map: "DeviceMap") -> HumoTier:
-    """
-    Suggest the best HumoTier for the detected hardware.
-
-    The recommendation is conservative: it selects the highest-quality tier
-    that fits comfortably (not the absolute maximum), leaving headroom for
-    text encoder, VAE, and Whisper on the secondary device.
-    """
-    try:
-        import torch
-        primary_gb = torch.cuda.get_device_properties(device_map.dit_device).total_memory / 1024**3
-        n_gpus = torch.cuda.device_count()
-    except Exception:
-        log.warning("CUDA not available — recommending preview tier (CPU-only not supported)")
-        return HumoTier.PREVIEW
-
-    if n_gpus >= 2 and primary_gb >= 24:
-        return HumoTier.FP16
-    if primary_gb >= 20:
-        return HumoTier.FP8_SCALED
-    if primary_gb >= 16:
-        return HumoTier.GGUF_Q6
-    if primary_gb >= 12:
-        return HumoTier.GGUF_Q4
-    return HumoTier.PREVIEW
 
 
 # ---------------------------------------------------------------------------

@@ -30,9 +30,11 @@ Options
                 Default: synthesized 8s test tone
   --image       Path to a real reference PNG/JPG.
                 Default: generated gradient placeholder
-  --steps       Denoising steps (default 30 — enough to judge quality)
+  --steps       Denoising steps (default 15)
   --block-swap  Number of DiT blocks to keep on CPU (default 0 = all on GPU)
   --out-dir     Output directory (default: ./test_output/<timestamp>)
+  --preview     Quick smoke test: preview tier + 480p + 10 steps
+  --draft       Iteration mode: fp8_scaled tier + 480p + 15 steps
   --skip-encode Skip audio/image encoding stubs if weights are absent
                 (generates a latent from noise only — tests denoising loop shape)
 """
@@ -286,7 +288,7 @@ def phase_hardware(args, results: Results) -> tuple:
 
     humo_cfg = HumoConfig(
         tier=tier,
-        resolution="720p",
+        resolution=args.resolution,
         denoising_steps=args.steps,
         block_swap_count=args.block_swap,
         scale_a=2.0,
@@ -631,15 +633,31 @@ def main():
                         help="Path to source WAV/MP3 (default: synthesized)")
     parser.add_argument("--image",      type=Path, default=None,
                         help="Path to reference PNG/JPG (default: generated)")
-    parser.add_argument("--steps",      type=int, default=30,
-                        help="Denoising steps (default: 30)")
+    parser.add_argument("--steps",      type=int, default=15,
+                        help="Denoising steps (default: 15)")
     parser.add_argument("--block-swap", type=int, default=0, dest="block_swap",
                         help="DiT blocks to keep on CPU (default: 0 = all on GPU)")
     parser.add_argument("--out-dir",    type=Path, default=None, dest="out_dir",
                         help="Output directory (default: ./test_output/<timestamp>)")
+    parser.add_argument("--resolution", default="480p", choices=["720p", "480p"],
+                        help="Output resolution (default: 480p)")
+    parser.add_argument("--preview",    action="store_true",
+                        help="Quick smoke test: preview tier + 480p + 10 steps")
+    parser.add_argument("--draft",      action="store_true",
+                        help="Iteration mode: fp8_scaled tier + 480p + 15 steps")
     parser.add_argument("--phase",      type=int, default=0,
                         help="Run only this phase (1=hw, 2=single, 3=scene, 4=assembly; 0=all)")
     args = parser.parse_args()
+
+    # Convenience presets override individual flags
+    if args.preview:
+        args.tier = args.tier or "preview"
+        args.resolution = "480p"
+        args.steps = 10
+    elif args.draft:
+        args.tier = args.tier or "fp8_scaled"
+        args.resolution = "480p"
+        args.steps = 15
 
     # Output directory
     if args.out_dir is None:
