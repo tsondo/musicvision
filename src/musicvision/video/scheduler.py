@@ -130,7 +130,9 @@ class FlowMatchScheduler:
 
         # Euler integration: z_{t+1} = z_t + v * Δσ
         # Δσ = sigma_next - sigma_curr < 0  (denoising direction)
-        delta_sigma = sigma_next - sigma_curr   # negative scalar
+        # Cast to z_t dtype to avoid float32 promotion (sigmas are float32
+        # for numerical precision but the latent is bfloat16).
+        delta_sigma = (sigma_next - sigma_curr).to(z_t.dtype)
 
         return z_t + v_pred * delta_sigma
 

@@ -705,7 +705,7 @@ def main():
         from musicvision.models import HumoTier, HumoConfig
         device_map = detect_devices()
         tier = HumoTier(args.tier) if args.tier else HumoTier.FP8_SCALED
-        humo_cfg = HumoConfig(tier=tier, denoising_steps=args.steps, block_swap_count=args.block_swap)
+        humo_cfg = HumoConfig(tier=tier, resolution=args.resolution, denoising_steps=args.steps, block_swap_count=args.block_swap)
         tier_name = tier.value
 
     clip_paths: list[Path] = []

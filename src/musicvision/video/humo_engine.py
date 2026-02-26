@@ -110,6 +110,26 @@ class HumoEngine:
         """True when encoders and DiT are on separate GPUs."""
         return self.device_map.encoder_device != self.device_map.dit_device
 
+    def _should_offload(self) -> bool:
+        """Decide whether to offload idle encoder models to CPU.
+
+        Single-GPU: always offload (everything competes for the same VRAM).
+        Dual-GPU: only offload if encoder GPU has < 2 GB free (the VAE image
+        encode and Whisper audio encode need working memory for activations).
+        """
+        if not self._is_dual_gpu:
+            return True
+        import torch
+        enc = self.device_map.encoder_device
+        if enc.type != "cuda":
+            return False
+        free = (torch.cuda.get_device_properties(enc).total_memory
+                - torch.cuda.memory_allocated(enc)) / 1024**3
+        if free < 2.0:
+            log.info("Encoder GPU free VRAM %.1f GB < 2 GB — offloading to CPU", free)
+            return True
+        return False
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -209,17 +229,17 @@ class HumoEngine:
         )
 
         # Step 1-3: encode conditioning signals sequentially.
-        # On single-GPU setups, offload T5/Whisper to CPU between uses to
-        # free ~9 GB for VAE / DiT activations. On dual-GPU setups the
-        # encoder GPU has plenty of headroom (~16 GB for ~11 GB of models)
-        # so skip the pointless CPU round-trips.
+        # On single-GPU setups, always offload T5/Whisper to CPU between uses
+        # to free ~9 GB for VAE / DiT activations.
+        # On dual-GPU setups, only offload if encoder GPU free VRAM < 2 GB
+        # (the VAE image encode + Whisper audio encode need working memory).
         text_embeds  = self._encode_text(inp.text_prompt)
-        if not self._is_dual_gpu:
+        if self._should_offload():
             self._offload("t5")
 
         image_cond   = self._encode_image(inp.reference_image, n_frames)
         audio_embeds = self._encode_audio(inp.audio_segment, n_frames)
-        if not self._is_dual_gpu:
+        if self._should_offload():
             self._offload("whisper")
 
         # Resolve seed: use provided seed or generate a random one so the result
@@ -235,6 +255,10 @@ class HumoEngine:
             audio_embeds=audio_embeds,
             seed=seed,
         )
+
+        # Free encoder GPU VRAM before VAE decode (T5 + Whisper no longer needed)
+        self._offload("t5")
+        self._offload("whisper")
 
         # Step 6-7: decode and save
         frames = self._decode_latent(video_latent)
@@ -580,12 +604,16 @@ class HumoEngine:
             shift=5.0,
         )
 
-        scale_a = float(self.config.scale_a)
-        scale_t = float(self.config.scale_t)
+        # Use bfloat16 tensors for CFG scales to avoid promoting v_pred to float32
+        # (Python float * bfloat16 tensor → float32 promotion)
+        scale_a = torch.tensor(self.config.scale_a, dtype=_bf16, device=dit_device)
+        scale_t = torch.tensor(self.config.scale_t, dtype=_bf16, device=dit_device)
+        _two = torch.tensor(2.0, dtype=_bf16, device=dit_device)
 
         log.info(
             "Denoising: %d steps, lat shape [1,16,%d,%d,%d], scale_a=%.1f, scale_t=%.1f",
-            self.config.denoising_steps, total_lat_f, lat_h, lat_w, scale_a, scale_t,
+            self.config.denoising_steps, total_lat_f, lat_h, lat_w,
+            scale_a.item(), scale_t.item(),
         )
 
         use_swap = self._bundle.block_swap is not None
@@ -596,7 +624,7 @@ class HumoEngine:
         with torch.no_grad():
             for step_idx in range(total_steps):
                 step_t0 = time.monotonic()
-                t = scheduler.sigmas[step_idx].to(dit_device)
+                t = scheduler.sigmas[step_idx].to(device=dit_device, dtype=torch.bfloat16)
                 timestep = t.expand(1)
 
                 # Build DiT inputs: cat noise latent + image conditioning
@@ -612,14 +640,18 @@ class HumoEngine:
                     v_audio_neg = dit(x_pos, timestep, pos_text, audio_zeros)
                     v_text_neg = dit(x_neg, timestep, neg_text, audio_embeds)
 
-                # TIA dual CFG combination
+                # TIA dual CFG combination (all ops in bfloat16)
                 v_pred = (
                     v_text_neg
                     + scale_a * (v_cond - v_audio_neg)
-                    + (scale_t - 2.0) * (v_audio_neg - v_text_neg)
+                    + (scale_t - _two) * (v_audio_neg - v_text_neg)
                 )
 
                 z = scheduler.step(v_pred, z, step_idx)
+                # Guard: ensure z stays bfloat16 (norms and float32 sigma
+                # arithmetic can promote tensors through the CFG/step chain)
+                if z.dtype != _bf16:
+                    z = z.to(_bf16)
 
                 # Per-step progress at INFO level
                 step_dur = time.monotonic() - step_t0
@@ -706,12 +738,12 @@ class HumoEngine:
         with torch.no_grad():
             pixels = vae.decode(noise_latent)  # [1, 3, T, H, W] in [0,1]
 
-        # Convert to (T, H, W, 3) uint8
+        # Convert to (T, H, W, 3) uint8 on CPU (ready for ffmpeg pipe or torchvision)
         pixels = pixels.squeeze(0)           # [3, T, H, W]
         pixels = pixels.permute(1, 2, 3, 0)  # [T, H, W, 3]
-        pixels = (pixels.clamp(0, 1) * 255).to(torch.uint8)
+        pixels = (pixels.clamp(0, 1) * 255).to(torch.uint8).cpu()
 
-        return pixels  # (T, H, W, 3) uint8
+        return pixels  # (T, H, W, 3) uint8, CPU
 
 
 # ---------------------------------------------------------------------------
@@ -838,7 +870,7 @@ def _save_frames_as_mp4_ffmpeg(frames, output_path: Path, fps: int = 25) -> None
     ]
 
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
-    proc.stdin.write(frames.numpy().tobytes())
+    proc.stdin.write(frames.cpu().numpy().tobytes())
     proc.stdin.close()
     proc.wait()
 
