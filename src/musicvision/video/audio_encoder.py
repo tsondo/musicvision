@@ -35,8 +35,9 @@ _WHISPER_NUM_HIDDEN = 33
 _WHISPER_FPS = 50
 # Whisper target sample rate
 _WHISPER_SR  = 16_000
-# Band boundaries over the 33 hidden-state layers
-_BAND_BOUNDARIES = [(0, 7), (7, 14), (14, 20), (20, 27), (27, 33)]
+# Band boundaries over the 33 hidden-state layers (matching upstream HuMo)
+# Bands 0-3: uniform 8-layer groups; Band 4: final layer only
+_BAND_BOUNDARIES = [(0, 8), (8, 16), (16, 24), (24, 32), (32, 33)]
 _NUM_BANDS       = len(_BAND_BOUNDARIES)   # 5
 # Whisper large-v3 hidden dim
 _WHISPER_DIM = 1280

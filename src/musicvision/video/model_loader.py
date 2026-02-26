@@ -119,30 +119,35 @@ def _gguf_name_to_pt_key(name: str) -> str:
     Convert GGUF tensor name to PyTorch state dict key.
 
     GGUF (llama.cpp convention): blk.N.attn_q.weight
-    PyTorch (WanModel): blocks.N.self_attn.q_proj.weight
+    PyTorch (WanModel/HuMo):    blocks.N.self_attn.q.weight
+
+    Key names match the vendored Phantom-video/HuMo architecture:
+      - Self-attn: q/k/v/o (not q_proj/k_proj/v_proj/out_proj)
+      - FFN: Sequential (ffn.0, ffn.2) with GELU (not SwiGLU fc1/fc2/fc3)
+      - Modulation: additive parameter (not linear projection)
+      - Head: Head submodule (head.head, head.norm, head.modulation)
     """
-    # Common remappings for WanModel
+    # Common remappings for WanModel (HuMo variant)
     replacements = [
         ("blk.", "blocks."),
-        (".attn_q.", ".self_attn.q_proj."),
-        (".attn_k.", ".self_attn.k_proj."),
-        (".attn_v.", ".self_attn.v_proj."),
-        (".attn_output.", ".self_attn.out_proj."),
-        (".ffn_gate.", ".ffn.fc1."),
-        (".ffn_up.", ".ffn.fc2."),
-        (".ffn_down.", ".ffn.fc3."),
+        (".attn_q.", ".self_attn.q."),
+        (".attn_k.", ".self_attn.k."),
+        (".attn_v.", ".self_attn.v."),
+        (".attn_output.", ".self_attn.o."),
+        (".ffn_gate.", ".ffn.0."),
+        (".ffn_down.", ".ffn.2."),
         (".attn_norm.", ".norm1."),
-        (".ffn_norm.", ".norm3."),
-        (".cross_attn_q.", ".cross_attn.q_proj."),
-        (".cross_attn_k.", ".cross_attn.k_proj."),
-        (".cross_attn_v.", ".cross_attn.v_proj."),
-        (".cross_attn_output.", ".cross_attn.out_proj."),
-        (".cross_attn_norm.", ".norm2."),
-        ("token_embd.", "text_embed.0."),
-        ("output_norm.", "head_norm."),
-        ("output.", "head_proj."),
-        ("time_embed.", "time_embed.0."),
-        ("patch_embed.", "patch_embed."),
+        (".ffn_norm.", ".norm2."),
+        (".cross_attn_q.", ".cross_attn.q."),
+        (".cross_attn_k.", ".cross_attn.k."),
+        (".cross_attn_v.", ".cross_attn.v."),
+        (".cross_attn_output.", ".cross_attn.o."),
+        (".cross_attn_norm.", ".norm3."),
+        ("token_embd.", "text_embedding.0."),
+        ("output_norm.", "head.norm."),
+        ("output.", "head.head."),
+        ("time_embed.", "time_embedding.0."),
+        ("patch_embed.", "patch_embedding."),
     ]
     result = name
     for old, new in replacements:

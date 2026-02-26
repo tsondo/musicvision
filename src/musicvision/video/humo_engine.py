@@ -573,7 +573,7 @@ class HumoEngine:
         swap = self._bundle.block_swap
 
         # Run pre-block processing (patch embed, time/text/audio conditioning)
-        x_seq, time_emb, text_ctx, audio_proj_out, freqs, F_frames, h, w = dit.pre_blocks(
+        x_seq, block_kwargs, time_emb_raw, F_frames, h, w = dit.pre_blocks(
             x, timestep, text_embeds, audio_features
         )
 
@@ -582,15 +582,11 @@ class HumoEngine:
             x_seq = swap.execute_block(
                 block_idx,
                 x_seq,
-                time_emb,
-                text_ctx,
-                audio_proj_out,
-                freqs,
-                F_frames,
+                **block_kwargs,
             )
 
         # Run post-block processing (head AdaLN + unpatchify)
-        out = dit.post_blocks(x_seq, time_emb, F_frames, h, w)
+        out = dit.post_blocks(x_seq, time_emb_raw, F_frames, h, w)
         return out
 
     # ------------------------------------------------------------------
