@@ -34,7 +34,7 @@ from typing import Any
 
 from musicvision.models import HumoConfig, HumoTier
 from musicvision.video.block_swap import BlockSwapManager
-from musicvision.video.weight_registry import locate_dit, locate_shared
+from musicvision.video.weight_registry import locate_dit, locate_lora, locate_shared
 
 log = logging.getLogger(__name__)
 
@@ -57,6 +57,7 @@ class HumoModelBundle:
     block_swap: BlockSwapManager | None  # None when swap is disabled
     dit_device: Any              # torch.device — primary GPU
     encoder_device: Any          # torch.device — secondary GPU / CPU
+    has_lora: bool = False       # True when Lightx2V LoRA is applied
 
 
 # ---------------------------------------------------------------------------
@@ -367,6 +368,16 @@ class FP8ScaledLoader(BaseHumoLoader):
         log.info("Loading HuMo-17B FP8 scaled DiT from %s onto %s", weight_path.name, dit_device)
         dit = self._load_fp8_dit(weight_path, dit_device)
 
+        # Apply Lightx2V LoRA if configured
+        lora_applied = False
+        if getattr(config, "lora", None):
+            try:
+                lora_path = locate_lora(config.lora, weights_dir)
+                n_patched = apply_lora(dit, lora_path, dit_device)
+                lora_applied = n_patched > 0
+            except FileNotFoundError:
+                log.warning("LoRA '%s' not found — proceeding without LoRA", config.lora)
+
         t5      = self._load_t5(enc_device, weights_dir)
         vae     = self._load_vae(enc_device, weights_dir)
         whisper = self._load_whisper(enc_device, weights_dir)
@@ -375,6 +386,7 @@ class FP8ScaledLoader(BaseHumoLoader):
         return HumoModelBundle(
             dit=dit, t5=t5, vae=vae, whisper=whisper,
             block_swap=swap, dit_device=dit_device, encoder_device=enc_device,
+            has_lora=lora_applied,
         )
 
     def _load_fp8_dit(self, weight_path: Path, dit_device: Any) -> Any:
@@ -487,6 +499,102 @@ class FP8ScaledLinear(__import__("torch").nn.Module):
         if self.bias is not None:
             out = out + self.bias
         return out
+
+
+class FP8ScaledLinearWithLoRA(FP8ScaledLinear):
+    """FP8 linear layer with merged LoRA adapter for inference.
+
+    The base FP8 matmul runs as normal, then a bf16 LoRA delta is added:
+        output = FP8_matmul(x, W) + (x @ A^T @ B^T) * scale
+
+    Total LoRA overhead is ~400 MB for rank 64 across all DiT layers.
+    """
+
+    def __init__(
+        self,
+        base_linear: FP8ScaledLinear,
+        lora_A: Any,  # [rank, in_features], bf16
+        lora_B: Any,  # [out_features, rank], bf16
+        lora_scale: float = 1.0,
+    ) -> None:
+        import torch
+        super().__init__(base_linear.weight, base_linear.scale,
+                         getattr(base_linear, 'bias', None))
+        self.register_buffer("lora_A", lora_A)
+        self.register_buffer("lora_B", lora_B)
+        self.lora_scale = lora_scale
+
+    def forward(self, x: Any) -> Any:
+        import torch
+        import torch.nn.functional as F
+        base_out = super().forward(x)
+        lora_out = F.linear(F.linear(x.float(), self.lora_A.float()), self.lora_B.float())
+        return base_out + (lora_out * self.lora_scale).to(base_out.dtype)
+
+
+def apply_lora(model: Any, lora_path: "Path", dit_device: Any, lora_scale: float = 1.0) -> int:
+    """Apply a LoRA safetensors file to a WanModel with FP8ScaledLinear layers.
+
+    LoRA key format (from Lightx2V/ComfyUI):
+        ``diffusion_model.blocks.0.self_attn.q.lora_A.weight``
+
+    The ``diffusion_model.`` prefix is stripped, then the key is split into
+    the module path and lora_A/lora_B component.
+
+    Returns the number of layers patched.
+    """
+    import torch
+    from safetensors.torch import load_file
+
+    lora_state = load_file(str(lora_path), device=str(dit_device))
+
+    # Group LoRA keys by module path
+    lora_pairs: dict[str, dict[str, Any]] = {}
+    for key, tensor in lora_state.items():
+        # Strip common prefixes
+        clean = key
+        for prefix in ("diffusion_model.", "model."):
+            if clean.startswith(prefix):
+                clean = clean[len(prefix):]
+                break
+
+        if ".lora_A." in clean:
+            module_path = clean.split(".lora_A.")[0]
+            lora_pairs.setdefault(module_path, {})["A"] = tensor
+        elif ".lora_B." in clean:
+            module_path = clean.split(".lora_B.")[0]
+            lora_pairs.setdefault(module_path, {})["B"] = tensor
+        else:
+            log.debug("LoRA: skipping non-lora key %s", key)
+
+    patched = 0
+    for module_path, ab in lora_pairs.items():
+        if "A" not in ab or "B" not in ab:
+            log.warning("LoRA: incomplete pair for %s, skipping", module_path)
+            continue
+
+        # Navigate to the module
+        parts = module_path.split(".")
+        try:
+            parent = model
+            for p in parts[:-1]:
+                parent = getattr(parent, p)
+            target = getattr(parent, parts[-1])
+        except AttributeError:
+            log.debug("LoRA: module not found at %s", module_path)
+            continue
+
+        if isinstance(target, FP8ScaledLinear) and not isinstance(target, FP8ScaledLinearWithLoRA):
+            wrapped = FP8ScaledLinearWithLoRA(
+                target, ab["A"].to(torch.bfloat16), ab["B"].to(torch.bfloat16), lora_scale,
+            )
+            setattr(parent, parts[-1], wrapped)
+            patched += 1
+        else:
+            log.debug("LoRA: %s is %s, not FP8ScaledLinear — skipping", module_path, type(target).__name__)
+
+    log.info("LoRA applied: %d layers patched (scale=%.2f)", patched, lora_scale)
+    return patched
 
 
 def _fp8_supported(device: Any) -> bool:

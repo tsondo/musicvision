@@ -127,9 +127,10 @@ class HumoAudioEncoder:
         # windows: [1, num_latent_frames, 8, 5, 1280]
 
         if include_ref_frame:
-            # Reference frame window uses the same features as latent frame 0
+            # Reference frame is at the LAST temporal position (matching image cond).
+            # Append one window for the reference frame after all latent windows.
             ref_window = windows[:, :1]   # [1, 1, 8, 5, 1280]
-            windows    = _concat_tensors(ref_window, windows, dim=1)
+            windows    = _concat_tensors(windows, ref_window, dim=1)
             # → [1, num_latent_frames + 1, 8, 5, 1280]
 
         log.debug(

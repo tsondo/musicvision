@@ -93,10 +93,12 @@ class HumoQuality(str, Enum):
 
     PREVIEW — 1.7B model + 480p + 10 steps: seconds per clip, for layout checks.
     DRAFT   — FP8 14B + 480p + 15 steps: quick iteration with real model quality.
+    FAST    — FP8 14B + Lightx2V LoRA + 480p + 6 steps + CFG=1: ~5 min/clip.
     FINAL   — FP8 14B + 720p + 50 steps: full quality for final render.
     """
     PREVIEW = "preview"
     DRAFT   = "draft"
+    FAST    = "fast"
     FINAL   = "final"
 
 
@@ -162,12 +164,14 @@ class StyleSheet(BaseModel):
 
 class HumoConfig(BaseModel):
     tier: HumoTier = HumoTier.FP8_SCALED
-    resolution: str = "720p"          # "720p" or "480p"
+    resolution: str = "720p"          # "720p", "480p", or "384p" (688×384, Lightx2V distilled)
     scale_a: float = 2.0              # audio guidance strength (1.0–3.0)
     scale_t: float = 7.5              # text guidance strength (5.0–10.0)
     denoising_steps: int = 50         # 30–40 faster, 50 best quality
+    shift: float = 8.0                # sigma schedule shift (higher → more high-noise steps)
     block_swap_count: int = 0         # DiT blocks to keep on CPU (0 = all on GPU)
     sub_clip_continuity: bool = True  # pass last frame of sub-clip N as reference for sub-clip N+1
+    lora: str | None = None           # LoRA key from weight_registry (e.g. "lightx2v_i2v_480p")
 
     @classmethod
     def from_quality(cls, quality: HumoQuality | str, **overrides) -> "HumoConfig":
@@ -185,6 +189,10 @@ class HumoConfig(BaseModel):
             HumoQuality.DRAFT: dict(
                 tier=HumoTier.FP8_SCALED, resolution="480p", denoising_steps=15,
             ),
+            HumoQuality.FAST: dict(
+                tier=HumoTier.FP8_SCALED, resolution="384p", denoising_steps=6,
+                shift=8.0, scale_t=1.0, scale_a=1.0, lora="lightx2v_i2v_480p",
+            ),
             HumoQuality.FINAL: dict(
                 tier=HumoTier.FP8_SCALED, resolution="720p", denoising_steps=50,
             ),
@@ -199,11 +207,11 @@ class HumoConfig(BaseModel):
 
     @property
     def height(self) -> int:
-        return 720 if self.resolution == "720p" else 480
+        return {"720p": 720, "480p": 480, "384p": 384}.get(self.resolution, 720)
 
     @property
     def width(self) -> int:
-        return 1280 if self.resolution == "720p" else 832
+        return {"720p": 1280, "480p": 832, "384p": 688}.get(self.resolution, 1280)
 
 
 class ImageGenConfig(BaseModel):

@@ -95,6 +95,22 @@ _DIT_SPECS: dict[HumoTier, WeightSpec] = {
 }
 
 # ---------------------------------------------------------------------------
+# LoRA weight specs
+# ---------------------------------------------------------------------------
+
+LORA_SPECS: dict[str, WeightSpec] = {
+    "lightx2v_i2v_480p": WeightSpec(
+        repo_id="Kijai/WanVideo_comfy",
+        filename="lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors",
+        fmt="safetensors",
+        expected_gb=0.4,
+        subfolder="loras",
+        local_subdir="lora",
+    ),
+}
+
+
+# ---------------------------------------------------------------------------
 # Shared weight specs — tier-independent
 # ---------------------------------------------------------------------------
 
@@ -273,6 +289,57 @@ def download_shared(
     hf_hub_download(
         repo_id=spec.repo_id,
         filename=spec.filename,
+        local_dir=str(local_dir),
+        token=token,
+    )
+    return dest
+
+
+def locate_lora(key: str, base_dir: Path | None = None) -> Path:
+    """Return local path to a LoRA weight file."""
+    base = base_dir or weights_dir()
+    spec = LORA_SPECS[key]
+    p = base / "humo" / spec.local_subdir / spec.filename
+    if p.exists():
+        return p
+    # Check with subfolder path (hf_hub_download preserves subfolder)
+    if spec.subfolder:
+        p_sub = base / "humo" / spec.local_subdir / spec.subfolder / spec.filename
+        if p_sub.exists():
+            return p_sub
+    raise FileNotFoundError(
+        f"LoRA weight '{key}' not found at {p}. "
+        f"Run: musicvision download-weights --lora {key}"
+    )
+
+
+def download_lora(
+    key: str,
+    base_dir: Path | None = None,
+    hf_token: str | None = None,
+) -> Path:
+    """Download a LoRA weight file if not already present."""
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError as e:
+        raise RuntimeError("huggingface_hub is not installed. Run: pip install huggingface-hub") from e
+
+    base = base_dir or weights_dir()
+    spec = LORA_SPECS[key]
+    local_dir = base / "humo" / spec.local_subdir
+    local_dir.mkdir(parents=True, exist_ok=True)
+    dest = local_dir / spec.filename
+
+    if dest.exists():
+        log.info("LoRA weight '%s' already cached at %s", key, dest)
+        return dest
+
+    token = hf_token or os.environ.get("HUGGINGFACE_TOKEN") or os.environ.get("HF_TOKEN")
+    log.info("Downloading LoRA '%s' from %s (~%.1f GB)…", key, spec.repo_id, spec.expected_gb)
+    hf_hub_download(
+        repo_id=spec.repo_id,
+        filename=spec.filename,
+        subfolder=spec.subfolder or None,
         local_dir=str(local_dir),
         token=token,
     )

@@ -264,6 +264,9 @@ class HumoEngine:
         frames = self._decode_latent(video_latent)
         _save_mp4(frames, inp.output_path, fps=FPS)
 
+        # Step 8: Mux source audio into clip for lip sync preview
+        _mux_clip_audio(inp.output_path, inp.audio_segment)
+
         duration = n_frames / FPS
         log.info("Clip saved → %s (%.2fs, seed=%d)", inp.output_path.name, duration, seed)
         return HumoOutput(
@@ -455,12 +458,7 @@ class HumoEngine:
         enc_device = self._bundle.encoder_device
 
         # Determine resolution from config
-        if self.config.resolution == "720p":
-            H, W = 720, 1280
-        elif self.config.resolution == "480p":
-            H, W = 480, 832
-        else:
-            H, W = 720, 1280
+        H, W = self.config.height, self.config.width
 
         # Latent dimensions
         lat_f = (n_frames - 1) // 4 + 1   # temporal latent frames for noise
@@ -479,18 +477,23 @@ class HumoEngine:
 
         # Build positive image condition: [1, 20, total_lat_f, lat_h, lat_w]
         # Channel layout: [4 mask | 16 latent]
-        # Mask: 1 where we have a reference frame (frame 0), 0 elsewhere
+        # Mask: 1 at the LAST temporal position (reference frame), 0 elsewhere.
+        # The model was trained with ref-at-end; _decode_latent strips [:, :, :-1].
         mask_pos = torch.zeros(1, 4, total_lat_f, lat_h, lat_w, device=enc_device)
-        mask_pos[:, :, 0, :, :] = 1.0  # ref frame mask
+        mask_pos[:, :, -1, :, :] = 1.0  # ref frame at last position
 
-        # Latent: reference image at frame 0, zeros for noise frames
+        # Latent: reference image at last position, zeros for noise frames
         latent_frames = torch.zeros(1, 16, total_lat_f, lat_h, lat_w, device=enc_device)
-        latent_frames[:, :, 0, :, :] = img_latent[:, :, 0, :, :]
+        latent_frames[:, :, -1, :, :] = img_latent[:, :, 0, :, :]
 
         image_cond_pos = torch.cat([mask_pos, latent_frames], dim=1)  # [1, 20, total_lat_f, lat_h, lat_w]
 
-        # Negative: all zeros
-        image_cond_neg = torch.zeros_like(image_cond_pos)
+        # Negative: same mask structure (slot exists) but zero latent content.
+        # This tells the model "conditioning slot is here but empty" vs "no slot at all".
+        mask_neg = torch.zeros(1, 4, total_lat_f, lat_h, lat_w, device=enc_device)
+        mask_neg[:, :, -1, :, :] = 1.0  # same mask position as positive
+        latent_neg = torch.zeros(1, 16, total_lat_f, lat_h, lat_w, device=enc_device)
+        image_cond_neg = torch.cat([mask_neg, latent_neg], dim=1)
 
         return image_cond_pos, image_cond_neg
 
@@ -572,12 +575,7 @@ class HumoEngine:
             audio_zeros = None
 
         # Determine latent shape
-        if self.config.resolution == "720p":
-            H, W = 720, 1280
-        elif self.config.resolution == "480p":
-            H, W = 480, 832
-        else:
-            H, W = 720, 1280
+        H, W = self.config.height, self.config.width
         lat_f = (n_frames - 1) // 4 + 1
         total_lat_f = lat_f + 1
         lat_h, lat_w = H // 8, W // 8
@@ -598,10 +596,10 @@ class HumoEngine:
         )
         z = noise.clone()
 
-        # Create scheduler
+        # Create scheduler (shift from config, default 8.0 matches ComfyUI workflow)
         scheduler = FlowMatchScheduler(
             num_inference_steps=self.config.denoising_steps,
-            shift=5.0,
+            shift=self.config.shift,
         )
 
         # Use bfloat16 tensors for CFG scales to avoid promoting v_pred to float32
@@ -621,6 +619,10 @@ class HumoEngine:
         denoise_t0 = time.monotonic()
         peak_vram = 0.0
 
+        # Lightx2V LoRA fast path: single forward pass, no CFG guidance needed
+        has_lora = getattr(self._bundle, "has_lora", False)
+        use_cfg1 = has_lora and self.config.scale_t == 1.0
+
         with torch.no_grad():
             for step_idx in range(total_steps):
                 step_t0 = time.monotonic()
@@ -629,23 +631,52 @@ class HumoEngine:
 
                 # Build DiT inputs: cat noise latent + image conditioning
                 x_pos = torch.cat([z, image_cond_pos], dim=1)  # [1, 36, total_lat_f, lat_h, lat_w]
-                x_neg = torch.cat([z, image_cond_neg], dim=1)
 
-                if use_swap:
-                    v_cond = self._forward_with_swap(x_pos, timestep, pos_text, audio_embeds)
-                    v_audio_neg = self._forward_with_swap(x_pos, timestep, pos_text, audio_zeros)
-                    v_text_neg = self._forward_with_swap(x_neg, timestep, neg_text, audio_embeds)
+                if use_cfg1:
+                    # Lightx2V distilled: single forward pass, guidance baked into weights
+                    if use_swap:
+                        v_pred = self._forward_with_swap(x_pos, timestep, pos_text, audio_embeds)
+                    else:
+                        v_pred = dit(x_pos, timestep, pos_text, audio_embeds)
                 else:
-                    v_cond = dit(x_pos, timestep, pos_text, audio_embeds)
-                    v_audio_neg = dit(x_pos, timestep, pos_text, audio_zeros)
-                    v_text_neg = dit(x_neg, timestep, neg_text, audio_embeds)
+                    x_neg = torch.cat([z, image_cond_neg], dim=1)
+                    sigma = scheduler.sigmas[step_idx].item()
 
-                # TIA dual CFG combination (all ops in bfloat16)
-                v_pred = (
-                    v_text_neg
-                    + scale_a * (v_cond - v_audio_neg)
-                    + (scale_t - _two) * (v_audio_neg - v_text_neg)
-                )
+                    # v_cond: fully conditioned (positive text, positive image, audio)
+                    # v_audio_neg: text+image but NO audio
+                    # v_text_neg: time-adaptive (see below)
+                    if use_swap:
+                        v_cond = self._forward_with_swap(x_pos, timestep, pos_text, audio_embeds)
+                        v_audio_neg = self._forward_with_swap(x_pos, timestep, pos_text, audio_zeros)
+                    else:
+                        v_cond = dit(x_pos, timestep, pos_text, audio_embeds)
+                        v_audio_neg = dit(x_pos, timestep, pos_text, audio_zeros)
+
+                    if sigma > 0.98:
+                        # Early steps (high noise): keep positive image in negative
+                        # to preserve identity. Use audio_zeros for clean baseline.
+                        if use_swap:
+                            v_text_neg = self._forward_with_swap(x_pos, timestep, neg_text, audio_zeros)
+                        else:
+                            v_text_neg = dit(x_pos, timestep, neg_text, audio_zeros)
+                        # Early CFG formula (identity-preserving)
+                        v_pred = (
+                            v_text_neg
+                            + scale_a * (v_cond - v_audio_neg)
+                            + scale_t * (v_audio_neg - v_text_neg)
+                        )
+                    else:
+                        # Later steps: full unconditional negative (null image, null text, null audio)
+                        if use_swap:
+                            v_text_neg = self._forward_with_swap(x_neg, timestep, neg_text, audio_zeros)
+                        else:
+                            v_text_neg = dit(x_neg, timestep, neg_text, audio_zeros)
+                        # Standard dual CFG formula
+                        v_pred = (
+                            v_text_neg
+                            + scale_a * (v_cond - v_audio_neg)
+                            + (scale_t - _two) * (v_audio_neg - v_text_neg)
+                        )
 
                 z = scheduler.step(v_pred, z, step_idx)
                 # Guard: ensure z stays bfloat16 (norms and float32 sigma
@@ -810,6 +841,25 @@ def _audio_duration(path: Path) -> float:
     except Exception:
         from musicvision.utils.audio import get_duration
         return get_duration(path)
+
+
+def _mux_clip_audio(video_path: Path, audio_path: Path) -> None:
+    """Mux source audio into a video clip for lip sync preview.
+
+    Writes to a temp file first, then replaces the original to avoid ffmpeg
+    reading and writing the same file. If muxing fails, the silent video
+    is preserved unchanged.
+    """
+    tmp_path = video_path.with_name(video_path.stem + "_tmp.mp4")
+    try:
+        from musicvision.utils.audio import mux_video_audio
+        mux_video_audio(video_path, audio_path, tmp_path)
+        tmp_path.replace(video_path)
+        log.info("Audio muxed into %s", video_path.name)
+    except Exception as exc:
+        log.warning("Audio mux failed for %s: %s — keeping silent video", video_path.name, exc)
+        if tmp_path.exists():
+            tmp_path.unlink()
 
 
 def _save_mp4(frames: "Any", path: Path, fps: int = 25) -> None:
