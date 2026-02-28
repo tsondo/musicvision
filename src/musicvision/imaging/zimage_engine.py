@@ -46,12 +46,12 @@ class ZImageEngine(ImageEngine):
 
     def load(self) -> None:
         """Load Z-Image pipeline with CPU offload."""
-        from diffusers import FluxPipeline
+        from diffusers import ZImagePipeline
 
         model_id = MODEL_IDS[self.config.model]
         log.info("Loading Z-Image pipeline: %s", model_id)
 
-        self._pipe = FluxPipeline.from_pretrained(
+        self._pipe = ZImagePipeline.from_pretrained(
             model_id,
             torch_dtype=torch.bfloat16,
         )
@@ -83,10 +83,12 @@ class ZImageEngine(ImageEngine):
 
         # Turbo uses 8 steps with low guidance
         is_turbo = self.config.model == ImageModel.ZIMAGE_TURBO
-        steps = min(self.config.steps, 8) if is_turbo else self.config.steps
+        effective = self.config.effective_steps
+        steps = min(effective, 8) if is_turbo else effective
         guidance = min(self.config.guidance_scale, 1.0) if is_turbo else self.config.guidance_scale
 
-        generator = torch.Generator().manual_seed(seed) if seed is not None else None
+        gen_device = self.device_map.dit_device if self.device_map.dit_device.type != "cpu" else "cpu"
+        generator = torch.Generator(gen_device).manual_seed(seed) if seed is not None else None
         actual_seed = seed if seed is not None else torch.seed()
 
         kwargs = {
