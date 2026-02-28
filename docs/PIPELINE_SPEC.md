@@ -22,22 +22,22 @@ MusicVision is a music video production pipeline that combines open-source AI to
 - **Storage**: ~50GB for model weights (FLUX + HuMo + Whisper + VAE + audio separator). Additional space for project assets.
 - **Python**: 3.11+ (HuMo requirement)
 - **CUDA**: 12.4+ with flash_attn 2.6.3
-- **Key dependency pins**: `torch==2.5.1`, `flash_attn==2.6.3`
+- **Key dependency pins**: `torch==2.10.0` (CUDA 12.8, required for RTX 5090 sm_120), `flash_attn==2.6.3`
 
 ## Pipeline Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        MusicVision                          │
-├─────────────┬──────────────┬──────────────┬─────────────────┤
-│  Stage 1    │  Stage 2     │  Stage 3     │  Stage 4        │
-│  INTAKE &   │  IMAGE GEN & │  VIDEO GEN   │  ASSEMBLY &     │
-│  SEGMENTATION│  STORYBOARD │  (HuMo)      │  EXPORT         │
-├─────────────┼──────────────┼──────────────┼─────────────────┤
-│ Whisper     │ FLUX         │ HuMo TIA     │ ffmpeg          │
-│ ffmpeg      │ (LoRA)       │ (17B or 1.7B)│ FCPXML/EDL gen  │
-│ LLM (Claude)│              │              │                 │
-└─────────────┴──────────────┴──────────────┴─────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                            MusicVision                               │
+├──────────────┬───────────────┬────────────────────┬──────────────────┤
+│  Stage 1     │  Stage 2      │  Stage 3           │  Stage 4         │
+│  INTAKE &    │  IMAGE GEN &  │  VIDEO GEN         │  ASSEMBLY &      │
+│  SEGMENTATION│  STORYBOARD   │  (selectable)      │  EXPORT          │
+├──────────────┼───────────────┼────────────────────┼──────────────────┤
+│ Whisper      │ FLUX          │ HunyuanVideo-Avatar│ ffmpeg           │
+│ ffmpeg       │ Z-Image       │  (subprocess/venv) │ FCPXML/EDL gen   │
+│ LLM (Claude) │ (LoRA)        │ HuMo TIA (17B/1.7B)│                 │
+└──────────────┴───────────────┴────────────────────┴──────────────────┘
 ```
 
 ### GPU Memory Map (Inference Workstation)
@@ -97,19 +97,31 @@ style_sheet:
     - id: "stage"
       description: "Dimly lit stage with red velvet curtains and haze"
 
+video_engine: "humo"            # "humo" | "hunyuan_avatar" — project default
+
 humo:
   tier: "fp8_scaled"          # fp16 | fp8_scaled | gguf_q8 | gguf_q6 | gguf_q4 | preview
-  resolution: "720p"          # "720p" (1280×720) or "480p" (832×480)
+  resolution: "720p"          # "720p" (1280×720) or "480p" (832×480) or "384p" (688×384)
   scale_a: 2.0                # Audio guidance strength
   scale_t: 7.5                # Text guidance strength
   denoising_steps: 50
   block_swap_count: 0         # Blocks to swap CPU↔GPU; 0 = no swap
   sub_clip_continuity: true   # Last frame of sub-clip N → reference for N+1
 
+hunyuan_avatar:
+  hva_repo_dir: ""            # Path to cloned HunyuanVideoAvatar repo
+  hva_venv_python: ""         # Path to python in HVA venv
+  checkpoint: "bf16"          # "bf16" (recommended) or "fp8"
+  image_size: 704
+  sample_n_frames: 129        # Fixed at 129 by HVA
+  infer_steps: 30
+  cfg_scale: 7.5
+  cpu_offload: true           # Required for ≤32GB VRAM
+
 image_gen:
-  model: "flux-dev"           # flux-dev (gated) | flux-schnell (open)
-  quant: "auto"               # auto | fp8 | int8 | none
-  steps: null                 # null = auto (4 for schnell, 28 for dev)
+  model: "flux-dev"           # flux-dev | flux-schnell | z-image | z-image-turbo
+  quant: "auto"               # auto | bf16 | fp8 | int8
+  steps: null                 # null = auto (4 for schnell, 28 for dev, 8 for z-image-turbo)
   guidance_scale: 3.5
   lora_path: null             # Optional LoRA for character consistency
   lora_weight: 0.8
@@ -144,6 +156,7 @@ vocal_separation:
       "video_prompt_user_override": null,
       "video_clip": "clips/scene_001.mp4",
       "video_status": "pending",
+      "video_engine": null,
 
       "sub_clips": [],
 
@@ -159,7 +172,11 @@ vocal_separation:
 
 ### Key Design Decision: Sub-clips for Long Scenes
 
-HuMo generates max ~3.88 seconds (97 frames @ 25fps). Scenes longer than 3.88s are automatically split:
+Each video engine has a maximum clip duration. Scenes exceeding it are automatically split:
+- **HuMo:** 97 frames @ 25fps = 3.88s
+- **HunyuanVideo-Avatar:** 129 frames @ 25fps = 5.16s
+
+Example (HuMo, 3.88s max):
 
 ```
 Scene: 8 seconds (time 10.0 → 18.0)

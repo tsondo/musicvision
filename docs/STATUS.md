@@ -1,6 +1,6 @@
 # MusicVision — Project Status
 
-**Last updated:** 2026-02-27
+**Last updated:** 2026-02-28
 **Branch:** `main`
 
 ---
@@ -26,17 +26,18 @@ The pipeline is designed around AI-generated music from **AceStep** (a text-cond
 | Pipeline Stage | Status |
 |----------------|--------|
 | Intake (audio, BPM, Whisper, segmentation) | ✅ Complete |
-| Reference image generation (FLUX) | ✅ Complete |
-| Video generation (HuMo TIA) | ✅ Complete — **GPU tested, producing video** |
+| Reference image generation (FLUX + Z-Image) | ✅ Complete — **GPU tested** |
+| Video generation — HuMo TIA | ✅ Complete — GPU tested, noisy output (back burner) |
+| Video generation — HunyuanVideo-Avatar | ✅ Complete — **GPU tested, excellent quality** |
 | Assembly (rough cut, EDL, FCPXML) | ✅ Complete |
 
 | Infrastructure | Status |
 |----------------|--------|
-| API + CLI | ✅ Complete |
+| API + CLI (multi-engine support) | ✅ Complete |
 | Frontend (React or Gradio) | ❌ Not started |
 | Progress/status feedback (SSE/WebSocket) | ❌ Not started |
 
-**All four pipeline stages are code-complete and GPU-tested.** The pipeline produces recognizable video with audio sync. Quality tuning is ongoing (color artifacts, higher step counts).
+**All four pipeline stages are code-complete and GPU-tested.** Two video engines are available: HunyuanVideo-Avatar (primary, excellent lip sync + audio-driven animation) and HuMo (back burner, noisy output after 10 bug fixes). Two image engines are GPU-validated: Z-Image-Turbo (ungated, 12.5 GB peak) and FLUX.1-schnell (gated, 4-step fast).
 
 ---
 
@@ -46,7 +47,11 @@ The pipeline is designed around AI-generated music from **AceStep** (a text-cond
 
 > **Sub-clip continuity uses last-frame chaining.** For scenes longer than 3.88s, after generating sub-clip N, ffmpeg extracts the last frame and uses it as the reference image for sub-clip N+1. This prevents visual discontinuity within a scene but means sub-clips must generate sequentially.
 
-> **FLUX and HuMo never run simultaneously.** They occupy the same VRAM (DiT on GPU0). The pipeline enforces sequential stage execution. Model weights are fully unloaded between stages.
+> **Image and video engines never run simultaneously.** They occupy the same VRAM (DiT on GPU0). The pipeline enforces sequential stage execution. Model weights are fully unloaded between stages.
+
+> **HunyuanVideo-Avatar runs in a separate subprocess.** HVA has its own venv (`~/HunyuanVideoAvatar/.venv`) to avoid dependency conflicts. The MusicVision engine class communicates via JSON request/response files through `scripts/hva_wrapper.py`. This means HVA is isolated from the main process — no shared GPU state.
+
+> **Per-scene engine selection.** Each scene can specify `video_engine: humo | hunyuan_avatar` or default to the project setting. The pipeline groups scenes by engine and processes each group sequentially (load → generate all → unload).
 
 ---
 
@@ -73,9 +78,9 @@ Orchestrated by `run_intake()` in `intake/pipeline.py`.
 ---
 
 ### Stage 2 — Reference Image Generation
-**Status: Complete**
+**Status: Complete — GPU tested**
 
-Each scene gets a FLUX reference still image used as the HuMo visual anchor.
+Each scene gets a reference still image used as the visual anchor for video generation.
 
 **Prompt generation (`imaging/prompt_generator.py`):**
 - LLM (Claude or vLLM) writes a 2–4 sentence cinematic description per scene
@@ -84,20 +89,57 @@ Each scene gets a FLUX reference still image used as the HuMo visual anchor.
 - **If non-interactive (piped):** auto-template built from style sheet fields
 - User can override any prompt via `image_prompt_user_override` in `scenes.json`
 
-**Engine (`FluxEngine`):**
-- VRAM-tiered: 4 tiers from bf16 (≥28 GB free) down to quantized sequential offload (<8 GB)
-- FP8 quantization on Ada/Hopper/Blackwell (compute cap ≥ 8.9); auto-falls back to INT8
-- Optional project-level and per-scene LoRA
-- FLUX.1-dev is gated (requires `HUGGINGFACE_TOKEN`); FLUX.1-schnell is open
+**Engines (selectable via `ImageModel` enum):**
+
+| Engine | Model ID | Steps | Notes |
+|--------|----------|-------|-------|
+| FLUX.1-dev | `black-forest-labs/FLUX.1-dev` | 28 | Gated, requires `HUGGINGFACE_TOKEN` |
+| FLUX.1-schnell | `black-forest-labs/FLUX.1-schnell` | 4 | Gated, fast |
+| Z-Image | `Tongyi-MAI/Z-Image` | 28 | Ungated, Qwen3-4B text encoder |
+| Z-Image-Turbo | `Tongyi-MAI/Z-Image-Turbo` | 8 | Ungated, fast, 12.5 GB peak VRAM |
+
+**FluxEngine:** VRAM-tiered (4 tiers from bf16 to quantized sequential offload). FP8 on Ada/Hopper/Blackwell. Optional LoRA.
+
+**ZImageEngine:** Uses `ZImagePipeline` (not `FluxPipeline` — different text encoder architecture). CPU offload on primary GPU.
+
+**GPU test results (2026-02-28):** Z-Image-Turbo generates 768×512 images in ~11s (second image, cached) at 12.5 GB peak VRAM on RTX 5090. FLUX-schnell generates same resolution in ~17s with bf16 CPU offload.
 
 ---
 
 ### Stage 3 — Video Generation
-**Status: Complete — GPU tested**
+**Status: Complete — GPU tested (two engines)**
 
-**All inference stubs have been replaced.** The pipeline is no longer blocked on `wan.modules` from bytedance-research/HuMo. A self-contained PyTorch implementation was written without that dependency.
+Two selectable video backends, configured per-project or per-scene via `VideoEngineType`:
 
-**GPU test results (2026-02-27):** FAST preset (LoRA + 384p + 6 steps + UniPC) generates a 3.72s clip in ~52s on RTX 5090. Output shows recognizable content with spatial/temporal coherence. 10 inference bugs were found and fixed during bring-up (see `humo_debugging.md` in project memory).
+#### HunyuanVideo-Avatar (primary engine)
+**Status: GPU tested, excellent quality**
+
+Tencent's audio-driven video generation model. Full-body animation with lip sync from a single reference image + audio.
+
+**GPU test results (2026-02-28):**
+- 320p @ 10 steps: ~5 min, 16.6 GB peak VRAM — excellent denoising, lip sync, audio fidelity
+- 704p @ 30 steps: ~6 hours, 31.9 GB peak VRAM — production quality
+- Runs in separate subprocess/venv to avoid dependency conflicts
+- Block-level CPU offloading required for ≤32GB VRAM (BF16 checkpoint, not FP8)
+- Fixed clip length: 129 frames @ 25fps = 5.16s (scenes >5.16s auto-split into sub-clips)
+
+| File | Purpose |
+|------|---------|
+| `video/hunyuan_avatar_engine.py` | Engine class — subprocess wrapper, scene splitting |
+| `scripts/hva_wrapper.py` | Bridge script running in HVA venv |
+
+**Key learnings from bring-up:**
+- FP8 breaks `apply_group_offloading` (lambda-patched forward methods interfere with hooks) → use BF16
+- At 704p, activations alone consume ~30GB regardless of model weight format
+- Text encoders (LLaVA-LLaMA-3-8B + CLIP-L) must be offloaded to CPU before diffusion loop
+- `fp8_optimization.py` had an expensive `.sum()` check on every forward pass → patched out
+
+#### HuMo (back burner)
+**Status: GPU tested, noisy output — deprioritized**
+
+**All inference stubs have been replaced.** A self-contained PyTorch implementation was written without the `wan.modules` dependency.
+
+**GPU test results (2026-02-27):** FAST preset (LoRA + 384p + 6 steps + UniPC) generates a 3.72s clip in ~52s on RTX 5090. Output shows recognizable content with spatial/temporal coherence but noisy. 10 inference bugs were found and fixed during bring-up (see `humo_debugging.md` in project memory). 3 remaining bugs identified but not yet fixed.
 
 #### New files (added Feb 2026)
 
@@ -147,7 +189,11 @@ DiT weights require `HUGGINGFACE_TOKEN`. Shared weights (T5, VAE, Whisper) are o
 
 #### Scene splitting
 
-HuMo hard limit: 97 frames @ 25 fps = 3.88 s. `generate_scene()` automatically splits longer scenes into sub-clips with pre-sliced audio. Sub-clip continuity (`HumoConfig.sub_clip_continuity=True`): last frame of sub-clip N becomes reference image for sub-clip N+1.
+Both engines auto-split long scenes into sub-clips:
+- **HuMo:** 97 frames @ 25fps = 3.88s max
+- **HVA:** 129 frames @ 25fps = 5.16s max (configurable via `sample_n_frames`)
+
+`generate_scene()` on each engine automatically splits longer scenes with pre-sliced audio. Sub-clip continuity: last frame of sub-clip N becomes reference image for sub-clip N+1.
 
 #### GPU test history
 
@@ -235,7 +281,7 @@ musicvision serve <dir> [--port 8000]
 musicvision info <dir>
 musicvision detect-hardware              # GPU info + recommended HuMo tier
 musicvision download-weights --tier fp8_scaled
-musicvision generate-video --project <dir> [--tier gguf_q4] [--block-swap 20] [--scene-ids ...]
+musicvision generate-video --project <dir> [--engine hunyuan_avatar|humo] [--tier gguf_q4] [--block-swap 20] [--scene-ids ...]
 ```
 
 ---
@@ -249,7 +295,9 @@ Everything flows through Pydantic v2 models. No raw dict manipulation.
 name, created
 song: SongInfo (audio_file, bpm, duration, keyscale, AceStep metadata)
 style_sheet: StyleSheet (visual_style, color_palette, characters[], props[], settings[])
+video_engine: VideoEngineType ("humo" | "hunyuan_avatar") — project default
 humo: HumoConfig (tier, resolution, scale_a, scale_t, denoising_steps, block_swap_count, sub_clip_continuity)
+hunyuan_avatar: HunyuanAvatarConfig (hva_repo_dir, hva_venv_python, checkpoint, image_size, infer_steps, ...)
 image_gen: ImageGenConfig (model, quant, steps, guidance_scale, lora_path)
 vocal_separation: VocalSeparationConfig (method, demucs_model, roformer_model)
 ```
@@ -261,7 +309,8 @@ scenes[]:
   lyrics, audio_segment, audio_segment_vocal
   image_prompt, image_prompt_user_override, reference_image, image_status
   video_prompt, video_prompt_user_override, video_clip, video_status
-  sub_clips[] (for scenes > 3.88 s)
+  video_engine: VideoEngineType | null  — per-scene override (null → project default)
+  sub_clips[] (for scenes > max engine duration)
   characters[], props[], settings[]
   notes
 ```
@@ -271,22 +320,24 @@ scenes[]:
 ## Tests
 
 ```bash
-# CPU unit tests (no GPU needed):
+# CPU unit tests (no GPU needed) — 123 tests:
 uv run pytest tests/ -v
-python scripts/test_humo_inference.py   # 11/11 passing
 
-# GPU integration test (run on workstation):
-python scripts/test_gpu_pipeline.py --audio song.wav --image ref.png --tier fp8_scaled --steps 30
+# GPU integration tests (run on workstation):
+python scripts/test_image_gen.py           # FLUX + Z-Image (2 images each)
+python scripts/test_gpu_pipeline.py --fast # HuMo video generation
 ```
 
 | File | What it covers | GPU? |
 |------|---------------|------|
 | `tests/test_core.py` (26 tests) | Models, HumoTier, FluxConfig, ProjectService, timecode | No |
 | `tests/test_intake.py` | Rule-based segmentation, lyrics parsing | No |
-| `tests/test_image_engine.py` | Config compat, engine interface, LoRA loading | No (mocked) |
+| `tests/test_image_engine.py` (31 tests) | Config compat, engine interface, LoRA loading, Z-Image | No (mocked) |
 | `tests/test_video_engine.py` | Constants, config, device map, block swap | No (mocked) |
-| `scripts/test_humo_inference.py` (11 tests) | WanModel forward, RoPE, AudioProjModel, FlowMatchScheduler, pre/post_blocks identity | No (CPU) |
-| `scripts/test_gpu_pipeline.py` | Single clip, generate_scene() sub-splits, assemble_rough_cut() | **Yes** |
+| `tests/test_hunyuan_avatar_engine.py` | HVA config, factory dispatch, engine lifecycle, scene splitting | No (mocked) |
+| `scripts/test_image_gen.py` | Z-Image-Turbo + FLUX-schnell GPU generation (2 images each) | **Yes** |
+| `scripts/test_humo_inference.py` (11 tests) | WanModel forward, RoPE, AudioProjModel, FlowMatchScheduler | No (CPU) |
+| `scripts/test_gpu_pipeline.py` | HuMo single clip, generate_scene() sub-splits, assemble_rough_cut() | **Yes** |
 
 ---
 
@@ -325,7 +376,7 @@ musicvision serve ./my-video
 | Variable | Required For | Notes |
 |----------|-------------|-------|
 | `ANTHROPIC_API_KEY` | LLM prompts | Not required — interactive/auto-template fallback available |
-| `HUGGINGFACE_TOKEN` | HuMo DiT weights, FLUX.1-dev | Not required for shared weights (T5/VAE/Whisper auto-download open) |
+| `HUGGINGFACE_TOKEN` | HuMo DiT weights, FLUX models | Not required for Z-Image (ungated) or shared weights (T5/VAE/Whisper auto-download open) |
 | `LLM_BACKEND` | Backend selection | Default: `anthropic` |
 | `OPENAI_BASE_URL` | Local vLLM | Required if `LLM_BACKEND=openai` |
 | `OPENAI_MODEL` | Local vLLM | Required if `LLM_BACKEND=openai` |
@@ -362,11 +413,18 @@ musicvision serve ./my-video
 
 See also **Critical Design Decisions** above for the most important architectural constraints.
 
-### HuMo as the video model
-HuMo (ByteDance, Apache 2.0) is the only openly-available model that takes reference image + audio as simultaneous conditioning inputs — essential for music videos (visual consistency + A/V sync). TIA mode: Text + Image + Audio → Video.
+### Dual video engine architecture
+Two engines are integrated:
+- **HunyuanVideo-Avatar** (Tencent) — audio-driven full-body animation with lip sync. Runs in separate venv via subprocess. Primary engine for music video production.
+- **HuMo** (ByteDance) — reference image + audio conditioning (TIA mode). Self-contained PyTorch implementation. Currently noisy output; on back burner.
 
-### Two-GPU split
+Per-scene engine selection: `Scene.video_engine` overrides the project default (`ProjectConfig.video_engine`). Pipeline groups scenes by engine for efficient load/unload.
+
+### Two-GPU split (HuMo)
 GPU0 (RTX 5090 32 GB) handles the DiT compute. GPU1 (RTX 4080 16 GB) handles T5, VAE, Whisper — all fit simultaneously in 16 GB. Block swap allows the 17B DiT to run in less VRAM by sequentially swapping transformer blocks between CPU and GPU.
+
+### Single-GPU with offloading (HVA)
+HunyuanVideo-Avatar uses block-level CPU offloading on the RTX 5090. At 704p, activations consume ~30 GB, so the transformer blocks swap CPU↔GPU one at a time. BF16 checkpoint required (FP8 breaks offloading hooks). Text encoders (LLaVA-LLaMA-3-8B + CLIP-L) offloaded to CPU after text encoding completes.
 
 ### Vocal separation
 The vocal stem is used **only for Whisper transcription** (cleaner input = better timestamps). HuMo receives the **full mix** from `segments/` — not the isolated stem. HuMo was trained on mixed audio; isolated vocals degrade A/V sync.

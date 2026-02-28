@@ -17,8 +17,9 @@ MusicVision uses a two-layer test strategy: fast unit tests that run anywhere, a
 |------|--------|
 | `test_core.py` | Project config, scene models, style sheet serialization, project service lifecycle |
 | `test_intake.py` | Segmentation logic, timestamp parsing, AceStep metadata integration |
-| `test_image_engine.py` | FLUX engine config, prompt generator construction, batch prompt parsing |
+| `test_image_engine.py` | FLUX + Z-Image engine config, factory dispatch, prompt generator, batch prompt parsing |
 | `test_video_engine.py` | HuMo engine config, video prompt construction, sub-clip splitting logic |
+| `test_hunyuan_avatar_engine.py` | HVA config, VideoEngineType enum, factory dispatch, engine lifecycle, scene splitting |
 
 ---
 
@@ -33,7 +34,8 @@ MusicVision uses a two-layer test strategy: fast unit tests that run anywhere, a
 
 | Script | What it tests | Requirements |
 |--------|--------------|--------------|
-| `test_gpu_pipeline.py` | Full 4-phase GPU integration test (model loading, single clip, sub-clip splitting, assembly) | GPU + model weights. See `MUSICVISION_GPU_TEST.md` for detailed instructions. |
+| `test_image_gen.py` | Z-Image-Turbo + FLUX-schnell GPU image generation (2 images each, man + woman) | GPU + `HUGGINGFACE_TOKEN` for FLUX |
+| `test_gpu_pipeline.py` | Full 4-phase HuMo GPU integration test (model loading, single clip, sub-clip splitting, assembly) | GPU + HuMo weights. See `MUSICVISION_GPU_TEST.md`. |
 | `test_humo_inference.py` | Isolated HuMo checkpoint loading and inference smoke test | GPU + HuMo weights |
 | `test_vllm_prompts.py` | All three LLM prompt paths (segmentation, image prompts, video prompts, batch consistency) against a running vLLM server | vLLM server running on LAN with Qwen2.5-32B-AWQ |
 | `dump_keys.py` | Utility to dump checkpoint `state_dict` keys for debugging weight loading issues | Model weights on disk |
@@ -42,7 +44,8 @@ MusicVision uses a two-layer test strategy: fast unit tests that run anywhere, a
 
 ## Recommended Test Workflow
 
-1. **After code changes:** `python -m pytest tests/ -v --tb=short` (should take <10 seconds)
+1. **After code changes:** `python -m pytest tests/ -v --tb=short` (123 tests, <10 seconds)
 2. **After LLM prompt changes:** run pytest, then `python scripts/test_vllm_prompts.py`
-3. **After GPU/model/driver changes:** `python scripts/test_gpu_pipeline.py`
-4. **Before any major milestone:** run all of the above
+3. **After image engine changes:** `python scripts/test_image_gen.py`
+4. **After HuMo/video changes:** `python scripts/test_gpu_pipeline.py`
+5. **Before any major milestone:** run all of the above
