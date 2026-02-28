@@ -373,10 +373,17 @@ async def generate_images(req: GenerateRequest):
 
 @app.post("/api/pipeline/generate-videos")
 async def generate_videos(req: GenerateRequest):
-    """Stage 3: Generate video clips for specified scenes (or all)."""
+    """Stage 3: Generate video clips for specified scenes (or all).
+
+    Scenes are grouped by their ``video_engine`` field (falling back to the
+    project default).  Each engine group is processed sequentially so only one
+    engine holds GPU memory at a time.
+    """
+    from collections import defaultdict
+
+    from musicvision.models import SubClip, VideoEngineType
     from musicvision.video import create_video_engine
     from musicvision.video.prompt_generator import generate_video_prompt
-    from musicvision.utils.gpu import detect_devices
 
     proj = get_project()
 
@@ -415,55 +422,68 @@ async def generate_videos(req: GenerateRequest):
     if not audio_path.exists():
         raise HTTPException(status_code=404, detail=f"Audio file not found: {audio_path}")
 
-    # Create engine and generate
-    device_map = detect_devices()
-    engine = create_video_engine(proj.config.humo, device_map)
-    engine.load()
+    # Group scenes by engine type
+    engine_groups: dict[VideoEngineType, list] = defaultdict(list)
+    for scene in sorted(scenes, key=lambda s: s.order):
+        etype = scene.video_engine or proj.config.video_engine
+        engine_groups[etype].append(scene)
 
     generated: list[str] = []
     failed: list[dict] = []
 
-    try:
-        for scene in sorted(scenes, key=lambda s: s.order):
-            try:
-                ref_image = proj.resolve_path(scene.reference_image)
-                segment = proj.resolve_path(scene.audio_segment) if scene.audio_segment else audio_path
+    for engine_type, group_scenes in engine_groups.items():
+        # Create engine for this group
+        if engine_type == VideoEngineType.HUNYUAN_AVATAR:
+            engine = create_video_engine(proj.config.hunyuan_avatar, engine_type=engine_type)
+            max_dur = proj.config.hunyuan_avatar.max_duration
+        else:
+            from musicvision.utils.gpu import detect_devices
+            device_map = detect_devices()
+            engine = create_video_engine(proj.config.humo, device_map=device_map, engine_type=engine_type)
+            from musicvision.video.humo_engine import MAX_DURATION
+            max_dur = MAX_DURATION
 
-                results = engine.generate_scene(
-                    text_prompt=scene.effective_video_prompt,
-                    reference_image=ref_image,
-                    audio_segment=segment,
-                    output_dir=proj.paths.clips_dir,
-                    scene_id=scene.id,
-                    duration=scene.duration,
-                )
+        engine.load()
 
-                if scene.needs_sub_clips and len(results) > 1:
-                    # Update sub-clip entries
-                    scene.sub_clips = []
-                    from musicvision.video.humo_engine import MAX_DURATION, _sub_clip_suffixes
-                    suffixes = _sub_clip_suffixes(len(results))
-                    for j, (r, suffix) in enumerate(zip(results, suffixes)):
-                        from musicvision.models import SubClip
-                        sub_start = scene.time_start + j * MAX_DURATION
-                        sub_end = min(scene.time_start + (j + 1) * MAX_DURATION, scene.time_end)
-                        scene.sub_clips.append(SubClip(
-                            id=f"{scene.id}_{suffix}",
-                            time_start=sub_start,
-                            time_end=sub_end,
-                            video_prompt=scene.effective_video_prompt,
-                            video_clip=str(r.video_path.relative_to(proj.paths.root)),
-                        ))
-                else:
-                    scene.video_clip = f"clips/{scene.id}.mp4"
+        try:
+            for scene in group_scenes:
+                try:
+                    ref_image = proj.resolve_path(scene.reference_image)
+                    segment = proj.resolve_path(scene.audio_segment) if scene.audio_segment else audio_path
 
-                generated.append(scene.id)
+                    results = engine.generate_scene(
+                        text_prompt=scene.effective_video_prompt,
+                        reference_image=ref_image,
+                        audio_segment=segment,
+                        output_dir=proj.paths.clips_dir,
+                        scene_id=scene.id,
+                        duration=scene.duration,
+                    )
 
-            except Exception as exc:
-                log.error("Video generation failed for %s: %s", scene.id, exc)
-                failed.append({"scene_id": scene.id, "error": str(exc)})
-    finally:
-        engine.unload()
+                    if len(results) > 1:
+                        scene.sub_clips = []
+                        from musicvision.video.humo_engine import _sub_clip_suffixes
+                        suffixes = _sub_clip_suffixes(len(results))
+                        for j, (r, suffix) in enumerate(zip(results, suffixes)):
+                            sub_start = scene.time_start + j * max_dur
+                            sub_end = min(scene.time_start + (j + 1) * max_dur, scene.time_end)
+                            scene.sub_clips.append(SubClip(
+                                id=f"{scene.id}_{suffix}",
+                                time_start=sub_start,
+                                time_end=sub_end,
+                                video_prompt=scene.effective_video_prompt,
+                                video_clip=str(r.video_path.relative_to(proj.paths.root)),
+                            ))
+                    else:
+                        scene.video_clip = f"clips/{scene.id}.mp4"
+
+                    generated.append(scene.id)
+
+                except Exception as exc:
+                    log.error("Video generation failed for %s: %s", scene.id, exc)
+                    failed.append({"scene_id": scene.id, "error": str(exc)})
+        finally:
+            engine.unload()
 
     proj.save_scenes()
 

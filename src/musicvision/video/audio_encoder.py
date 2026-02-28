@@ -128,9 +128,11 @@ class HumoAudioEncoder:
 
         if include_ref_frame:
             # Reference frame is at the LAST temporal position (matching image cond).
-            # Append one window for the reference frame after all latent windows.
-            ref_window = windows[:, :1]   # [1, 1, 8, 5, 1280]
-            windows    = _concat_tensors(windows, ref_window, dim=1)
+            # Original HuMo uses ALL-ZEROS audio for the reference frame slot
+            # (zero_audio_pad), NOT a duplicate of the first window.
+            import torch
+            ref_zeros = torch.zeros_like(windows[:, :1])  # [1, 1, 8, 5, 1280]
+            windows = _concat_tensors(windows, ref_zeros, dim=1)
             # → [1, num_latent_frames + 1, 8, 5, 1280]
 
         log.debug(
@@ -323,48 +325,59 @@ class HumoAudioEncoder:
         """
         Extract a fixed-size temporal window of audio features per latent frame.
 
-        The video VAE has a temporal stride of 4, so latent frame i corresponds
-        to video frame i * 4.  We extract a window of self.window_size
-        consecutive feature frames centred on that position.
+        Matches the original HuMo ``get_audio_emb_window`` exactly:
 
-        Edge behaviour: replicate (clamp) the boundary frames rather than
-        zero-pad, so that the model always receives meaningful audio context.
+        - **Window 0** (first latent frame): 3 explicit zero frames prepended,
+          then 5 features gathered from indices [-2..+2] with zero-pad for
+          out-of-bounds.  Total = 8 frames.
+        - **Window i > 0**: 8 features gathered from indices
+          ``[1 + 4*(i-1) - audio_shift .. 1 + 4*i + audio_shift]``
+          (audio_shift = 2), with zero-pad for out-of-bounds.
+        - Out-of-bounds indices produce zero vectors (NOT clamped/replicated).
 
         Args:
             bands:             [1, video_frames, 5, 1280]
             num_latent_frames: Number of output windows to produce.
 
         Returns:
-            [1, num_latent_frames, window_size, 5, 1280]
+            [1, num_latent_frames, 8, 5, 1280]
         """
         import torch
 
         B, video_frames, num_bands, dim = bands.shape
-        ws = self.window_size
-        half = ws // 2
+        audio_shift = 2
+        frame0_idx = 0  # always 0 in our pipeline (no offset)
 
-        # Latent-to-video frame stride (matches VAE temporal compression ×4)
-        latent_stride = 4
+        zero_embed = torch.zeros(B, 1, num_bands, dim, dtype=bands.dtype, device=bands.device)
+        zero_3 = torch.zeros(B, 3, num_bands, dim, dtype=bands.dtype, device=bands.device)
+
+        def _gather(start: int, end: int) -> "torch.Tensor":
+            """Gather features for indices [start..end), zero-pad OOB."""
+            frames = []
+            for i in range(start, end):
+                if 0 <= i < video_frames:
+                    frames.append(bands[:, i:i+1])  # [B, 1, 5, 1280]
+                else:
+                    frames.append(zero_embed)
+            return torch.cat(frames, dim=1)  # [B, end-start, 5, 1280]
 
         windows = []
-        for lat_idx in range(num_latent_frames):
-            centre = lat_idx * latent_stride
-
-            # Frame indices for this window (before boundary clamping)
-            frame_indices = [
-                max(0, min(video_frames - 1, centre - half + w))
-                for w in range(ws)
-            ]
-
-            # Gather frames: each [1, 5, 1280]
-            window_frames = torch.stack(
-                [bands[:, fi] for fi in frame_indices], dim=1
-            )
-            # window_frames: [1, ws, 5, 1280]
-            windows.append(window_frames)
+        for lt_i in range(num_latent_frames):
+            if lt_i == 0:
+                # First window: asymmetric — 3 zeros + 5 gathered features
+                st = frame0_idx + lt_i - 2   # -2
+                ed = frame0_idx + lt_i + 3   # +3
+                wind_feat = _gather(st, ed)  # [B, 5, 5, 1280]
+                wind_feat = torch.cat([zero_3, wind_feat], dim=1)  # [B, 8, 5, 1280]
+            else:
+                # Later windows: symmetric around shifted centre
+                st = frame0_idx + 1 + 4 * (lt_i - 1) - audio_shift
+                ed = frame0_idx + 1 + 4 * lt_i + audio_shift
+                wind_feat = _gather(st, ed)  # [B, 8, 5, 1280]
+            windows.append(wind_feat)
 
         result = torch.stack(windows, dim=1)
-        # result: [1, num_latent_frames, ws, 5, 1280]
+        # result: [1, num_latent_frames, 8, 5, 1280]
         return result
 
 

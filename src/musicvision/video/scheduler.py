@@ -37,7 +37,11 @@ noise contribution is imperceptible.
 
 from __future__ import annotations
 
+import logging
+
 import torch
+
+log = logging.getLogger(__name__)
 
 
 class FlowMatchScheduler:
@@ -179,6 +183,107 @@ class FlowMatchScheduler:
             f"num_steps={self.num_inference_steps}, "
             f"shift={self.shift:.2f}, "
             f"terminal_sigma={self.terminal_sigma:.6f}, "
+            f"sigma_range=[{self.sigmas[0].item():.4f}, {self.sigmas[-1].item():.6f}]"
+            f")"
+        )
+
+
+class FlowMatchUniPCScheduler:
+    """
+    UniPC (Unified Predictor-Corrector) scheduler for Flow Matching models.
+
+    Wraps ``diffusers.UniPCMultistepScheduler`` with ``prediction_type="flow_prediction"``
+    to provide higher-order ODE solving (order 2-3) that converges much better than
+    Euler at low step counts.
+
+    The interface mirrors FlowMatchScheduler so the denoising loop in HumoEngine
+    can use either scheduler interchangeably:
+      - ``sigmas``    — raw [0,1] values for CFG threshold decisions
+      - ``timesteps`` — model-ready values (sigma * 1000)
+      - ``step()``    — advance latent by one denoising step
+      - ``num_steps`` — number of denoising steps
+
+    Usage
+    -----
+    ::
+
+        scheduler = FlowMatchUniPCScheduler(num_inference_steps=6, shift=8.0)
+        z = torch.randn_like(latent)
+
+        for step_idx in range(scheduler.num_steps):
+            t = scheduler.timesteps[step_idx]           # already ×1000
+            sigma = scheduler.sigmas[step_idx]           # raw [0,1]
+            v_pred = model(z, t)
+            z = scheduler.step(v_pred, t, z)
+
+        clean_latent = z
+    """
+
+    def __init__(
+        self,
+        num_inference_steps: int = 50,
+        shift: float = 8.0,
+        solver_order: int = 2,
+    ) -> None:
+        from diffusers import UniPCMultistepScheduler
+
+        self.num_inference_steps = num_inference_steps
+        self.shift = shift
+        self.solver_order = solver_order
+
+        self._inner = UniPCMultistepScheduler(
+            prediction_type="flow_prediction",
+            use_flow_sigmas=True,
+            flow_shift=shift,
+        )
+        self._inner.set_timesteps(num_inference_steps)
+
+        # Expose sigmas (N+1, raw [0,1]) and timesteps (N, ×1000) on CPU.
+        # diffusers stores sigmas as [N+1] and timesteps as [N].
+        self.sigmas: torch.Tensor = self._inner.sigmas.cpu().float()
+        self.timesteps: torch.Tensor = self._inner.timesteps.cpu().long()
+
+        log.debug(
+            "UniPC scheduler: %d steps, shift=%.1f, order=%d, "
+            "sigma_range=[%.4f, %.4f], timestep_range=[%d, %d]",
+            num_inference_steps, shift, solver_order,
+            self.sigmas[0].item(), self.sigmas[-1].item(),
+            self.timesteps[0].item(), self.timesteps[-1].item(),
+        )
+
+    def step(
+        self,
+        v_pred: torch.Tensor,
+        timestep: torch.Tensor | int,
+        z_t: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        UniPC predictor-corrector step.
+
+        Args:
+            v_pred:   [B, C, F, H, W]  velocity prediction from DiT.
+            timestep: scalar timestep (from self.timesteps, already ×1000).
+            z_t:      [B, C, F, H, W]  current noisy latent.
+
+        Returns:
+            [B, C, F, H, W]  updated latent.
+        """
+        if isinstance(timestep, torch.Tensor):
+            timestep = timestep.item()
+        result = self._inner.step(v_pred, int(timestep), z_t, return_dict=False)
+        return result[0]
+
+    @property
+    def num_steps(self) -> int:
+        """Number of denoising steps."""
+        return self.num_inference_steps
+
+    def __repr__(self) -> str:
+        return (
+            f"FlowMatchUniPCScheduler("
+            f"num_steps={self.num_inference_steps}, "
+            f"shift={self.shift:.2f}, "
+            f"order={self.solver_order}, "
             f"sigma_range=[{self.sigmas[0].item():.4f}, {self.sigmas[-1].item():.6f}]"
             f")"
         )

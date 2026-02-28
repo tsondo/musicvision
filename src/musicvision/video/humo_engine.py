@@ -444,8 +444,12 @@ class HumoEngine:
         Returns (image_cond_pos, image_cond_neg) both [1, 20, total_lat_f, lat_h, lat_w].
         The 20 channels = 4 mask + 16 latent.
 
-        Positive: ref image latent at position 0, zeros for noise frames.
-        Negative: all zeros (uncond).
+        Positive: zero_vae for noise frames, ref image latent at last position.
+        Negative: zero_vae for ALL frames (including ref position).
+
+        zero_vae is the VAE encoding of a black frame — NOT torch.zeros().
+        The model was trained with these non-zero baseline values; using literal
+        zeros shifts conditioning and causes noise artifacts.
         """
         if self._bundle is None or self._bundle.vae is None:
             raise RuntimeError("VAE not loaded — call load() first")
@@ -475,6 +479,12 @@ class HumoEngine:
         with torch.no_grad():
             img_latent = vae.encode_image(img_t)  # [1, 16, 1, lat_h, lat_w]
 
+        # TODO: Bug 12 — Original HuMo uses pre-computed zero_vae_129frame.pt
+        # (VAE-encoded black frames) instead of torch.zeros for non-ref latent
+        # positions. Computing on-the-fly OOMs on the 4080 with Whisper loaded.
+        # For now, use torch.zeros which gives "recognizable but noisy" output.
+        # Fix: either pre-compute zero_vae once, or offload Whisper first.
+
         # Build positive image condition: [1, 20, total_lat_f, lat_h, lat_w]
         # Channel layout: [4 mask | 16 latent]
         # Mask: 1 at the LAST temporal position (reference frame), 0 elsewhere.
@@ -489,7 +499,6 @@ class HumoEngine:
         image_cond_pos = torch.cat([mask_pos, latent_frames], dim=1)  # [1, 20, total_lat_f, lat_h, lat_w]
 
         # Negative: same mask structure (slot exists) but zero latent content.
-        # This tells the model "conditioning slot is here but empty" vs "no slot at all".
         mask_neg = torch.zeros(1, 4, total_lat_f, lat_h, lat_w, device=enc_device)
         mask_neg[:, :, -1, :, :] = 1.0  # same mask position as positive
         latent_neg = torch.zeros(1, 16, total_lat_f, lat_h, lat_w, device=enc_device)
@@ -547,7 +556,7 @@ class HumoEngine:
             v_text_neg  = dit(z + img_neg, t, neg_text, audio)
         """
         import torch
-        from musicvision.video.scheduler import FlowMatchScheduler
+        from musicvision.video.scheduler import FlowMatchScheduler, FlowMatchUniPCScheduler
 
         if self._bundle is None or self._bundle.dit is None:
             raise RuntimeError("DiT not loaded — call load() first")
@@ -590,17 +599,26 @@ class HumoEngine:
                 torch.cuda.manual_seed(seed)
             elif dit_device.type == "mps":
                 torch.mps.manual_seed(seed)
+        # Original HuMo generates noise in float32 and relies on amp.autocast
+        # for bfloat16 conversion.  bfloat16 noise has only 7 mantissa bits,
+        # producing a coarser initial distribution that can accumulate errors.
         noise = torch.randn(
             1, 16, total_lat_f, lat_h, lat_w,
-            device=dit_device, dtype=torch.bfloat16,
+            device=dit_device, dtype=torch.float32,
         )
-        z = noise.clone()
+        z = noise.to(dtype=_bf16)  # convert to working precision for denoising
 
         # Create scheduler (shift from config, default 8.0 matches ComfyUI workflow)
-        scheduler = FlowMatchScheduler(
-            num_inference_steps=self.config.denoising_steps,
-            shift=self.config.shift,
-        )
+        if self.config.sampler == "uni_pc":
+            scheduler = FlowMatchUniPCScheduler(
+                num_inference_steps=self.config.denoising_steps,
+                shift=self.config.shift,
+            )
+        else:
+            scheduler = FlowMatchScheduler(
+                num_inference_steps=self.config.denoising_steps,
+                shift=self.config.shift,
+            )
 
         # Use bfloat16 tensors for CFG scales to avoid promoting v_pred to float32
         # (Python float * bfloat16 tensor → float32 promotion)
@@ -608,9 +626,11 @@ class HumoEngine:
         scale_t = torch.tensor(self.config.scale_t, dtype=_bf16, device=dit_device)
         _two = torch.tensor(2.0, dtype=_bf16, device=dit_device)
 
+        use_unipc = isinstance(scheduler, FlowMatchUniPCScheduler)
         log.info(
-            "Denoising: %d steps, lat shape [1,16,%d,%d,%d], scale_a=%.1f, scale_t=%.1f",
-            self.config.denoising_steps, total_lat_f, lat_h, lat_w,
+            "Denoising: %d steps (%s), lat shape [1,16,%d,%d,%d], scale_a=%.1f, scale_t=%.1f",
+            self.config.denoising_steps, "UniPC" if use_unipc else "Euler",
+            total_lat_f, lat_h, lat_w,
             scale_a.item(), scale_t.item(),
         )
 
@@ -626,7 +646,12 @@ class HumoEngine:
         with torch.no_grad():
             for step_idx in range(total_steps):
                 step_t0 = time.monotonic()
-                t = scheduler.sigmas[step_idx].to(device=dit_device, dtype=torch.bfloat16)
+                # Timestep for the model: UniPC provides pre-computed timesteps
+                # (already ×1000); Euler computes from sigmas.
+                if use_unipc:
+                    t = scheduler.timesteps[step_idx].to(device=dit_device, dtype=torch.bfloat16)
+                else:
+                    t = (scheduler.sigmas[step_idx] * 1000).to(device=dit_device, dtype=torch.bfloat16)
                 timestep = t.expand(1)
 
                 # Build DiT inputs: cat noise latent + image conditioning
@@ -678,21 +703,37 @@ class HumoEngine:
                             + (scale_t - _two) * (v_audio_neg - v_text_neg)
                         )
 
-                z = scheduler.step(v_pred, z, step_idx)
+                # Diagnostic: check v_pred for NaN/Inf and log magnitude
+                v_abs_mean = v_pred.abs().mean().item()
+                v_has_nan = torch.isnan(v_pred).any().item()
+                v_has_inf = torch.isinf(v_pred).any().item()
+                if v_has_nan or v_has_inf:
+                    log.error(
+                        "Step %d: v_pred has NaN=%s Inf=%s — denoising will fail!",
+                        step_idx, v_has_nan, v_has_inf,
+                    )
+
+                if use_unipc:
+                    z = scheduler.step(v_pred, scheduler.timesteps[step_idx], z)
+                else:
+                    z = scheduler.step(v_pred, z, step_idx)
                 # Guard: ensure z stays bfloat16 (norms and float32 sigma
                 # arithmetic can promote tensors through the CFG/step chain)
                 if z.dtype != _bf16:
                     z = z.to(_bf16)
 
-                # Per-step progress at INFO level
+                # Per-step progress at INFO level with diagnostic info
                 step_dur = time.monotonic() - step_t0
                 elapsed = time.monotonic() - denoise_t0
                 alloc_gb = torch.cuda.memory_allocated(dit_device) / 1024**3
                 total_gb = torch.cuda.get_device_properties(dit_device).total_memory / 1024**3
                 peak_vram = max(peak_vram, alloc_gb)
+                z_abs_mean = z.abs().mean().item()
                 log.info(
-                    "Step %d/%d [%.1fs] (elapsed: %.1fs) GPU%s %.1f/%.1f GB",
-                    step_idx + 1, total_steps, step_dur, elapsed,
+                    "Step %d/%d [%.1fs] sigma=%.4f |v|=%.4f |z|=%.4f (elapsed: %.1fs) GPU%s %.1f/%.1f GB",
+                    step_idx + 1, total_steps, step_dur,
+                    scheduler.sigmas[step_idx].item(),
+                    v_abs_mean, z_abs_mean, elapsed,
                     dit_device.index if dit_device.index is not None else 0,
                     alloc_gb, total_gb,
                 )

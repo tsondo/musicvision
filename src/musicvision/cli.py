@@ -166,25 +166,28 @@ def cmd_download_weights(args: argparse.Namespace) -> None:
 
 def cmd_generate_video(args: argparse.Namespace) -> None:
     """Generate video clips for a project."""
-    from musicvision.models import HumoTier
+    from musicvision.models import HumoTier, VideoEngineType
     from musicvision.project import ProjectService
-    from musicvision.utils.gpu import detect_devices
-    from musicvision.video.humo_engine import HumoEngine, HumoInput
+    from musicvision.video.factory import create_video_engine
     from musicvision.video.prompt_generator import generate_video_prompts_batch
 
     project_dir = Path(args.project).resolve()
     svc = ProjectService.open(project_dir)
 
-    # Override tier/block-swap if specified on command line
-    if args.tier:
-        try:
-            svc.config.humo.tier = HumoTier(args.tier)
-        except ValueError:
-            valid = [t.value for t in HumoTier]
-            print(f"Unknown tier '{args.tier}'. Valid tiers: {', '.join(valid)}")
-            sys.exit(1)
-    if args.block_swap is not None:
-        svc.config.humo.block_swap_count = args.block_swap
+    # Determine engine type
+    engine_type = VideoEngineType(args.engine) if args.engine else svc.config.video_engine
+
+    # Override tier/block-swap if specified on command line (HuMo only)
+    if engine_type == VideoEngineType.HUMO:
+        if args.tier:
+            try:
+                svc.config.humo.tier = HumoTier(args.tier)
+            except ValueError:
+                valid = [t.value for t in HumoTier]
+                print(f"Unknown tier '{args.tier}'. Valid tiers: {', '.join(valid)}")
+                sys.exit(1)
+        if args.block_swap is not None:
+            svc.config.humo.block_swap_count = args.block_swap
 
     scenes = svc.scenes.scenes
     targets = (
@@ -204,14 +207,27 @@ def cmd_generate_video(args: argparse.Namespace) -> None:
         generate_video_prompts_batch(needs_prompts, svc.config.style_sheet, config=svc.config)
         svc.save_scenes()
 
-    device_map = detect_devices()
-    engine = HumoEngine(svc.config.humo, device_map)
+    # Create engine
+    if engine_type == VideoEngineType.HUNYUAN_AVATAR:
+        engine = create_video_engine(svc.config.hunyuan_avatar, engine_type=engine_type)
+        print("Loading HunyuanVideo-Avatar engine…")
+    else:
+        from musicvision.utils.gpu import detect_devices
+        device_map = detect_devices()
+        engine = create_video_engine(svc.config.humo, device_map=device_map, engine_type=engine_type)
+        print(
+            f"Loading HuMo engine (tier={svc.config.humo.tier.value}, "
+            f"block_swap={svc.config.humo.block_swap_count})…"
+        )
 
-    print(
-        f"Loading HuMo engine (tier={svc.config.humo.tier.value}, "
-        f"block_swap={svc.config.humo.block_swap_count})…"
-    )
     engine.load()
+
+    # Determine max_duration for sub-clip time calculations
+    if engine_type == VideoEngineType.HUNYUAN_AVATAR:
+        max_dur = svc.config.hunyuan_avatar.max_duration
+    else:
+        from musicvision.video.humo_engine import MAX_DURATION
+        max_dur = MAX_DURATION
 
     generated = 0
     errors = []
@@ -249,8 +265,8 @@ def cmd_generate_video(args: argparse.Namespace) -> None:
                         for i, out in enumerate(outputs):
                             sc = SubClip(
                                 id=f"{scene.id}_sub_{i:02d}",
-                                time_start=scene.time_start + i * 3.88,
-                                time_end=min(scene.time_start + (i + 1) * 3.88, scene.time_end),
+                                time_start=scene.time_start + i * max_dur,
+                                time_end=min(scene.time_start + (i + 1) * max_dur, scene.time_end),
                                 video_clip=str(out.video_path.relative_to(svc.paths.root)),
                             )
                             scene.sub_clips.append(sc)
@@ -307,6 +323,11 @@ def main() -> None:
     # generate-video
     p_gv = sub.add_parser("generate-video", help="Generate video clips for a project")
     p_gv.add_argument("--project", required=True, help="Project directory path")
+    p_gv.add_argument(
+        "--engine", default=None,
+        choices=["humo", "hunyuan_avatar"],
+        help="Video engine (default: project config)",
+    )
     p_gv.add_argument(
         "--tier", default=None,
         help="Override HuMo tier (fp16/fp8_scaled/gguf_q8/gguf_q6/gguf_q4/preview)",

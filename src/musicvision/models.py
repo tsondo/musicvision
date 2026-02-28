@@ -124,6 +124,12 @@ class FluxQuant(str, Enum):
     INT8 = "int8"   # int8 quantized transformer — needs ≥10 GB, any GPU
 
 
+class VideoEngineType(str, Enum):
+    """Selectable video generation backend."""
+    HUMO            = "humo"
+    HUNYUAN_AVATAR  = "hunyuan_avatar"
+
+
 # ---------------------------------------------------------------------------
 # Style Sheet — persistent visual identity for the project
 # ---------------------------------------------------------------------------
@@ -171,6 +177,7 @@ class HumoConfig(BaseModel):
     shift: float = 8.0                # sigma schedule shift (higher → more high-noise steps)
     block_swap_count: int = 0         # DiT blocks to keep on CPU (0 = all on GPU)
     sub_clip_continuity: bool = True  # pass last frame of sub-clip N as reference for sub-clip N+1
+    sampler: str = "uni_pc"           # "uni_pc" or "euler"
     lora: str | None = None           # LoRA key from weight_registry (e.g. "lightx2v_i2v_480p")
 
     @classmethod
@@ -229,6 +236,29 @@ class ImageGenConfig(BaseModel):
         return 4 if self.model == ImageModel.FLUX_SCHNELL else 28
 
 
+class HunyuanAvatarConfig(BaseModel):
+    """Configuration for HunyuanVideo-Avatar subprocess engine."""
+
+    hva_repo_dir: str = ""              # path to cloned HunyuanVideoAvatar repo
+    hva_venv_python: str = ""           # path to python in HVA venv (e.g. ~/HunyuanVideoAvatar/.venv/bin/python)
+    checkpoint: str = "bf16"            # "bf16" (recommended) or "fp8" — bf16 works with block offloading
+    image_size: int = 704               # width (height auto-calculated for portrait)
+    sample_n_frames: int = 129          # 129 frames @ 25fps ≈ 5.16s (fixed by HVA, cannot be reduced)
+    cfg_scale: float = 7.5
+    infer_steps: int = 30               # 30 good balance; 50 highest quality
+    flow_shift: float = 5.0
+    seed: int | None = None             # None → random
+    use_deepcache: bool = True
+    use_fp8: bool = False               # FP8 breaks block-level offloading; use bf16 instead
+    cpu_offload: bool = True            # Required for ≤32GB VRAM; enables block-level transformer offloading
+    fps: int = 25
+
+    @property
+    def max_duration(self) -> float:
+        """Maximum clip duration in seconds."""
+        return self.sample_n_frames / self.fps
+
+
 # Backward-compat alias
 FluxConfig = ImageGenConfig
 
@@ -275,7 +305,9 @@ class ProjectConfig(BaseModel):
     created: datetime = Field(default_factory=lambda: datetime.now(UTC))
     song: SongInfo = Field(default_factory=SongInfo)
     style_sheet: StyleSheet = Field(default_factory=StyleSheet)
+    video_engine: VideoEngineType = VideoEngineType.HUMO
     humo: HumoConfig = Field(default_factory=HumoConfig)
+    hunyuan_avatar: HunyuanAvatarConfig = Field(default_factory=HunyuanAvatarConfig)
     image_gen: ImageGenConfig = Field(default_factory=ImageGenConfig)
     vocal_separation: VocalSeparationConfig = Field(default_factory=VocalSeparationConfig)
 
@@ -346,6 +378,7 @@ class Scene(BaseModel):
     video_prompt_user_override: Optional[str] = None
     video_clip: Optional[str] = None            # path: clips/scene_001.mp4
     video_status: ApprovalStatus = ApprovalStatus.PENDING
+    video_engine: Optional[VideoEngineType] = None  # None → use project default
 
     # Sub-clips for long scenes
     sub_clips: list[SubClip] = Field(default_factory=list)
@@ -365,6 +398,14 @@ class Scene(BaseModel):
     def needs_sub_clips(self) -> bool:
         """HuMo max is 97 frames @ 25fps ≈ 3.88s."""
         return self.duration > 3.88
+
+    def needs_sub_clips_for_engine(
+        self, engine: VideoEngineType, hva_config: HunyuanAvatarConfig | None = None,
+    ) -> bool:
+        """Check if this scene needs sub-clips for a specific engine."""
+        if engine == VideoEngineType.HUNYUAN_AVATAR and hva_config:
+            return self.duration > hva_config.max_duration
+        return self.duration > 3.88  # HuMo default
 
     @property
     def effective_image_prompt(self) -> Optional[str]:

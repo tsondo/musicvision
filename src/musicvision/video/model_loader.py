@@ -409,7 +409,19 @@ class FP8ScaledLoader(BaseHumoLoader):
         # Load non-FP8 weights (norms, embeddings, etc.) directly onto the model.
         # assign=True replaces meta tensors with the state_dict tensors (already on dit_device).
         non_fp8_state = {k: v for k, v in state.items() if not k.endswith("_scale_weight") and not k.endswith(".scale")}
-        model.load_state_dict(non_fp8_state, strict=False, assign=True)
+        missing, unexpected = model.load_state_dict(non_fp8_state, strict=False, assign=True)
+
+        # Diagnostic: report missing and unexpected keys
+        if missing:
+            # Filter out 'freqs' (recomputed) and FP8 linear bias (often absent)
+            critical_missing = [k for k in missing if k != "freqs"]
+            if critical_missing:
+                log.warning(
+                    "FP8 DiT: %d missing keys (first 10: %s)",
+                    len(critical_missing), critical_missing[:10],
+                )
+        if unexpected:
+            log.info("FP8 DiT: %d unexpected keys in checkpoint (first 5: %s)", len(unexpected), unexpected[:5])
 
         # Patch nn.Linear layers that have FP8 weights in the checkpoint
         _FP8_DTYPES = (torch.float8_e4m3fn, torch.float8_e5m2)
@@ -436,6 +448,21 @@ class FP8ScaledLoader(BaseHumoLoader):
         # Recompute RoPE frequencies — created during __init__ on meta device,
         # not in checkpoint, so must be materialized on the real device.
         model.materialize_freqs(device=dit_device)
+
+        # Post-load health check: detect meta-device or uninitialized parameters
+        meta_params = []
+        for name, param in model.named_parameters():
+            if param.device.type == "meta":
+                meta_params.append(name)
+        for name, buf in model.named_buffers():
+            if buf.device.type == "meta":
+                meta_params.append(f"(buffer) {name}")
+        if meta_params:
+            log.error(
+                "CRITICAL: %d parameters/buffers still on meta device (not loaded from checkpoint). "
+                "First 10: %s",
+                len(meta_params), meta_params[:10],
+            )
 
         model.eval()
         log.info("FP8 WanModel loaded on %s", dit_device)
@@ -480,16 +507,21 @@ class FP8ScaledLinear(__import__("torch").nn.Module):
             out = torch.nn.functional.linear(x.to(torch.bfloat16), w_bf16, self.bias)
             return out
 
-        x_fp8 = x.to(torch.float8_e4m3fn).contiguous()
+        # Dynamic per-tensor input scaling (matching ComfyUI's fp8_optimization.py).
+        # Compute scale_a so that x / scale_a fits in fp8_e4m3fn range [-448, 448].
+        # Without this, values > 448 get clipped, corrupting the computation.
+        fp8_max = torch.finfo(torch.float8_e4m3fn).max  # 448.0
+        x_abs_max = x.abs().amax().clamp(min=1e-12)
+        scale_a = (x_abs_max / fp8_max).to(torch.float32)
+        x_scaled = (x.float() / scale_a).to(torch.float8_e4m3fn).contiguous()
+
         # weight is (out, in) contiguous (row-major).
         # .t() yields (in, out) in column-major — exactly what cuBLASLt needs.
         # Do NOT call .contiguous() on the transpose — that would make it row-major.
         w_t = self.weight.t()
-        # scale_a: per-tensor scale for input; scale_b: per-tensor scale for weight
-        scale_a = torch.ones(1, device=x.device, dtype=torch.float32)
         scale_b = self.scale
         out = torch._scaled_mm(
-            x_fp8.view(-1, x_fp8.shape[-1]).contiguous(),
+            x_scaled.view(-1, x_scaled.shape[-1]).contiguous(),
             w_t,
             scale_a=scale_a,
             scale_b=scale_b,
@@ -533,23 +565,33 @@ class FP8ScaledLinearWithLoRA(FP8ScaledLinear):
 
 
 def apply_lora(model: Any, lora_path: "Path", dit_device: Any, lora_scale: float = 1.0) -> int:
-    """Apply a LoRA safetensors file to a WanModel with FP8ScaledLinear layers.
+    """Apply a Lightx2V distillation LoRA to a WanModel with FP8ScaledLinear layers.
 
-    LoRA key format (from Lightx2V/ComfyUI):
-        ``diffusion_model.blocks.0.self_attn.q.lora_A.weight``
+    Lightx2V LoRA key format (from ComfyUI/Kijai):
+        ``diffusion_model.blocks.0.self_attn.q.lora_down.weight``   (rank matrix A)
+        ``diffusion_model.blocks.0.self_attn.q.lora_up.weight``     (rank matrix B)
+        ``diffusion_model.blocks.0.self_attn.q.diff_b``             (additive bias)
+        ``diffusion_model.blocks.0.self_attn.norm_q.diff``          (additive norm weight)
 
-    The ``diffusion_model.`` prefix is stripped, then the key is split into
-    the module path and lora_A/lora_B component.
+    Also supports older ``lora_A``/``lora_B`` naming convention.
 
-    Returns the number of layers patched.
+    The ``diffusion_model.`` prefix is stripped, then keys are categorized:
+      - lora_down/lora_up → wrap FP8ScaledLinear with LoRA rank matrices
+      - diff_b → add bias correction to linear/norm modules
+      - diff → add weight correction to norm modules
+
+    Returns the number of LoRA rank pairs patched.
     """
     import torch
     from safetensors.torch import load_file
 
     lora_state = load_file(str(lora_path), device=str(dit_device))
 
-    # Group LoRA keys by module path
+    # Classify keys: lora pairs, bias diffs, weight diffs
     lora_pairs: dict[str, dict[str, Any]] = {}
+    bias_diffs: dict[str, Any] = {}
+    weight_diffs: dict[str, Any] = {}
+
     for key, tensor in lora_state.items():
         # Strip common prefixes
         clean = key
@@ -558,43 +600,119 @@ def apply_lora(model: Any, lora_path: "Path", dit_device: Any, lora_scale: float
                 clean = clean[len(prefix):]
                 break
 
-        if ".lora_A." in clean:
+        # LoRA rank matrices (lora_down/lora_up or lora_A/lora_B)
+        if ".lora_down." in clean:
+            module_path = clean.split(".lora_down.")[0]
+            lora_pairs.setdefault(module_path, {})["A"] = tensor
+        elif ".lora_up." in clean:
+            module_path = clean.split(".lora_up.")[0]
+            lora_pairs.setdefault(module_path, {})["B"] = tensor
+        elif ".lora_A." in clean:
             module_path = clean.split(".lora_A.")[0]
             lora_pairs.setdefault(module_path, {})["A"] = tensor
         elif ".lora_B." in clean:
             module_path = clean.split(".lora_B.")[0]
             lora_pairs.setdefault(module_path, {})["B"] = tensor
+        elif clean.endswith(".diff_b"):
+            module_path = clean[:-7]  # strip ".diff_b"
+            bias_diffs[module_path] = tensor
+        elif clean.endswith(".diff"):
+            module_path = clean[:-5]  # strip ".diff"
+            weight_diffs[module_path] = tensor
         else:
-            log.debug("LoRA: skipping non-lora key %s", key)
+            log.debug("LoRA: unrecognized key %s", key)
 
-    patched = 0
+    def _get_module(root, path):
+        parts = path.split(".")
+        m = root
+        for p in parts:
+            m = getattr(m, p)
+        return m, parts
+
+    def _get_parent_and_name(root, path):
+        parts = path.split(".")
+        parent = root
+        for p in parts[:-1]:
+            parent = getattr(parent, p)
+        return parent, parts[-1]
+
+    # 1. Apply LoRA rank matrices to FP8ScaledLinear layers
+    lora_patched = 0
+    lora_skipped = 0
     for module_path, ab in lora_pairs.items():
         if "A" not in ab or "B" not in ab:
             log.warning("LoRA: incomplete pair for %s, skipping", module_path)
             continue
-
-        # Navigate to the module
-        parts = module_path.split(".")
         try:
-            parent = model
-            for p in parts[:-1]:
-                parent = getattr(parent, p)
-            target = getattr(parent, parts[-1])
+            parent, attr_name = _get_parent_and_name(model, module_path)
+            target = getattr(parent, attr_name)
         except AttributeError:
-            log.debug("LoRA: module not found at %s", module_path)
+            lora_skipped += 1
+            log.debug("LoRA rank: module not found at %s", module_path)
             continue
 
         if isinstance(target, FP8ScaledLinear) and not isinstance(target, FP8ScaledLinearWithLoRA):
             wrapped = FP8ScaledLinearWithLoRA(
                 target, ab["A"].to(torch.bfloat16), ab["B"].to(torch.bfloat16), lora_scale,
             )
-            setattr(parent, parts[-1], wrapped)
-            patched += 1
+            setattr(parent, attr_name, wrapped)
+            lora_patched += 1
         else:
-            log.debug("LoRA: %s is %s, not FP8ScaledLinear — skipping", module_path, type(target).__name__)
+            lora_skipped += 1
+            log.debug("LoRA rank: %s is %s, not FP8ScaledLinear", module_path, type(target).__name__)
 
-    log.info("LoRA applied: %d layers patched (scale=%.2f)", patched, lora_scale)
-    return patched
+    # 2. Apply bias diffs (diff_b): additive correction to module bias
+    bias_applied = 0
+    for module_path, diff_b in bias_diffs.items():
+        try:
+            target, _ = _get_module(model, module_path)
+        except AttributeError:
+            log.debug("LoRA diff_b: module not found at %s", module_path)
+            continue
+
+        diff_val = (diff_b * lora_scale).to(torch.bfloat16)
+
+        if isinstance(target, (FP8ScaledLinear, FP8ScaledLinearWithLoRA)):
+            if target.bias is not None:
+                target.bias.data.add_(diff_val)
+            else:
+                target.register_buffer("bias", diff_val)
+            bias_applied += 1
+        elif hasattr(target, "bias") and target.bias is not None:
+            target.bias.data.add_(diff_val.to(target.bias.dtype))
+            bias_applied += 1
+        elif hasattr(target, "weight"):
+            # Conv3d or other modules — try bias
+            if hasattr(target, "bias") and target.bias is None:
+                target.bias = torch.nn.Parameter(diff_val.to(target.weight.dtype))
+            else:
+                target.register_buffer("bias", diff_val)
+            bias_applied += 1
+        else:
+            log.debug("LoRA diff_b: can't apply to %s (%s)", module_path, type(target).__name__)
+
+    # 3. Apply weight diffs (diff): additive correction to norm weights
+    weight_applied = 0
+    for module_path, diff_w in weight_diffs.items():
+        try:
+            target, _ = _get_module(model, module_path)
+        except AttributeError:
+            log.debug("LoRA diff: module not found at %s", module_path)
+            continue
+
+        if hasattr(target, "weight") and target.weight is not None:
+            diff_val = (diff_w * lora_scale).to(target.weight.dtype)
+            target.weight.data.add_(diff_val)
+            weight_applied += 1
+        else:
+            log.debug("LoRA diff: no weight on %s (%s)", module_path, type(target).__name__)
+
+    log.info(
+        "LoRA applied: %d rank pairs patched, %d bias diffs, %d weight diffs "
+        "(skipped %d missing modules, scale=%.2f)",
+        lora_patched, bias_applied, weight_applied, lora_skipped, lora_scale,
+    )
+    return lora_patched
 
 
 def _fp8_supported(device: Any) -> bool:

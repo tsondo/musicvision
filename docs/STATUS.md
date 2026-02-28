@@ -1,7 +1,7 @@
 # MusicVision — Project Status
 
-**Last updated:** 2026-02-25
-**Branch:** `main` — commit `f213ea5`
+**Last updated:** 2026-02-27
+**Branch:** `main`
 
 ---
 
@@ -27,7 +27,7 @@ The pipeline is designed around AI-generated music from **AceStep** (a text-cond
 |----------------|--------|
 | Intake (audio, BPM, Whisper, segmentation) | ✅ Complete |
 | Reference image generation (FLUX) | ✅ Complete |
-| Video generation (HuMo TIA) | ✅ Complete — **pending first GPU test** |
+| Video generation (HuMo TIA) | ✅ Complete — **GPU tested, producing video** |
 | Assembly (rough cut, EDL, FCPXML) | ✅ Complete |
 
 | Infrastructure | Status |
@@ -36,7 +36,7 @@ The pipeline is designed around AI-generated music from **AceStep** (a text-cond
 | Frontend (React or Gradio) | ❌ Not started |
 | Progress/status feedback (SSE/WebSocket) | ❌ Not started |
 
-**All four pipeline stages are code-complete.** The next milestone is a first GPU integration test on the workstation with a real song.
+**All four pipeline stages are code-complete and GPU-tested.** The pipeline produces recognizable video with audio sync. Quality tuning is ongoing (color artifacts, higher step counts).
 
 ---
 
@@ -93,16 +93,18 @@ Each scene gets a FLUX reference still image used as the HuMo visual anchor.
 ---
 
 ### Stage 3 — Video Generation
-**Status: Complete — pending first GPU test**
+**Status: Complete — GPU tested**
 
 **All inference stubs have been replaced.** The pipeline is no longer blocked on `wan.modules` from bytedance-research/HuMo. A self-contained PyTorch implementation was written without that dependency.
+
+**GPU test results (2026-02-27):** FAST preset (LoRA + 384p + 6 steps + UniPC) generates a 3.72s clip in ~52s on RTX 5090. Output shows recognizable content with spatial/temporal coherence. 10 inference bugs were found and fixed during bring-up (see `humo_debugging.md` in project memory).
 
 #### New files (added Feb 2026)
 
 | File | Purpose |
 |------|---------|
 | `video/wan_model.py` | Self-contained WanModel DiT — WanRoPE 3D, AdaLN blocks, AudioProjModel, AudioCrossAttentionWrapper |
-| `video/scheduler.py` | FlowMatchScheduler — Euler steps, shift=5.0 sigma warping |
+| `video/scheduler.py` | FlowMatchScheduler (Euler) + FlowMatchUniPCScheduler (default, higher-order) |
 | `video/wan_t5.py` | WanT5Encoder — wraps HuggingFace T5EncoderModel with Wan-AI .pth key remapping |
 | `video/wan_vae.py` | WanVideoVAE — CausalConv3d encoder/decoder, temporal stride 4, spatial stride 8 |
 | `video/audio_encoder.py` | HumoAudioEncoder — Whisper → 5-band features → sliding windows → [1,F,8,5,1280] |
@@ -147,12 +149,16 @@ DiT weights require `HUGGINGFACE_TOKEN`. Shared weights (T5, VAE, Whisper) are o
 
 HuMo hard limit: 97 frames @ 25 fps = 3.88 s. `generate_scene()` automatically splits longer scenes into sub-clips with pre-sliced audio. Sub-clip continuity (`HumoConfig.sub_clip_continuity=True`): last frame of sub-clip N becomes reference image for sub-clip N+1.
 
-#### Known risk areas for first GPU test
+#### GPU test history
 
-1. **T5 key names** — Wan-AI `.pth` may use different key names than the remap table in `wan_t5._remap_wan_t5_keys()`. Fix: print first 20 checkpoint keys, patch the table. `strict=False` prevents hard failure.
-2. **VAE architecture** — inferred from Wan2.1 conventions; channel counts or layer names may differ. Fix: log missing keys from `load_state_dict(strict=False)`, adjust `_build()`.
-3. **FP8 scale key suffix** — three fallback patterns exist in `_patch_fp8_linears`; a fourth may be needed.
-4. **GGUF key mapping** — `_gguf_name_to_pt_key()` covers common llama.cpp conventions; exporter-specific names may need additional entries.
+All four risk areas from initial bring-up have been resolved. 10 bugs were found and fixed:
+- Bugs 1-3: Reference frame positioning (last temporal position, not first)
+- Bug 4-5: CFG formula corrections (negative conditioning, time-adaptive switching)
+- Bug 6: Sigma shift 5.0 → 8.0 to match ComfyUI workflow
+- Bug 7: FP8 input scaling (dynamic per-tensor, not hardcoded 1.0)
+- Bug 8-9: Diagnostic logging for missing keys and denoising health
+- Bug 10 (root cause of noise): Timestep not scaled ×1000
+- Sampler switch: Euler → UniPC (matches ComfyUI `uni_pc` sampler)
 
 ---
 
@@ -309,7 +315,7 @@ musicvision serve ./my-video
 ```
 
 **Pinned dependency constraints** (from HuMo requirements):
-- `torch==2.5.1` with CUDA 12.4 (`--index-url https://download.pytorch.org/whl/cu124`)
+- `torch==2.10.0` with CUDA 12.8 (upgraded for RTX 5090 sm_120 support)
 - `flash_attn==2.6.3`
 - Python 3.11+
 - See `pyproject.toml` for the full lockfile.
