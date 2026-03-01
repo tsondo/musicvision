@@ -146,6 +146,25 @@ musicvision serve ./my-video
 | `OPENAI_BASE_URL` | Local vLLM | Required if `LLM_BACKEND=openai` |
 | `OPENAI_MODEL` | Local vLLM | Required if `LLM_BACKEND=openai` |
 
+### Model Weight Locations
+
+All weight paths have sensible defaults. Override them to point at a shared network drive so team members don't each download ~100 GB of weights.
+
+| Variable | Default | Controls |
+|----------|---------|----------|
+| `MUSICVISION_WEIGHTS_DIR` | `~/.cache/musicvision/weights` | HuMo DiT, T5, VAE, Whisper, LoRA |
+| `HF_HOME` | `~/.cache/huggingface` | FLUX, Z-Image, transformers models (standard HuggingFace env var) |
+| `HVA_REPO_DIR` | _(must be set)_ | HunyuanVideo-Avatar repo + weights |
+| `HVA_VENV_PYTHON` | `$HVA_REPO_DIR/.venv/bin/python` | HVA venv python (auto-derived if not set) |
+
+Example team setup with a shared NFS mount:
+```bash
+# .env — shared across the team
+MUSICVISION_WEIGHTS_DIR=/mnt/models/musicvision
+HF_HOME=/mnt/models/huggingface
+HVA_REPO_DIR=/mnt/models/HunyuanVideoAvatar
+```
+
 ---
 
 ## Project Directory Structure

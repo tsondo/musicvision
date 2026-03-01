@@ -116,20 +116,38 @@ class ProjectService:
         self.save_config()
 
     def _import_acestep_json(self, json_path: Path) -> None:
-        """Parse AceStep JSON and populate song metadata."""
+        """Parse AceStep JSON and populate song metadata.
+
+        Handles both flat format (old) and nested params/meta format (current):
+          - params: user-specified values (bpm, key, duration, lyrics) — preferred
+          - meta: auto-detected values (bpm can be wrong, e.g. half-time)
+          - top-level: legacy flat format
+        """
         import json
 
         with open(json_path) as f:
             data = json.load(f)
 
+        params = data.get("params", {})
+        meta_block = data.get("meta", {})
+
+        # Prefer params (user-specified) > meta (auto-detected) > top-level (legacy)
+        bpm = params.get("bpm") or meta_block.get("bpm") or data.get("bpm")
+        keyscale = params.get("key") or meta_block.get("keyscale") or data.get("keyscale", "")
+        duration = params.get("duration") or meta_block.get("duration") or data.get("duration")
+        lyrics = params.get("lyrics") or meta_block.get("lyrics") or data.get("lyrics", "")
+        caption = meta_block.get("prompt") or data.get("caption", "")
+        seed = params.get("seed") or data.get("seed")
+        instrumental = data.get("instrumental", False)
+
         meta = AceStepMeta(
-            caption=data.get("caption", ""),
-            lyrics=data.get("lyrics", ""),
-            instrumental=data.get("instrumental", False),
-            bpm=data.get("bpm"),
-            keyscale=data.get("keyscale", ""),
-            duration=data.get("duration"),
-            seed=data.get("seed"),
+            caption=caption,
+            lyrics=lyrics,
+            instrumental=instrumental,
+            bpm=bpm,
+            keyscale=keyscale,
+            duration=duration,
+            seed=seed,
             raw=data,
         )
 

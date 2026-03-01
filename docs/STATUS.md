@@ -401,7 +401,10 @@ musicvision serve ./my-video
 | `LLM_BACKEND` | Backend selection | Default: `anthropic` |
 | `OPENAI_BASE_URL` | Local vLLM | Required if `LLM_BACKEND=openai` |
 | `OPENAI_MODEL` | Local vLLM | Required if `LLM_BACKEND=openai` |
-| `MUSICVISION_WEIGHTS_DIR` | Custom weight cache | Default: `~/.cache/musicvision/weights/` |
+| `MUSICVISION_WEIGHTS_DIR` | HuMo weight cache | Default: `~/.cache/musicvision/weights/` |
+| `HF_HOME` | HuggingFace hub cache (FLUX, Z-Image) | Default: `~/.cache/huggingface` |
+| `HVA_REPO_DIR` | HunyuanVideo-Avatar repo | No default — must be set in .env or project.yaml |
+| `HVA_VENV_PYTHON` | HVA venv python | Auto-derived from `$HVA_REPO_DIR/.venv/bin/python` |
 
 ---
 

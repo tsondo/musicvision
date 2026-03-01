@@ -146,7 +146,8 @@ Scene to animate:
     log.info("Generating video prompt for %s...", scene.id)
     try:
         return client.chat(VIDEO_PROMPT_SYSTEM, user_msg)
-    except ValueError:
+    except Exception as exc:
+        log.warning("LLM call failed for %s: %s — falling back", scene.id, exc)
         return _prompt_interactive_video(scene, config)
 
 

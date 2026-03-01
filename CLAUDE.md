@@ -68,6 +68,12 @@ Key env vars (see .env.example for full list):
 - `HUGGINGFACE_TOKEN` — required for HuMo DiT weights and FLUX.1-dev
 - `ANTHROPIC_API_KEY` — only if using Claude API instead of vLLM
 
+Weight location env vars (for team setups with shared storage):
+- `MUSICVISION_WEIGHTS_DIR` — HuMo weights (default: `~/.cache/musicvision/weights`)
+- `HF_HOME` — HuggingFace hub cache for FLUX/Z-Image (default: `~/.cache/huggingface`)
+- `HVA_REPO_DIR` — HunyuanVideo-Avatar repo path (no default, must be set)
+- `HVA_VENV_PYTHON` — HVA venv python (auto-derived from `HVA_REPO_DIR/.venv/bin/python`)
+
 PyTorch: 2.10.0+cu128 (upgraded for RTX 5090 sm_120 support). Do not downgrade.
 
 ## Coding Conventions

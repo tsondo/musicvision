@@ -120,7 +120,8 @@ Scene to describe:
     log.info("Generating image prompt for %s...", scene.id)
     try:
         return client.chat(IMAGE_PROMPT_SYSTEM, user_msg)
-    except ValueError:
+    except Exception as exc:
+        log.warning("LLM call failed for %s: %s — falling back", scene.id, exc)
         return _prompt_interactive_image(scene, config)
 
 

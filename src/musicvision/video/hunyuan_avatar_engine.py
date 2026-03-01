@@ -55,14 +55,38 @@ class HunyuanAvatarEngine(VideoEngine):
         self._loaded = False
 
     def load(self) -> None:
-        """Validate that the HVA repo and venv exist. No GPU memory used."""
-        repo = Path(self.config.hva_repo_dir)
-        if not repo.is_dir():
-            raise FileNotFoundError(f"HVA repo dir not found: {repo}")
+        """Validate that the HVA repo and venv exist. No GPU memory used.
 
-        venv_python = Path(self.config.hva_venv_python)
+        Paths resolve in order: project config → env var → error.
+        """
+        import os
+
+        repo_dir = self.config.hva_repo_dir or os.environ.get("HVA_REPO_DIR", "")
+        venv_py = self.config.hva_venv_python or os.environ.get("HVA_VENV_PYTHON", "")
+
+        # Auto-derive venv python from repo dir if not set
+        if repo_dir and not venv_py:
+            candidate = Path(repo_dir) / ".venv" / "bin" / "python"
+            if candidate.is_file():
+                venv_py = str(candidate)
+
+        repo = Path(repo_dir)
+        if not repo.is_dir():
+            raise FileNotFoundError(
+                f"HVA repo dir not found: {repo}\n"
+                f"Set hva_repo_dir in project.yaml or HVA_REPO_DIR env var."
+            )
+
+        venv_python = Path(venv_py)
         if not venv_python.is_file():
-            raise FileNotFoundError(f"HVA venv python not found: {venv_python}")
+            raise FileNotFoundError(
+                f"HVA venv python not found: {venv_python}\n"
+                f"Set hva_venv_python in project.yaml or HVA_VENV_PYTHON env var."
+            )
+
+        # Store resolved paths for use during generation
+        self.config.hva_repo_dir = str(repo)
+        self.config.hva_venv_python = str(venv_python)
 
         if not _WRAPPER_SCRIPT.is_file():
             raise FileNotFoundError(f"HVA wrapper script not found: {_WRAPPER_SCRIPT}")

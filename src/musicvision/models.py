@@ -239,8 +239,8 @@ class ImageGenConfig(BaseModel):
 class HunyuanAvatarConfig(BaseModel):
     """Configuration for HunyuanVideo-Avatar subprocess engine."""
 
-    hva_repo_dir: str = ""              # path to cloned HunyuanVideoAvatar repo
-    hva_venv_python: str = ""           # path to python in HVA venv (e.g. ~/HunyuanVideoAvatar/.venv/bin/python)
+    hva_repo_dir: str = ""              # path to cloned HunyuanVideoAvatar repo; env: HVA_REPO_DIR
+    hva_venv_python: str = ""           # path to python in HVA venv; env: HVA_VENV_PYTHON
     checkpoint: str = "bf16"            # "bf16" (recommended) or "fp8" — bf16 works with block offloading
     image_size: int = 704               # width (height auto-calculated for portrait)
     sample_n_frames: int = 129          # 129 frames @ 25fps ≈ 5.16s (fixed by HVA, cannot be reduced)
