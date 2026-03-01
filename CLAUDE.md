@@ -149,13 +149,14 @@ Each stage produces artifacts on disk. Any stage can be re-run independently. Us
 ## Common Tasks
 
 **Run the full pipeline from CLI:**
+All test/project output goes in `test_output/<YYYY-MM-DD_HHMM_description>/` (gitignored). Never create test projects in the repo root.
 ```bash
-musicvision create ./project --name "My Video"
-musicvision import-audio --project ./project --audio song.wav --lyrics lyrics.txt
-musicvision intake --project ./project --skip-transcription
-musicvision generate-images --project ./project --model z-image-turbo
-musicvision generate-video --project ./project --engine hunyuan_avatar
-musicvision assemble --project ./project
+musicvision create ./test_output/2026-03-01_1400_my_test --name "My Video"
+musicvision import-audio --project ./test_output/2026-03-01_1400_my_test --audio song.wav --lyrics lyrics.txt
+musicvision intake --project ./test_output/2026-03-01_1400_my_test --skip-transcription
+musicvision generate-images --project ./test_output/2026-03-01_1400_my_test --model z-image-turbo
+musicvision generate-video --project ./test_output/2026-03-01_1400_my_test --engine hunyuan_avatar
+musicvision assemble --project ./test_output/2026-03-01_1400_my_test
 ```
 
 **Add a new CLI command:** Edit `cli.py`, add a `cmd_*` function + argparse subparser + dispatch entry.

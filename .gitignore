@@ -95,6 +95,8 @@ clips/
 images/
 output/
 input/
+test_output/
+test_storyboard/
 
 # ---------------------------------------------------------------------------
 # Claude Code session data
