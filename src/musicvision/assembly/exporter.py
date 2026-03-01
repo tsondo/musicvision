@@ -50,7 +50,7 @@ def export_edl(
     output = output_path or (paths.output_dir / "timeline.edl")
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    ordered = [s for s in sorted(scenes.scenes, key=lambda s: s.order) if s.video_clip]
+    ordered = [s for s in sorted(scenes.scenes, key=lambda s: s.order) if s.video_clip or s.sub_clips]
 
     if not ordered:
         raise ValueError("No scenes with clips found — run video generation first.")
@@ -74,9 +74,13 @@ def export_edl(
         rec_in  = seconds_to_timecode(timeline_pos,           fps)
         rec_out = seconds_to_timecode(timeline_pos + duration, fps)
 
-        clip_path = Path(scene.video_clip)
-        if not clip_path.is_absolute():
-            clip_path = paths.root / clip_path
+        if scene.video_clip:
+            clip_path = Path(scene.video_clip)
+            if not clip_path.is_absolute():
+                clip_path = paths.root / clip_path
+        else:
+            # Sub-clip scenes: the concatenator joins them into {scene_id}_joined.mp4
+            clip_path = paths.clips_dir / f"{scene.id}_joined.mp4"
         clip_name = clip_path.name
 
         # EDL event line
@@ -137,7 +141,7 @@ def export_fcpxml(
     output = output_path or (paths.output_dir / "timeline.fcpxml")
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    ordered = [s for s in sorted(scenes.scenes, key=lambda s: s.order) if s.video_clip]
+    ordered = [s for s in sorted(scenes.scenes, key=lambda s: s.order) if s.video_clip or s.sub_clips]
 
     if not ordered:
         raise ValueError("No scenes with clips found — run video generation first.")
@@ -162,9 +166,12 @@ def export_fcpxml(
     asset_id_map: dict[str, str] = {}  # scene_id → asset element id
 
     for i, scene in enumerate(ordered, 2):  # r1 is the format, clips start at r2
-        clip_path = Path(scene.video_clip)
-        if not clip_path.is_absolute():
-            clip_path = paths.root / clip_path
+        if scene.video_clip:
+            clip_path = Path(scene.video_clip)
+            if not clip_path.is_absolute():
+                clip_path = paths.root / clip_path
+        else:
+            clip_path = paths.clips_dir / f"{scene.id}_joined.mp4"
 
         asset_ref = f"r{i}"
         asset_id_map[scene.id] = asset_ref
