@@ -35,7 +35,7 @@ The pipeline is designed around AI-generated music from **AceStep** (a text-cond
 |----------------|--------|
 | API (all 4 stages) | ✅ Complete |
 | CLI (all 4 stages) | ✅ Complete (2026-03-01) |
-| End-to-end storyboard test | ⏳ Pending (song being prepared) |
+| End-to-end storyboard test | ✅ Passed (2026-03-01) — 5 scenes, 320p preview |
 | Frontend (React or Gradio) | ❌ Not started |
 | Progress/status feedback (SSE/WebSocket) | ❌ Not started |
 
