@@ -6,34 +6,44 @@ AI-powered music video production pipeline with **lip-synced video generation**.
 audio + lyrics + reference image  →  scene segmentation  →  storyboard  →  lip-synced video clips  →  rough cut MP4 + EDL/FCPXML
 ```
 
-**Status:** Core pipeline is code-complete. Bug fixes and Lightx2V LoRA integration (6-step distilled inference) are under testing. No frontend yet — interaction is via REST API (Swagger UI) or CLI.
+**Status:** All four pipeline stages are code-complete and GPU-tested. Two video engines: [HunyuanVideo-Avatar](https://github.com/tencent/HunyuanVideo) (primary, excellent lip sync) and [HuMo](https://github.com/Phantom-video/HuMo) (experimental). Two image engines: [Z-Image](https://huggingface.co/Tongyi-MAI/Z-Image-Turbo) (ungated) and [FLUX](https://github.com/black-forest-labs/flux). Full CLI pipeline — no frontend yet.
 
 ---
 
 ## How It Works
 
-MusicVision wraps [HuMo](https://github.com/Phantom-video/HuMo) (ByteDance, Apache 2.0) for video generation and [FLUX](https://github.com/black-forest-labs/flux) for reference image generation into an iterative, user-controlled workflow.
+MusicVision wraps multiple AI video and image generation models into an iterative, user-controlled workflow.
 
-HuMo's TIA (Text + Image + Audio) mode is the core of the pipeline. It takes a reference image of a character, an audio segment, and a text description — then generates video where the character performs to the audio with synchronized lip movement, facial expressions, and body motion driven by the vocal track.
+The primary video engine is [HunyuanVideo-Avatar](https://github.com/tencent/HunyuanVideo) (Tencent), which generates audio-driven video with lip sync, facial expressions, and body motion from a single reference image. [HuMo](https://github.com/Phantom-video/HuMo) (ByteDance) is available as an experimental alternative. For reference images, [Z-Image](https://huggingface.co/Tongyi-MAI/Z-Image-Turbo) (ungated, fast) and [FLUX](https://github.com/black-forest-labs/flux) are both supported.
 
 ### Pipeline Stages
 
 1. **Intake & Segmentation** — Song audio + lyrics are split into 2–10 second scenes using Whisper transcription and LLM-assisted segmentation that respects musical phrasing and section boundaries.
-2. **Image Generation & Storyboard** — FLUX generates reference images for each scene. Users review and iterate on individual scenes until satisfied.
-3. **Video Generation** — HuMo TIA mode renders each scene as a lip-synced video clip. Scenes longer than 3.88s are automatically split into sub-clips with visual continuity (last frame of clip N becomes the reference image for clip N+1).
+2. **Image Generation & Storyboard** — Z-Image or FLUX generates reference images for each scene. Users review and iterate on individual scenes until satisfied.
+3. **Video Generation** — HunyuanVideo-Avatar (or HuMo) renders each scene as a lip-synced video clip. Long scenes are automatically split into sub-clips with visual continuity (last frame of clip N becomes the reference image for clip N+1).
 4. **Assembly & Export** — Clips are concatenated with the original audio, exported as a rough cut MP4 plus EDL and FCPXML project files for DaVinci Resolve.
 
 ---
 
-## Quality Presets
+## Video Engine Presets
 
-| Preset | Resolution | Steps | CFG | LoRA | Passes/Step | ~Time/Clip |
-|--------|-----------|-------|-----|------|-------------|------------|
-| **FAST** | 688×384 | 6 | 1.0 | Lightx2V distill | 1 | ~1 min |
-| **DRAFT** | 832×480 | 15 | dual | None | 3 | ~12 min |
-| **FULL** | 1280×720 | 30 | dual | None | 3 | ~45 min |
+### HunyuanVideo-Avatar (primary)
 
-The FAST preset uses a [Lightx2V](https://github.com/ModelTC/Lightx2v) step-distillation LoRA that internalizes CFG guidance into the weights, enabling single-pass inference at 6 steps. This is the recommended preset for iteration. For final output, generate at FAST resolution and upscale.
+| Setting | Resolution | Steps | ~Time/Clip (5.16s) | Notes |
+|---------|-----------|-------|---------------------|-------|
+| **Draft** | 320p | 10 | ~5 min | Fast iteration, good quality |
+| **Production** | 704p | 30 | ~2 hours | Full quality, lip sync |
+
+Audio-driven generation with lip sync from a single reference image. Fixed clip length of 5.16s (129 frames @ 25fps). Runs in a separate subprocess/venv. BF16 with block-level CPU offloading on ≤32GB VRAM.
+
+### HuMo (experimental)
+
+| Preset | Resolution | Steps | CFG | LoRA | ~Time/Clip |
+|--------|-----------|-------|-----|------|------------|
+| **FAST** | 688×384 | 6 | 1.0 | Lightx2V distill | ~1 min |
+| **FULL** | 1280×720 | 30 | dual | None | ~45 min |
+
+Currently produces noisy output — deprioritized in favor of HVA.
 
 ---
 
@@ -106,17 +116,22 @@ pip install flash-attn --no-build-isolation
 ## Quick Start
 
 ```bash
-# Create a new project
-musicvision create ./my-video --name "My Music Video"
-
 # Configure environment
 cp .env.example .env
-# Set HUGGINGFACE_TOKEN (for HuMo weights) and optionally ANTHROPIC_API_KEY (for LLM prompts)
+# Set HUGGINGFACE_TOKEN (for FLUX weights) and optionally ANTHROPIC_API_KEY (for LLM prompts)
 
-# Download model weights
-musicvision download-weights --tier fp8_scaled
+# Create project and import audio
+musicvision create ./my-video --name "My Music Video"
+musicvision import-audio --project ./my-video --audio song.wav --lyrics lyrics.txt
 
-# Start the API server
+# Run the pipeline
+musicvision intake --project ./my-video --skip-transcription    # segmentation (use --llm for LLM-assisted)
+musicvision generate-images --project ./my-video --model z-image-turbo  # reference images
+musicvision generate-video --project ./my-video --engine hunyuan_avatar # lip-synced video clips
+musicvision assemble --project ./my-video                       # rough cut + EDL/FCPXML
+# → output/rough_cut.mp4
+
+# Or use the API server instead:
 musicvision serve ./my-video
 # → Swagger UI at http://localhost:8000/docs
 ```
@@ -125,7 +140,7 @@ musicvision serve ./my-video
 
 | Variable | Required For | Notes |
 |----------|-------------|-------|
-| `HUGGINGFACE_TOKEN` | HuMo DiT weights, FLUX.1-dev | Not required for shared weights (T5/VAE/Whisper auto-download) |
+| `HUGGINGFACE_TOKEN` | HuMo DiT weights, FLUX.1-dev | Not required for Z-Image (ungated) or shared weights (T5/VAE/Whisper) |
 | `ANTHROPIC_API_KEY` | LLM prompts | Not required — vLLM or auto-template fallback available |
 | `LLM_BACKEND` | Backend selection | Default: `anthropic`. Set to `openai` for vLLM. |
 | `OPENAI_BASE_URL` | Local vLLM | Required if `LLM_BACKEND=openai` |
@@ -192,16 +207,16 @@ If your song was generated with [AceStep](https://github.com/ace-step/ace-step),
 ## Testing
 
 ```bash
-# CPU unit tests (no GPU needed, < 10 seconds)
+# CPU unit tests — 123 tests, no GPU needed, < 10 seconds
 uv run pytest tests/ -v
-
-# HuMo inference unit tests (CPU, no weights needed)
-python scripts/test_humo_inference.py
 
 # LLM prompt tests (requires vLLM server on LAN)
 python scripts/test_vllm_prompts.py
 
-# GPU integration test (requires GPU + model weights)
+# GPU image generation test (Z-Image + FLUX)
+python scripts/test_image_gen.py
+
+# GPU video generation test (HuMo)
 python scripts/test_gpu_pipeline.py --tier fp8_scaled --steps 6
 ```
 
@@ -220,7 +235,6 @@ See [TESTING.md](docs/TESTING.md) for the full test strategy and [MUSICVISION_GP
 | [PLATFORM_SUPPORT_PLAN.md](docs/PLATFORM_SUPPORT_PLAN.md) | Apple Silicon + cloud GPU support plan |
 | [STATUS.md](docs/STATUS.md) | Current implementation status |
 | [FIXLOG.md](docs/FIXLOG.md) | Checkpoint loading fix history |
-| [future_plans.md](docs/future_plans.md) | Roadmap: story bible, manga panels, unified creative tool |
 
 ---
 

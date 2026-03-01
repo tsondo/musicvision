@@ -142,9 +142,19 @@ Each stage produces artifacts on disk. Any stage can be re-run independently. Us
 
 ## Common Tasks
 
-**Add a new CLI command:** Edit `cli.py`, add a function decorated with the CLI framework.
+**Run the full pipeline from CLI:**
+```bash
+musicvision create ./project --name "My Video"
+musicvision import-audio --project ./project --audio song.wav --lyrics lyrics.txt
+musicvision intake --project ./project --skip-transcription
+musicvision generate-images --project ./project --model z-image-turbo
+musicvision generate-video --project ./project --engine hunyuan_avatar
+musicvision assemble --project ./project
+```
 
-**Add a new API endpoint:** Edit `api.py`. Call into the appropriate core module — do not put logic in the endpoint handler.
+**Add a new CLI command:** Edit `cli.py`, add a `cmd_*` function + argparse subparser + dispatch entry.
+
+**Add a new API endpoint:** Edit `api/app.py`. Call into the appropriate core module — do not put logic in the endpoint handler.
 
 **Change LLM prompts:** Edit the `*_SYSTEM_PROMPT` constant in the relevant module. Run `pytest tests/` then `scripts/test_vllm_prompts.py`.
 
@@ -157,8 +167,6 @@ Each stage produces artifacts on disk. Any stage can be re-run independently. Us
 - `docs/PIPELINE_SPEC.md` — Full pipeline specification
 - `docs/HUMO_REFERENCE.md` — HuMo model details, prompt guidelines, TIA mode
 - `docs/STATUS.md` — Current implementation status
-- `docs/fresh_pipeline.md` — Condensed pipeline overview (kept in sync with STATUS.md)
-- `docs/TESTING.md` — Two-layer test strategy
+- `docs/TESTING.md` — Two-layer test strategy + end-to-end CLI test
 - `docs/MUSICVISION_GPU_TEST.md` — GPU integration test guide
-- `docs/future_plans.md` — Roadmap including integrated creation pipeline vision
 - `docs/FIXLOG.md` — Record of checkpoint loading fixes and architecture issues

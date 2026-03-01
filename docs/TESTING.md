@@ -42,6 +42,23 @@ MusicVision uses a two-layer test strategy: fast unit tests that run anywhere, a
 
 ---
 
+## End-to-End CLI Test
+
+Full pipeline from terminal (requires GPU + weights + audio file):
+
+```bash
+musicvision create ./test_storyboard --name "Test Storyboard"
+musicvision import-audio --project ./test_storyboard --audio /path/to/song.wav --lyrics /path/to/lyrics.txt
+musicvision intake --project ./test_storyboard --skip-transcription
+musicvision info ./test_storyboard
+musicvision generate-images --project ./test_storyboard --model z-image-turbo
+musicvision generate-video --project ./test_storyboard --engine hunyuan_avatar
+musicvision assemble --project ./test_storyboard
+# → test_storyboard/output/rough_cut.mp4
+```
+
+---
+
 ## Recommended Test Workflow
 
 1. **After code changes:** `python -m pytest tests/ -v --tb=short` (123 tests, <10 seconds)

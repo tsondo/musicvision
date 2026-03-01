@@ -3,11 +3,15 @@ CLI entry point for MusicVision.
 
 Usage:
     musicvision create <directory> --name "My Video"
-    musicvision serve <directory> [--port 8000]
+    musicvision import-audio --project DIR --audio song.wav [--lyrics lyrics.txt]
+    musicvision intake --project DIR [--llm] [--skip-transcription]
+    musicvision generate-images --project DIR [--model z-image-turbo]
+    musicvision generate-video --project DIR [--engine hunyuan_avatar]
+    musicvision assemble --project DIR [--approved-only]
     musicvision info <directory>
+    musicvision serve <directory> [--port 8000]
     musicvision detect-hardware
     musicvision download-weights --tier fp8_scaled
-    musicvision generate-video --project ./my_video [--tier gguf_q4] [--block-swap 20]
 
 Environment variables (LLM backend, API keys, etc.) are loaded from a .env
 file in the current working directory if one exists.
@@ -71,14 +75,226 @@ def cmd_info(args: argparse.Namespace) -> None:
     print(f"BPM:        {svc.config.song.bpm or '(not detected)'}")
     print(f"Duration:   {svc.config.song.duration_seconds or '(unknown)'}s")
     print(f"Scenes:     {len(svc.scenes.scenes)}")
-    print(f"HuMo:       tier={svc.config.humo.tier.value} ({svc.config.humo.model_size}) @ {svc.config.humo.resolution}")
-    print(f"FLUX:       {svc.config.flux.model.value}, {svc.config.flux.effective_steps} steps")
+    print(f"Video:      engine={svc.config.video_engine.value}")
+    print(f"  HuMo:     tier={svc.config.humo.tier.value} ({svc.config.humo.model_size}) @ {svc.config.humo.resolution}")
+    print(f"Image:      {svc.config.image_gen.model.value}, {svc.config.image_gen.effective_steps} steps")
 
     if svc.scenes.scenes:
         approved_img = sum(1 for s in svc.scenes.scenes if s.image_status == "approved")
         approved_vid = sum(1 for s in svc.scenes.scenes if s.video_status == "approved")
         print(f"  Images:   {approved_img}/{len(svc.scenes.scenes)} approved")
         print(f"  Videos:   {approved_vid}/{len(svc.scenes.scenes)} approved")
+
+
+def cmd_import_audio(args: argparse.Namespace) -> None:
+    """Import audio (and optionally lyrics) into a project."""
+    from musicvision.project import ProjectService
+
+    project_dir = Path(args.project).resolve()
+    svc = ProjectService.open(project_dir)
+
+    audio_path = Path(args.audio).resolve()
+    if not audio_path.exists():
+        print(f"Audio file not found: {audio_path}")
+        sys.exit(1)
+
+    dest = svc.import_audio(audio_path)
+    print(f"Imported audio: {dest.name}")
+
+    if args.lyrics:
+        lyrics_path = Path(args.lyrics).resolve()
+        if not lyrics_path.exists():
+            print(f"Lyrics file not found: {lyrics_path}")
+            sys.exit(1)
+        lyrics_dest = svc.import_lyrics(lyrics_path)
+        print(f"Imported lyrics: {lyrics_dest.name}")
+
+    svc.save_config()
+    print(f"Project '{svc.config.name}' updated.")
+
+
+def cmd_intake(args: argparse.Namespace) -> None:
+    """Run Stage 1: audio analysis + segmentation."""
+    from musicvision.intake.pipeline import run_intake as _run_intake
+    from musicvision.project import ProjectService
+
+    project_dir = Path(args.project).resolve()
+    svc = ProjectService.open(project_dir)
+
+    if not svc.config.song.audio_file:
+        print("No audio file in project. Run import-audio first.")
+        sys.exit(1)
+
+    device_map = None
+    if not args.skip_transcription:
+        try:
+            from musicvision.utils.gpu import detect_devices
+            device_map = detect_devices()
+        except Exception:
+            pass  # CPU fallback
+
+    print(f"Running intake pipeline (llm={args.llm}, skip_transcription={args.skip_transcription})…")
+    scene_list = _run_intake(
+        project=svc,
+        use_llm_segmentation=args.llm,
+        device_map=device_map,
+        skip_transcription=args.skip_transcription,
+        use_vocal_separation=args.vocal_separation,
+    )
+    print(f"Segmented into {len(scene_list.scenes)} scenes.")
+    for s in scene_list.scenes:
+        print(f"  {s.id}: {s.time_start:.2f}–{s.time_end:.2f}s ({s.duration:.1f}s) {s.lyrics[:50] if s.lyrics else '(instrumental)'}…")
+
+
+def cmd_generate_images(args: argparse.Namespace) -> None:
+    """Generate reference images for scenes."""
+    from musicvision.imaging.factory import create_engine
+    from musicvision.imaging.prompt_generator import generate_image_prompt
+    from musicvision.models import ImageGenConfig, ImageModel
+    from musicvision.project import ProjectService
+    from musicvision.utils.gpu import detect_devices
+
+    project_dir = Path(args.project).resolve()
+    svc = ProjectService.open(project_dir)
+
+    # Override model if specified
+    if args.model:
+        try:
+            svc.config.image_gen.model = ImageModel(args.model)
+        except ValueError:
+            valid = [m.value for m in ImageModel]
+            print(f"Unknown model '{args.model}'. Valid: {', '.join(valid)}")
+            sys.exit(1)
+
+    # Resolve target scenes
+    scenes = svc.scenes.scenes
+    if args.scene_ids:
+        scenes = [s for s in scenes if s.id in args.scene_ids]
+        if not scenes:
+            print(f"No matching scenes for IDs: {args.scene_ids}")
+            sys.exit(1)
+
+    if not scenes:
+        print("No scenes. Run intake first.")
+        sys.exit(1)
+
+    # Generate prompts for scenes that don't have one yet
+    for scene in scenes:
+        if not scene.effective_image_prompt:
+            scene.image_prompt = generate_image_prompt(scene, svc.config)
+
+    # Resolve style sheet dimensions
+    ss = svc.config.style_sheet
+    res_parts = ss.resolution.split("x") if "x" in ss.resolution else ["768", "512"]
+    width, height = int(res_parts[0]), int(res_parts[1])
+
+    # Build character LoRA lookup
+    char_loras: dict[str, tuple[str, float]] = {}
+    for char_def in svc.config.style_sheet.characters:
+        if char_def.lora_path:
+            char_loras[char_def.id] = (char_def.lora_path, char_def.lora_weight)
+
+    # Create engine and generate
+    device_map = detect_devices()
+    engine = create_engine(svc.config.image_gen, device_map)
+    print(f"Loading image engine ({svc.config.image_gen.model.value})…")
+    engine.load()
+
+    generated = 0
+    errors = []
+    try:
+        # Sort by LoRA to minimize swaps
+        def _lora_key(s):
+            for cid in s.characters:
+                if cid in char_loras:
+                    return char_loras[cid][0]
+            return ""
+
+        sorted_scenes = sorted(scenes, key=_lora_key)
+
+        for scene in sorted_scenes:
+            try:
+                lora_path = None
+                lora_weight = 0.8
+                for cid in scene.characters:
+                    if cid in char_loras:
+                        lora_path, lora_weight = char_loras[cid]
+                        break
+
+                output_path = svc.paths.image_path(scene.id)
+                prompt = scene.effective_image_prompt
+                print(f"  Generating {scene.id}: {prompt[:60]}…")
+                engine.generate(
+                    prompt=prompt,
+                    width=width,
+                    height=height,
+                    lora_path=lora_path,
+                    lora_weight=lora_weight,
+                    output_path=output_path,
+                )
+                scene.reference_image = f"images/{scene.id}.png"
+                generated += 1
+                print(f"  {scene.id} done")
+            except Exception as exc:
+                print(f"  {scene.id} FAILED: {exc}")
+                errors.append(scene.id)
+    finally:
+        engine.unload()
+
+    svc.save_scenes()
+    print(f"\nGenerated {generated}/{len(scenes)} images.")
+    if errors:
+        print(f"Failed: {errors}")
+
+
+def cmd_assemble(args: argparse.Namespace) -> None:
+    """Assemble clips into rough cut + export EDL/FCPXML."""
+    from musicvision.assembly.concatenator import assemble_rough_cut
+    from musicvision.assembly.exporter import export_edl, export_fcpxml
+    from musicvision.project import ProjectService
+
+    project_dir = Path(args.project).resolve()
+    svc = ProjectService.open(project_dir)
+
+    audio_file = svc.config.song.audio_file
+    if not audio_file:
+        print("No audio file set in project config.")
+        sys.exit(1)
+
+    audio_path = svc.resolve_path(audio_file)
+    if not audio_path.exists():
+        print(f"Audio file not found: {audio_path}")
+        sys.exit(1)
+
+    print("Assembling rough cut…")
+    try:
+        rough_cut = assemble_rough_cut(
+            scenes=svc.scenes,
+            paths=svc.paths,
+            original_audio=audio_path,
+            approved_only=args.approved_only,
+        )
+    except (RuntimeError, ValueError) as e:
+        print(f"Assembly failed: {e}")
+        sys.exit(1)
+
+    print(f"Rough cut: {rough_cut}")
+
+    if not args.no_edl:
+        edl = export_edl(svc.scenes, svc.paths)
+        print(f"EDL:       {edl}")
+
+    if not args.no_fcpxml:
+        humo = svc.config.humo
+        fcpxml = export_fcpxml(
+            svc.scenes,
+            svc.paths,
+            width=humo.width,
+            height=humo.height,
+        )
+        print(f"FCPXML:    {fcpxml}")
+
+    print("Assembly complete.")
 
 
 def cmd_detect_hardware(args: argparse.Namespace) -> None:
@@ -307,6 +523,38 @@ def main() -> None:
     p_info = sub.add_parser("info", help="Show project info")
     p_info.add_argument("directory", help="Project directory path")
 
+    # import-audio
+    p_ia = sub.add_parser("import-audio", help="Import audio (and optionally lyrics) into a project")
+    p_ia.add_argument("--project", required=True, help="Project directory path")
+    p_ia.add_argument("--audio", required=True, help="Path to audio file")
+    p_ia.add_argument("--lyrics", default=None, help="Path to lyrics file (.txt/.lrc)")
+
+    # intake
+    p_in = sub.add_parser("intake", help="Stage 1: Analyze audio and segment into scenes")
+    p_in.add_argument("--project", required=True, help="Project directory path")
+    p_in.add_argument("--llm", action="store_true", help="Use LLM for segmentation (default: rule-based)")
+    p_in.add_argument("--skip-transcription", action="store_true", dest="skip_transcription",
+                       help="Skip Whisper transcription (use existing lyrics)")
+    p_in.add_argument("--vocal-separation", action="store_true", dest="vocal_separation",
+                       help="Run vocal separation before transcription")
+
+    # generate-images
+    p_gi = sub.add_parser("generate-images", help="Stage 2: Generate reference images for scenes")
+    p_gi.add_argument("--project", required=True, help="Project directory path")
+    p_gi.add_argument("--model", default=None,
+                      choices=["flux-dev", "flux-schnell", "z-image", "z-image-turbo"],
+                      help="Image model (default: project config)")
+    p_gi.add_argument("--scene-ids", nargs="*", default=[], dest="scene_ids",
+                      help="Scene IDs to generate (default: all)")
+
+    # assemble
+    p_as = sub.add_parser("assemble", help="Stage 4: Assemble clips into rough cut")
+    p_as.add_argument("--project", required=True, help="Project directory path")
+    p_as.add_argument("--approved-only", action="store_true", dest="approved_only",
+                      help="Only include approved scenes")
+    p_as.add_argument("--no-edl", action="store_true", dest="no_edl", help="Skip EDL export")
+    p_as.add_argument("--no-fcpxml", action="store_true", dest="no_fcpxml", help="Skip FCPXML export")
+
     # detect-hardware
     sub.add_parser("detect-hardware", help="Detect GPUs and print recommended HuMo tier")
 
@@ -346,6 +594,14 @@ def main() -> None:
         cmd_serve(args)
     elif args.command == "info":
         cmd_info(args)
+    elif args.command == "import-audio":
+        cmd_import_audio(args)
+    elif args.command == "intake":
+        cmd_intake(args)
+    elif args.command == "generate-images":
+        cmd_generate_images(args)
+    elif args.command == "assemble":
+        cmd_assemble(args)
     elif args.command == "detect-hardware":
         cmd_detect_hardware(args)
     elif args.command == "download-weights":

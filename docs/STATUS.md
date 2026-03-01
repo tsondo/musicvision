@@ -1,6 +1,6 @@
 # MusicVision — Project Status
 
-**Last updated:** 2026-02-28
+**Last updated:** 2026-03-01
 **Branch:** `main`
 
 ---
@@ -33,11 +33,13 @@ The pipeline is designed around AI-generated music from **AceStep** (a text-cond
 
 | Infrastructure | Status |
 |----------------|--------|
-| API + CLI (multi-engine support) | ✅ Complete |
+| API (all 4 stages) | ✅ Complete |
+| CLI (all 4 stages) | ✅ Complete (2026-03-01) |
+| End-to-end storyboard test | ⏳ Pending (song being prepared) |
 | Frontend (React or Gradio) | ❌ Not started |
 | Progress/status feedback (SSE/WebSocket) | ❌ Not started |
 
-**All four pipeline stages are code-complete and GPU-tested.** Two video engines are available: HunyuanVideo-Avatar (primary, excellent lip sync + audio-driven animation) and HuMo (back burner, noisy output after 10 bug fixes). Two image engines are GPU-validated: Z-Image-Turbo (ungated, 12.5 GB peak) and FLUX.1-schnell (gated, 4-step fast).
+**All four pipeline stages are code-complete, GPU-tested, and CLI-accessible.** Full end-to-end workflow from terminal: `create` → `import-audio` → `intake` → `generate-images` → `generate-video` → `assemble`. Two video engines available: HunyuanVideo-Avatar (primary, excellent lip sync) and HuMo (back burner). Two image engines GPU-validated: Z-Image-Turbo (ungated, 12.5 GB peak) and FLUX.1-schnell (gated, 4-step fast).
 
 ---
 
@@ -275,13 +277,24 @@ POST   /api/pipeline/assemble
 
 ### CLI (`musicvision`)
 
+Full pipeline from terminal — no API server needed:
+
 ```bash
+# Project setup
 musicvision create <dir> --name "My Video"
-musicvision serve <dir> [--port 8000]
+musicvision import-audio --project <dir> --audio song.wav [--lyrics lyrics.txt]
 musicvision info <dir>
-musicvision detect-hardware              # GPU info + recommended HuMo tier
-musicvision download-weights --tier fp8_scaled
+
+# Pipeline stages (run in order)
+musicvision intake --project <dir> [--llm] [--skip-transcription] [--vocal-separation]
+musicvision generate-images --project <dir> [--model z-image-turbo] [--scene-ids ...]
 musicvision generate-video --project <dir> [--engine hunyuan_avatar|humo] [--tier gguf_q4] [--block-swap 20] [--scene-ids ...]
+musicvision assemble --project <dir> [--approved-only] [--no-edl] [--no-fcpxml]
+
+# Utilities
+musicvision serve <dir> [--port 8000]     # Start API server
+musicvision detect-hardware               # GPU info + recommended HuMo tier
+musicvision download-weights --tier fp8_scaled
 ```
 
 ---
@@ -359,8 +372,16 @@ cp .env.example .env
 # DiT weights require HUGGINGFACE_TOKEN — download explicitly or let engine.load() handle it:
 musicvision download-weights --tier fp8_scaled
 
-# Start pipeline
+# Run pipeline (CLI — no server needed)
 musicvision create ./my-video --name "My Video"
+musicvision import-audio --project ./my-video --audio song.wav --lyrics lyrics.txt
+musicvision intake --project ./my-video --skip-transcription
+musicvision generate-images --project ./my-video --model z-image-turbo
+musicvision generate-video --project ./my-video --engine hunyuan_avatar
+musicvision assemble --project ./my-video
+# → output/rough_cut.mp4 + timeline.edl + timeline.fcpxml
+
+# Or via API server:
 musicvision serve ./my-video
 # → http://localhost:8000/docs
 ```
