@@ -6,7 +6,7 @@ AI-powered music video production pipeline with **lip-synced video generation**.
 audio + lyrics + reference image  →  scene segmentation  →  storyboard  →  lip-synced video clips  →  rough cut MP4 + EDL/FCPXML
 ```
 
-**Status:** All four pipeline stages are code-complete and GPU-tested. Two video engines: [HunyuanVideo-Avatar](https://github.com/tencent/HunyuanVideo) (primary, excellent lip sync) and [HuMo](https://github.com/Phantom-video/HuMo) (experimental). Two image engines: [Z-Image](https://huggingface.co/Tongyi-MAI/Z-Image-Turbo) (ungated) and [FLUX](https://github.com/black-forest-labs/flux). Full CLI pipeline — no frontend yet.
+**Status:** All four pipeline stages are code-complete and GPU-tested. Full CLI pipeline + React scene review GUI. Two video engines: [HunyuanVideo-Avatar](https://github.com/tencent/HunyuanVideo) (primary, excellent lip sync) and [HuMo](https://github.com/Phantom-video/HuMo) (experimental). Two image engines: [Z-Image](https://huggingface.co/Tongyi-MAI/Z-Image-Turbo) (ungated) and [FLUX](https://github.com/black-forest-labs/flux).
 
 ---
 
@@ -131,9 +131,12 @@ musicvision generate-video --project ./my-video --engine hunyuan_avatar # lip-sy
 musicvision assemble --project ./my-video                       # rough cut + EDL/FCPXML
 # → output/rough_cut.mp4
 
-# Or use the API server instead:
-musicvision serve ./my-video
-# → Swagger UI at http://localhost:8000/docs
+# Or use the GUI:
+musicvision serve                     # start with no project — create/open from the frontend
+cd frontend && npm install && npm run dev  # → http://localhost:5173
+
+# Or start the API server with an existing project:
+musicvision serve ./my-video          # → Swagger UI at http://localhost:8000/docs
 ```
 
 ### Required Environment Variables
@@ -223,10 +226,56 @@ If your song was generated with [AceStep](https://github.com/ace-step/ace-step),
 
 ---
 
+## Frontend (Scene Review GUI)
+
+The React frontend provides a full visual workflow for managing the pipeline. Start the backend and frontend:
+
+```bash
+musicvision serve               # starts API on :8000 (no project needed)
+cd frontend && npm run dev      # starts Vite dev server on :5173
+```
+
+Vite proxies `/api` and `/files` to `localhost:8000`.
+
+**Features:**
+
+- **Project creation/opening** — Create new projects or open existing ones from the UI (no need to pass a directory to `musicvision serve`)
+- **Filesystem browser** — Browse the server's local filesystem to import audio and lyrics by path
+- **Pipeline bar** — 4-step progress bar (Import → Intake → Images → Videos) with model/engine selectors and batch generation controls
+- **Storyboard** — Scene-by-scene view with editable prompts, image thumbnails, and inline video preview
+- **Per-scene generation** — Generate or regenerate individual scene images and videos with independent model/seed controls
+- **Lip sync toggle** — Per-scene checkbox; when off, a silent audio segment is generated for non-vocal scenes
+- **Auto-save** — Prompt edits are debounced and saved to the backend automatically
+- **Inline video preview** — Click a storyboard thumbnail to toggle between the reference image and the generated video clip
+- **Sub-clip auto-join** — Multi-segment scenes are automatically joined into a single preview clip
+
+**Stack:** React 19, TypeScript, Vite 6, plain CSS (no UI framework). Dark theme.
+
+---
+
+## CLI Reference
+
+| Command | Description |
+|---------|-------------|
+| `musicvision create <dir> --name "…"` | Create a new project |
+| `musicvision import-audio --project DIR --audio song.wav [--lyrics lyrics.txt]` | Import audio and lyrics |
+| `musicvision intake --project DIR [--llm] [--skip-transcription] [--vocal-separation]` | Stage 1: audio analysis + segmentation |
+| `musicvision generate-images --project DIR [--model MODEL] [--scene-ids ID…]` | Stage 2: generate reference images |
+| `musicvision generate-video --project DIR [--engine ENGINE] [--tier TIER] [--scene-ids ID…]` | Stage 3: generate video clips |
+| `musicvision assemble --project DIR [--approved-only] [--no-edl] [--no-fcpxml]` | Stage 4: assemble rough cut + export |
+| `musicvision info <dir>` | Show project status |
+| `musicvision serve [dir] [--port 8000]` | Start API server (directory optional) |
+| `musicvision detect-hardware` | Print GPU info and recommended tier |
+| `musicvision download-weights --tier TIER [--token TOKEN]` | Download HuMo weights |
+
+Image models: `flux-dev`, `flux-schnell`, `z-image`, `z-image-turbo`. Video engines: `hunyuan_avatar`, `humo`.
+
+---
+
 ## Testing
 
 ```bash
-# CPU unit tests — 123 tests, no GPU needed, < 10 seconds
+# CPU unit tests — 160 tests, no GPU needed, < 10 seconds
 uv run pytest tests/ -v
 
 # LLM prompt tests (requires vLLM server on LAN)
@@ -237,6 +286,9 @@ python scripts/test_image_gen.py
 
 # GPU video generation test (HuMo)
 python scripts/test_gpu_pipeline.py --tier fp8_scaled --steps 6
+
+# HunyuanVideo-Avatar standalone test
+python scripts/test_hva_standalone.py
 ```
 
 See [TESTING.md](docs/TESTING.md) for the full test strategy and [MUSICVISION_GPU_TEST.md](docs/MUSICVISION_GPU_TEST.md) for GPU test setup.
