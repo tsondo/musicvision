@@ -2,15 +2,23 @@
 
 ## Overview
 
-MusicVision is a music video production pipeline that combines open-source AI tools to turn a song (audio + lyrics) into a complete music video. It wraps HuMo (ByteDance) for video generation and FLUX for reference image generation into an iterative, user-controlled workflow.
+MusicVision is a music video production pipeline that combines open-source AI tools to turn a song (audio + lyrics) into a complete music video. It wraps multiple video generation backends (HunyuanVideo 1.5, LTX-2, HuMo) and FLUX for reference image generation into an iterative, user-controlled workflow.
+
+### Core Principle: Segment for Video, Assemble with Original Audio
+
+The pipeline segments audio for **video generation only** — each scene's sliced audio drives lip sync and motion in the video engine. During **final assembly**, the original uncut audio track is muxed over the concatenated video, ensuring seamless audio flow with no splice artifacts. This means:
+
+- Scene audio segments are a **generation tool**, not a final output.
+- The total video duration must match the original audio duration **exactly** (within one frame).
+- Any drift in sub-clip boundaries accumulates and breaks the final sync. Frame-accurate math is mandatory.
 
 ## System Requirements
 
 ### Inference Workstation (image + video generation)
-- **Primary GPU (GPU0)**: NVIDIA RTX 5090 (32GB VRAM) — runs DiT for both FLUX and HuMo
-- **Secondary GPU (GPU1)**: NVIDIA RTX 4080 (16GB VRAM) — offloads text encoders (T5), VAE, Whisper, audio separator
-- **Multi-GPU Strategy**: Proven in ComfyUI. DiT on GPU0 (5090), everything else on GPU1 (4080). T5 (~10 GB) + VAE (~0.4 GB) + Whisper (~1.5 GB) fit comfortably in 16 GB. This allows running HuMo-17B and FLUX-dev at full quality.
-- **Model Swapping**: FLUX and HuMo run in different pipeline stages (not simultaneously). Within each stage, model components are split across both GPUs. Weights fully unloaded between stages.
+- **Primary GPU (GPU0)**: NVIDIA RTX 5090 (32GB VRAM) — runs DiT for FLUX, HunyuanVideo, LTX-2, or HuMo
+- **Secondary GPU (GPU1)**: NVIDIA RTX 4080 (16GB VRAM) — offloads text encoders, VAE, Whisper, audio separator
+- **Multi-GPU Strategy**: Proven in ComfyUI. DiT on GPU0 (5090), everything else on GPU1 (4080). This allows running large models at full quality while keeping encoders and VAE on the secondary GPU.
+- **Model Swapping**: FLUX and video engines run in different pipeline stages (not simultaneously). Within each stage, model components are split across both GPUs. Weights fully unloaded between stages.
 
 ### Local LLM Server (optional, for prompt generation)
 - **GPU**: NVIDIA RTX 3090 Ti (24GB VRAM) — runs vLLM for local LLM inference
@@ -19,7 +27,7 @@ MusicVision is a music video production pipeline that combines open-source AI to
 - **Not required**: Claude API (default) or auto-template fallback work without this machine
 
 ### General
-- **Storage**: ~50GB for model weights (FLUX + HuMo + Whisper + VAE + audio separator). Additional space for project assets.
+- **Storage**: ~50GB for model weights (FLUX + video engine + Whisper + VAE + audio separator). Additional space for project assets.
 - **Python**: 3.11+ (HuMo requirement)
 - **CUDA**: 12.4+ with flash_attn 2.6.3
 - **Key dependency pins**: `torch==2.10.0` (CUDA 12.8, required for RTX 5090 sm_120), `flash_attn==2.6.3`
@@ -34,10 +42,33 @@ MusicVision is a music video production pipeline that combines open-source AI to
 │  INTAKE &    │  IMAGE GEN &  │  VIDEO GEN         │  ASSEMBLY &      │
 │  SEGMENTATION│  STORYBOARD   │  (selectable)      │  EXPORT          │
 ├──────────────┼───────────────┼────────────────────┼──────────────────┤
-│ Whisper      │ FLUX          │ HunyuanVideo-Avatar│ ffmpeg           │
-│ ffmpeg       │ Z-Image       │  (subprocess/venv) │ FCPXML/EDL gen   │
+│ Whisper      │ FLUX          │ HunyuanVideo 1.5   │ ffmpeg           │
+│ ffmpeg       │ Z-Image       │ LTX-2 (19B)        │ FCPXML/EDL gen   │
 │ LLM (Claude) │ (LoRA)        │ HuMo TIA (17B/1.7B)│                 │
 └──────────────┴───────────────┴────────────────────┴──────────────────┘
+```
+
+### Video Engine Registry
+
+Each video engine has fixed frame constraints that govern the entire pipeline:
+
+| Engine | Max Frames | FPS | Max Duration | Min Frames | Notes |
+|--------|-----------|-----|-------------|-----------|-------|
+| HuMo 17B | 97 | 25 | 3.88s | 25 (1.0s) | TIA mode (text+image+audio) |
+| HuMo 1.7B | 97 | 25 | 3.88s | 25 (1.0s) | Preview/iteration |
+| HunyuanVideo 1.5 | 129 | 25 | 5.16s | 33 (1.32s) | Step-distilled available |
+| LTX-2 19B | varies | 24 | ~10s | 33 (1.375s) | Unified audio+video; frames must be 8n+1 |
+
+**The active engine's constraints are injected into segmentation and sub-clip splitting.** The pipeline must never assume a fixed max duration — always read from the engine config.
+
+```python
+# Engine constraint constants — single source of truth
+ENGINE_CONSTRAINTS = {
+    "humo_17b":     {"max_frames": 97,  "fps": 25, "min_frames": 25},
+    "humo_1.7b":    {"max_frames": 97,  "fps": 25, "min_frames": 25},
+    "hunyuan_1.5":  {"max_frames": 129, "fps": 25, "min_frames": 33},
+    "ltx2":         {"max_frames": 241, "fps": 24, "min_frames": 33},  # 8n+1
+}
 ```
 
 ### GPU Memory Map (Inference Workstation)
@@ -49,143 +80,185 @@ GPU0 — RTX 5090 (32 GB)          GPU1 — RTX 4080 (16 GB)
 │   bf16: ~24 GB          │       │ VAE              ~0.4 GB│
 │   FP8:  ~12 GB          │       │ Whisper          ~1.5 GB│
 ├─────────────────────────┤       │ Audio separator  ~0.5 GB│
-│ Stage 3: HuMo DiT       │       │                         │
-│   fp16: ~34 GB (swap)   │       │ Total: ~12.4 GB         │
-│   fp8:  ~18 GB          │       │ Headroom: ~3.6 GB       │
-│   gguf: 11–18.5 GB      │       └─────────────────────────┘
-│   preview (1.7B): ~3.4GB│
+│ Stage 3 (one at a time):│       │                         │
+│  HunyuanVideo 1.5       │       │ For LTX-2:              │
+│   bf16: ~17 GB          │       │  Gemma-3-12B Q4  ~8 GB  │
+│   FP8:  ~9 GB           │       │  Audio VAE       ~0.5 GB│
+│  LTX-2 19B              │       │  Video VAE       ~0.5 GB│
+│   FP8:  ~16 GB          │       │                         │
+│   Q4_K_M: ~14 GB        │       │ Total: ~12-13 GB        │
+│  HuMo 17B               │       │ Headroom: ~3-4 GB       │
+│   fp8:  ~18 GB          │       └─────────────────────────┘
+│   gguf: 11–18.5 GB      │
+│  HuMo 1.7B (preview)    │
+│   fp16: ~3.4 GB         │
 └─────────────────────────┘
 (Only one stage loaded at a time)
 ```
 
-## Data Model
+## Frame-Accurate Alignment System
 
-### Project Config (`project.yaml`)
+### The Alignment Problem
 
-```yaml
-project:
-  name: "My Music Video"
-  created: "2026-02-23T12:00:00Z"
+The segmentation stage produces scenes with arbitrary durations (2-10s). The video engine has a hard maximum clip length. Without careful alignment, three failure modes emerge:
 
-song:
-  audio_file: "input/song.wav"
-  lyrics_file: "input/lyrics.txt"       # User-provided or Whisper-generated
-  bpm: 120                               # Auto-detected or user-specified
-  duration_seconds: 180.0
-  keyscale: ""                           # Optional AceStep key/scale metadata
-  acestep: null                          # AceStep JSON metadata if available
+1. **Audio/video length mismatch** — A 9s scene produces 2-3 sub-clips of video, but audio is one 9s chunk. Sub-clip audio must be sliced frame-accurately after sub-clip frame counts are computed.
+2. **Tiny remainder sub-clips** — A 5.2s scene with a 3.88s engine max produces sub-clip A (3.88s) + sub-clip B (1.32s). The 1.32s clip may be too short for meaningful content or below the engine's minimum frame count.
+3. **Accumulated drift** — Floating-point second-based math drifts across scenes. Over 30+ scenes, rounding errors can shift the final video by multiple frames relative to the audio.
 
-style_sheet:
-  visual_style: "cinematic, moody lighting, shallow depth of field"
-  color_palette: "dark blues, warm amber highlights"
-  aspect_ratio: "16:9"
-  resolution: "1280x720"
+### Rule: Frames First, Seconds Derived
 
-  # Persistent elements injected into every image/video prompt
-  characters:
-    - id: "singer"
-      description: "Young woman with short black hair, angular features"
-      reference_image: "assets/characters/singer_ref.png"
-      lora_path: "assets/loras/singer_v1.safetensors"  # Optional
-      lora_weight: 0.8
+**All duration math uses integer frame counts.** Seconds are derived only for display and audio slicing. This eliminates floating-point drift.
 
-  props:
-    - id: "vintage_mic"
-      description: "Chrome vintage ribbon microphone on a black stand"
+```python
+FPS = 25  # or engine-specific
 
-  settings:
-    - id: "stage"
-      description: "Dimly lit stage with red velvet curtains and haze"
+def scene_frames(time_start: float, time_end: float, fps: int) -> int:
+    """Total frames for this scene. This is the authoritative duration."""
+    return round((time_end - time_start) * fps)
 
-video_engine: "humo"            # "humo" | "hunyuan_avatar" — project default
-
-humo:
-  tier: "fp8_scaled"          # fp16 | fp8_scaled | gguf_q8 | gguf_q6 | gguf_q4 | preview
-  resolution: "720p"          # "720p" (1280×720) or "480p" (832×480) or "384p" (688×384)
-  scale_a: 2.0                # Audio guidance strength
-  scale_t: 7.5                # Text guidance strength
-  denoising_steps: 50
-  block_swap_count: 0         # Blocks to swap CPU↔GPU; 0 = no swap
-  sub_clip_continuity: true   # Last frame of sub-clip N → reference for N+1
-
-hunyuan_avatar:
-  hva_repo_dir: ""            # Path to cloned HunyuanVideoAvatar repo
-  hva_venv_python: ""         # Path to python in HVA venv
-  checkpoint: "bf16"          # "bf16" (recommended) or "fp8"
-  image_size: 704
-  sample_n_frames: 129        # Fixed at 129 by HVA
-  infer_steps: 30
-  cfg_scale: 7.5
-  cpu_offload: true           # Required for ≤32GB VRAM
-
-image_gen:
-  model: "flux-dev"           # flux-dev | flux-schnell | z-image | z-image-turbo
-  quant: "auto"               # auto | bf16 | fp8 | int8
-  steps: null                 # null = auto (4 for schnell, 28 for dev, 8 for z-image-turbo)
-  guidance_scale: 3.5
-  lora_path: null             # Optional LoRA for character consistency
-  lora_weight: 0.8
-
-vocal_separation:
-  method: "roformer"          # roformer | demucs
-  roformer_model: "MelBandRoformer.ckpt"
-  demucs_model: "htdemucs"
+def frames_to_seconds(frames: int, fps: int) -> float:
+    """Derive seconds from frame count — never the other way around."""
+    return frames / fps
 ```
 
-### Scene Definition (`scenes.json`)
+### Sub-Clip Frame Splitting
 
-```json
-{
-  "scenes": [
-    {
-      "id": "scene_001",
-      "order": 1,
-      "time_start": 0.0,
-      "time_end": 3.88,
-      "type": "vocal",
-      "lyrics": "Standing in the rain tonight",
-      "audio_segment": "segments/scene_001.wav",
-      "audio_segment_vocal": "segments_vocal/scene_001_vocal.wav",
+When a scene exceeds the engine's max frames, it is split into sub-clips. The split algorithm guarantees:
 
-      "image_prompt": "A young woman with short black hair stands on a dimly lit stage...",
-      "image_prompt_user_override": null,
-      "reference_image": "images/scene_001.png",
-      "image_status": "pending",
+1. `sum(sub_clip_frames) == total_scene_frames` (exact, no drift)
+2. No sub-clip falls below `MIN_SUBCLIP_FRAMES`
+3. Sub-clips are as equal-length as possible to avoid one dominant clip and one tiny clip
 
-      "video_prompt": "A close-up of a young woman with short black hair singing...",
-      "video_prompt_user_override": null,
-      "video_clip": "clips/scene_001.mp4",
-      "video_status": "pending",
-      "video_engine": null,
+```python
+MIN_SUBCLIP_FRAMES = 38  # ~1.5s at 25fps — below this, content is meaningless
 
-      "sub_clips": [],
-
-      "characters": ["singer"],
-      "props": ["vintage_mic"],
-      "settings": ["stage"],
-
-      "notes": ""
-    }
-  ]
-}
+def compute_subclip_frames(total_frames: int, max_frames: int, min_frames: int) -> list[int]:
+    """
+    Divide total_frames into sub-clips respecting engine constraints.
+    
+    Returns a list of frame counts. sum(result) == total_frames always.
+    
+    Strategy:
+    - If total fits in one clip, return [total_frames]
+    - Otherwise compute n = ceil(total / max). If remainder < min_frames,
+      reduce n by 1 and redistribute evenly.
+    - Equal distribution: each clip gets total // n, first (total % n) clips
+      get one extra frame.
+    """
+    if total_frames <= max_frames:
+        return [total_frames]
+    
+    n = math.ceil(total_frames / max_frames)
+    remainder = total_frames - (n - 1) * max_frames
+    
+    # If remainder is too short, use fewer clips with equal distribution
+    if remainder < min_frames:
+        n -= 1
+        if n == 0:
+            return [total_frames]
+    
+    # Equal distribution across n clips
+    base = total_frames // n
+    extra = total_frames % n
+    
+    # First 'extra' clips get base+1 frames, rest get base
+    counts = [base + 1] * extra + [base] * (n - extra)
+    
+    assert sum(counts) == total_frames, \
+        f"Frame count mismatch: {sum(counts)} != {total_frames}"
+    assert all(c >= min_frames for c in counts), \
+        f"Sub-clip below minimum: {min(counts)} < {min_frames}"
+    assert all(c <= max_frames for c in counts), \
+        f"Sub-clip above maximum: {max(counts)} > {max_frames}"
+    
+    return counts
 ```
 
-### Key Design Decision: Sub-clips for Long Scenes
-
-Each video engine has a maximum clip duration. Scenes exceeding it are automatically split:
-- **HuMo:** 97 frames @ 25fps = 3.88s
-- **HunyuanVideo-Avatar:** 129 frames @ 25fps = 5.16s
-
-Example (HuMo, 3.88s max):
+**Example (HuMo, max=97 frames, min=25 frames):**
 
 ```
-Scene: 8 seconds (time 10.0 → 18.0)
-  ├── sub_clip_a: frames 0-96   (10.0 → 13.88s)
-  ├── sub_clip_b: frames 0-96   (13.88 → 17.76s)
-  └── sub_clip_c: frames 0-30   (17.76 → 18.0s)  ← partial
+Scene: 200 frames (8.0s)
+  ceil(200/97) = 3 sub-clips
+  remainder = 200 - 2*97 = 6 frames → below min (25)
+  Reduce to n=2: 200/2 = 100 each → exceeds max (97)
+  So use n=3 with equal distribution: 200//3 = 66, 200%3 = 2
+  Result: [67, 67, 66] — all within [25, 97] ✓
 ```
 
-Sub-clip continuity: last frame of sub-clip N is extracted via ffmpeg and used as the reference image for sub-clip N+1. This prevents visual discontinuity within a long scene but requires sequential generation.
+**Example (HunyuanVideo 1.5, max=129 frames, min=33 frames):**
+
+```
+Scene: 150 frames (6.0s)
+  ceil(150/129) = 2 sub-clips
+  remainder = 150 - 129 = 21 frames → below min (33)
+  Reduce to n=1: 150 > max (129), can't use 1 clip
+  Stay at n=2 with equal distribution: 150//2 = 75 each
+  Result: [75, 75] — all within [33, 129] ✓
+```
+
+### Sub-Clip Audio Slicing
+
+Audio segments for sub-clips are derived **from the sub-clip frame counts**, not from arbitrary time divisions:
+
+```python
+def slice_subclip_audio(
+    scene_audio: Path,
+    scene_id: str,
+    subclip_frames: list[int],
+    fps: int,
+    output_dir: Path,
+) -> list[Path]:
+    """
+    Slice a scene's audio segment into sub-clip audio files.
+    
+    Timing is derived from frame counts to maintain frame-accuracy.
+    Called AFTER compute_subclip_frames(), BEFORE video generation.
+    """
+    paths = []
+    cursor_frames = 0
+    
+    for i, n_frames in enumerate(subclip_frames):
+        start_sec = cursor_frames / fps
+        end_sec = (cursor_frames + n_frames) / fps
+        
+        sub_audio = output_dir / f"{scene_id}_sub_{i:02d}.wav"
+        slice_audio(scene_audio, sub_audio, start_sec, end_sec)
+        paths.append(sub_audio)
+        
+        cursor_frames += n_frames
+    
+    return paths
+```
+
+### Assembly Duration Assertion
+
+The rough cut assembler **must** verify that total video duration matches the original audio:
+
+```python
+def assemble_rough_cut(scenes, paths, original_audio, approved_only=True):
+    # ... concatenate video clips ...
+    
+    video_duration = get_video_duration(rough_cut_path)
+    audio_duration = get_audio_duration(original_audio)
+    fps = get_engine_fps()
+    
+    tolerance = 1.0 / fps  # one frame
+    drift = abs(video_duration - audio_duration)
+    
+    if drift > tolerance:
+        log.error(
+            "SYNC FAILURE: video=%.4fs, audio=%.4fs, drift=%.4fs (%.1f frames)",
+            video_duration, audio_duration, drift, drift * fps,
+        )
+        raise SyncError(
+            f"Video/audio duration mismatch: {drift:.4f}s "
+            f"({drift * fps:.1f} frames). Check sub-clip frame math."
+        )
+    
+    # Mux original uncut audio over the assembled video
+    mux_video_audio(rough_cut_path, original_audio, final_output_path)
+```
 
 ## Stage 1: Intake & Segmentation
 
@@ -206,26 +279,78 @@ Sub-clip continuity: last frame of sub-clip N is extracted via ffmpeg and used a
    - Skippable if lyrics are pre-provided
 
 3. **Scene Segmentation** (LLM-assisted, with rule-based fallback)
-   - Input: lyrics with timestamps, song structure (verse/chorus/bridge/instrumental)
-   - Rules:
-     - Minimum scene: 2 seconds
-     - Maximum scene: 10 seconds (split into sub-clips by HuMo engine; 3.88s hard limit)
-     - Prefer cuts on musical phrase boundaries (beat-snapped within 0.15s tolerance)
-     - Instrumental sections get their own scenes (type: "instrumental")
-   - Output: `scenes.json` with timestamps and types
-   - LLM fallback: `segment_scenes_simple()` rule-based segmenter (no LLM required)
+
+   Input: lyrics with timestamps, song structure (verse/chorus/bridge/instrumental)
+
+   **Engine-Aware Constraints** (injected into LLM prompt and rule-based splitter):
+   - Minimum scene duration: `min_frames / fps` seconds (engine-dependent)
+   - Maximum scene duration: 10 seconds (pipeline limit, not engine limit — sub-clips handle the rest)
+   - Preferred scene durations: clean multiples of `max_frames / fps`, or shorter
+   - Avoid scene durations that produce remainder sub-clips below `min_frames`
+   - Prefer cuts on musical phrase boundaries (beat-snapped within 0.15s tolerance)
+   - Instrumental sections get their own scenes (type: "instrumental")
+   - Scenes must NOT cross section boundaries
+
+   **Post-LLM Validation & Adjustment** (`_validate_and_adjust_scenes()`):
+
+   After the LLM returns scene boundaries, a post-processing pass enforces hard constraints:
+
+   ```python
+   def _validate_and_adjust_scenes(
+       scenes: list[Scene],
+       song_duration: float,
+       engine_config: EngineConstraints,
+       beat_times: list[float] | None = None,
+   ) -> list[Scene]:
+       """
+       Post-process LLM segmentation to enforce frame-accurate constraints.
+       
+       1. Convert all boundaries to frame numbers
+       2. Snap to beat times if available (within tolerance)
+       3. Check each scene's sub-clip remainder — if the last sub-clip would
+          be below min_frames, adjust the scene boundary:
+          a. Try shrinking (push remainder to next scene)
+          b. Try growing (absorb from next scene)
+          c. Pick whichever lands closer to a beat boundary
+       4. Verify first scene starts at frame 0, last ends at total_frames
+       5. Verify no gaps or overlaps between consecutive scenes
+       """
+   ```
+
+   **Segmentation System Prompt** (updated excerpt):
+
+   ```
+   Video engine constraints:
+   - Engine: {engine_name}
+   - Max clip: {max_clip_seconds}s ({max_frames} frames @ {fps}fps)
+   - Min clip: {min_clip_seconds}s ({min_frames} frames @ {fps}fps)
+   
+   Duration guidance:
+   - Preferred scene durations: ≤{max_clip_seconds}s (single clip) or
+     multiples of {max_clip_seconds}s (clean sub-clip split).
+   - Avoid durations that leave a remainder under {min_clip_seconds}s
+     when divided by {max_clip_seconds}s.
+     Example: {bad_duration_example}s is problematic
+     ({max_clip_seconds} + {bad_remainder}s). Prefer {good_duration_short}s
+     or {good_duration_long}s instead.
+   ```
+
+   Output: `scenes.json` with timestamps and types.
+
+   LLM fallback: `segment_scenes_simple()` rule-based segmenter (no LLM required).
 
 4. **Audio Slicing**
    - ffmpeg splits the full audio into per-scene WAV segments
    - Each segment saved as WAV (pcm_s16le) at original sample rate — sample-accurate
    - Vocal-separated versions also sliced (for Whisper only — see critical note below)
+   - **Sub-clip audio is NOT sliced at this stage** — it happens in Stage 3 after `compute_subclip_frames()` determines the exact frame counts
 
-> **⚠️ Critical: HuMo receives the full audio mix, not isolated vocals.** The vocal stem is used *only* to improve Whisper transcription accuracy. HuMo was trained on mixed audio — feeding it isolated vocals degrades A/V sync. Audio segments in `segments/` are always full-mix; `segments_vocal/` is consumed only by the transcription step.
+> **⚠️ Critical: The video engine receives the full audio mix, not isolated vocals.** The vocal stem is used *only* to improve Whisper transcription accuracy. HuMo/HunyuanVideo/LTX-2 were trained on mixed audio — feeding isolated vocals degrades A/V sync. Audio segments in `segments/` are always full-mix; `segments_vocal/` is consumed only by the transcription step.
 
 ### Outputs
 - `project.yaml` (initial)
-- `scenes.json` (scene list with timestamps)
-- `segments/` — per-scene WAV clips (full mix — fed to HuMo)
+- `scenes.json` (scene list with timestamps + frame counts)
+- `segments/` — per-scene WAV clips (full mix — fed to video engine)
 - `segments_vocal/` — per-scene WAV clips (vocal stem — Whisper only)
 
 ## Stage 2: Image Generation & Storyboard
@@ -256,61 +381,266 @@ Sub-clip continuity: last frame of sub-clip N is extracted via ffmpeg and used a
 - Updated `scenes.json` with image prompts and status
 - `images/` directory with reference images (`images/scene_001.png`, etc.)
 
-## Stage 3: Video Generation (HuMo)
+## Stage 3: Video Generation
+
+### Video Engine Selection
+
+The active video engine is set in `project.yaml` → `video_engine`. All engines follow the same interface: text prompt + reference image + audio segment → video clip.
+
+| Engine | Strengths | When to Use |
+|--------|----------|-------------|
+| HunyuanVideo 1.5 | Proven consumer GPU support, step-distilled fast mode, strong motion quality | Default for most projects |
+| LTX-2 | Unified audio+video generation, native lip sync, spatial/temporal upscalers | Music videos with singing/dialogue |
+| HuMo TIA | Audio-conditioned with dual CFG, character preservation | When audio reactivity is critical |
 
 ### Process
 
 1. **Video Prompt Generation** (LLM-assisted)
-   - Generate dense Qwen2.5-VL-style captions for each scene (HuMo's training style)
+   - Generate dense descriptive captions for each scene
    - More detailed than image prompt — describes motion, camera movement, expressions
    - Same LLM-unavailable fallback as image prompts
    - Auto-template anchors on image prompt, style sheet, and scene type
 
-2. **HuMo Inference** (TIA mode via `HumoEngine`)
-   - Input per scene: text prompt + reference image + audio segment (full mix)
-   - Config from `project.yaml` (`humo.tier`, `resolution`, `scale_a`, `scale_t`, `denoising_steps`)
-   - For scenes > 3.88s: `generate_scene()` automatically splits into sub-clips with last-frame chaining
-   - Seed: always resolved (random if not provided), recorded in `HumoOutput.seed_used`
-   - Block swap: `block_swap_count > 0` enables CPU↔GPU block migration to reduce DiT VRAM
+2. **Sub-Clip Planning** (frame-accurate)
 
-3. **TIA Denoising Loop** (dual CFG, 3 DiT passes per step)
-   ```
-   v_cond      = DiT(z + img_pos, t, pos_text, audio)
-   v_audio_neg = DiT(z + img_pos, t, pos_text, audio_zeros)
-   v_text_neg  = DiT(z + img_neg, t, neg_text, audio)
+   Before any video generation begins, compute the exact sub-clip frame counts for every scene:
 
-   v_pred = v_text_neg
-          + scale_a × (v_cond - v_audio_neg)
-          + (scale_t - 2.0) × (v_audio_neg - v_text_neg)
+   ```python
+   for scene in scenes:
+       total_frames = scene_frames(scene.time_start, scene.time_end, engine.fps)
+       scene.subclip_frame_counts = compute_subclip_frames(
+           total_frames, engine.max_frames, engine.min_frames
+       )
+       scene.generation_audio_segments = slice_subclip_audio(
+           scene_audio=paths.segment_path(scene.id),
+           scene_id=scene.id,
+           subclip_frames=scene.subclip_frame_counts,
+           fps=engine.fps,
+           output_dir=paths.sub_segment_dir,
+       )
    ```
+
+   This is computed **once** and saved to `scenes.json`. Video generation reads it — never recomputes.
+
+3. **Video Inference** (per sub-clip)
+   - Input per sub-clip: text prompt + reference image + audio segment
+   - For sub-clip 0: reference image is the scene's FLUX-generated image
+   - For sub-clip N (N>0): reference image is the last frame of sub-clip N-1 (continuity chaining)
+   - Seed: always resolved (random if not provided), recorded in output
+   - Config from `project.yaml` (engine-specific section)
 
 4. **Scene Review** *(planned — not built)*
    - API endpoints for per-scene video status exist
    - Visual clip review UI is not yet built
 
 ### Outputs
-- Updated `scenes.json` with video prompts and status
+- Updated `scenes.json` with video prompts, sub-clip frame counts, and status
 - `clips/scene_001.mp4`, `clips/scene_002.mp4`, etc.
 - `clips/sub/scene_003_a.mp4`, `clips/sub/scene_003_b.mp4` (sub-clips for long scenes)
+- `clips/sub/scene_003_a_lastframe.png` (continuity frames)
 
 ## Stage 4: Assembly & Export
 
 ### Process
 
 1. **Concatenation** (`assemble_rough_cut()`)
-   - Sorts scenes by `order`, joins sub-clips first
+   - Sorts scenes by `order`, joins sub-clips within each scene first
    - ffmpeg concat demuxer (no re-encode)
-   - Muxes original full-song audio back over the assembled video
+   - **Duration assertion**: verifies total video duration matches audio within 1 frame (see Frame-Accurate Alignment System)
+   - Muxes original full-song audio (uncut) back over the assembled silent video
+   - The generation audio segments are discarded at this point — they served their purpose
 
 2. **Export Formats**
-   - **Rough Cut**: `output/rough_cut.mp4` — full song, all scenes assembled
+   - **Rough Cut**: `output/rough_cut.mp4` — full song, all scenes assembled, original audio
    - **EDL**: `output/timeline.edl` — CMX 3600 format, DaVinci Resolve compatible
    - **FCPXML**: `output/timeline.fcpxml` — FCPXML 1.10, DaVinci Resolve 18+ / Final Cut Pro
+
+3. **Individual Scene Exports**
+   - Each scene clip retains its generation audio (for lip sync preview/QA)
+   - These are NOT used in the final rough cut
 
 ### Outputs
 - `output/rough_cut.mp4`
 - `output/timeline.edl`
 - `output/timeline.fcpxml`
+
+## Data Model
+
+### Project Config (`project.yaml`)
+
+```yaml
+song:
+  audio_file: "input/song.wav"
+  lyrics_file: "input/lyrics.txt"
+  bpm: null                     # Auto-detected if null
+  acestep:
+    json_file: null             # AceStep companion JSON
+    caption: null
+    lyrics: null
+
+video_engine: "hunyuan_1.5"    # hunyuan_1.5 | ltx2 | humo_17b | humo_1.7b
+
+humo:
+  tier: "fp8_scaled"
+  resolution: 512
+  scale_a: 3.0
+  scale_t: 5.0
+  denoising_steps: 50
+  block_swap_count: 0
+  sub_clip_continuity: true
+
+hunyuan:
+  checkpoint: "bf16"
+  image_size: 704
+  sample_n_frames: 129
+  infer_steps: 30
+  cfg_scale: 7.5
+  cpu_offload: true
+
+ltx2:
+  precision: "fp8"              # bf16 | fp8 | q6_k | q4_k_m
+  distilled: false              # Use 8-step distilled LoRA
+  spatial_upscale: false
+  temporal_upscale: false
+
+image_gen:
+  model: "flux-dev"
+  quant: "auto"
+  steps: null
+  guidance_scale: 3.5
+  lora_path: null
+  lora_weight: 0.8
+
+vocal_separation:
+  method: "roformer"
+  roformer_model: "MelBandRoFormer.ckpt"
+  demucs_model: "htdemucs"
+```
+
+### Scene Definition (`scenes.json`)
+
+```json
+{
+  "scenes": [
+    {
+      "id": "scene_001",
+      "order": 1,
+      "time_start": 0.0,
+      "time_end": 3.88,
+      "frame_start": 0,
+      "frame_end": 97,
+      "total_frames": 97,
+      "type": "vocal",
+      "section": "verse_1",
+      "lyrics": "Standing in the rain tonight",
+
+      "audio_segment": "segments/scene_001.wav",
+      "audio_segment_vocal": "segments_vocal/scene_001_vocal.wav",
+
+      "subclip_frame_counts": [97],
+      "generation_audio_segments": ["segments/scene_001.wav"],
+
+      "image_prompt": "A young woman with short black hair stands on a dimly lit stage...",
+      "image_prompt_user_override": null,
+      "reference_image": "images/scene_001.png",
+      "image_status": "pending",
+
+      "video_prompt": "A close-up of a young woman with short black hair singing...",
+      "video_prompt_user_override": null,
+      "video_clip": "clips/scene_001.mp4",
+      "video_status": "pending",
+      "video_engine": "hunyuan_1.5",
+
+      "sub_clips": [],
+
+      "characters": ["singer"],
+      "props": ["vintage_mic"],
+      "settings": ["stage"],
+
+      "notes": ""
+    },
+    {
+      "id": "scene_005",
+      "order": 5,
+      "time_start": 15.0,
+      "time_end": 23.0,
+      "frame_start": 375,
+      "frame_end": 575,
+      "total_frames": 200,
+      "type": "vocal",
+      "section": "chorus",
+      "lyrics": "We could be forever young, dancing under neon lights...",
+
+      "audio_segment": "segments/scene_005.wav",
+      "audio_segment_vocal": "segments_vocal/scene_005_vocal.wav",
+
+      "subclip_frame_counts": [67, 67, 66],
+      "generation_audio_segments": [
+        "segments/sub/scene_005_sub_00.wav",
+        "segments/sub/scene_005_sub_01.wav",
+        "segments/sub/scene_005_sub_02.wav"
+      ],
+
+      "image_prompt": "...",
+      "image_prompt_user_override": null,
+      "reference_image": "images/scene_005.png",
+      "image_status": "approved",
+
+      "video_prompt": "...",
+      "video_prompt_user_override": null,
+      "video_clip": null,
+      "video_status": "pending",
+      "video_engine": "hunyuan_1.5",
+
+      "sub_clips": [
+        "clips/sub/scene_005_a.mp4",
+        "clips/sub/scene_005_b.mp4",
+        "clips/sub/scene_005_c.mp4"
+      ],
+
+      "characters": ["singer", "dancer"],
+      "props": [],
+      "settings": ["neon_club"],
+
+      "notes": "3 sub-clips, equal distribution (67+67+66=200 frames)"
+    }
+  ]
+}
+```
+
+### Key Design Decision: Sub-clips for Long Scenes
+
+Each video engine has a maximum clip duration. Scenes exceeding it are automatically split into sub-clips using frame-count-first math (see Frame-Accurate Alignment System above).
+
+**Sub-clip continuity**: last frame of sub-clip N is extracted via ffmpeg and used as the reference image for sub-clip N+1. This prevents visual discontinuity within a long scene but requires sequential generation. Disable via engine config `sub_clip_continuity: false`.
+
+**Sub-clip audio**: sliced from the scene's full-mix audio segment using frame-derived timestamps. Stored in `segments/sub/`. These are generation-only artifacts — assembly uses the original uncut audio.
+
+## Audio Pipeline Clarification
+
+Three distinct audio paths exist in the pipeline. Conflating them causes bugs.
+
+```
+Original Song Audio (input/song.wav)
+  │
+  ├─→ Vocal Separation → vocal stem → Whisper transcription (ONLY)
+  │                       └─→ segments_vocal/scene_XXX_vocal.wav
+  │
+  ├─→ Per-Scene Slicing → segments/scene_XXX.wav (full mix)
+  │                         │
+  │                         └─→ Per-Sub-Clip Slicing (Stage 3)
+  │                              └─→ segments/sub/scene_XXX_sub_NN.wav
+  │                                   └─→ Fed to video engine for generation
+  │
+  └─→ Final Assembly → muxed directly over concatenated video (UNCUT)
+       This is the ONLY audio in the final output.
+```
+
+**Rules:**
+- Video engines always receive **full-mix audio**, never isolated vocals.
+- Sub-clip audio boundaries are derived from **frame counts**, never arbitrary time splits.
+- The final rough cut uses the **original uncut song file**, not reassembled segments.
+- Individual scene clips keep their generation audio for QA preview only.
 
 ## Directory Structure
 
@@ -326,9 +656,13 @@ my_music_video/
 │   ├── props/
 │   ├── settings/
 │   └── loras/
-├── segments/                  # Full mix — fed to HuMo
+├── segments/                  # Full mix — fed to video engine
 │   ├── scene_001.wav
-│   └── ...
+│   ├── scene_005.wav
+│   └── sub/                   # Sub-clip audio (generation only)
+│       ├── scene_005_sub_00.wav
+│       ├── scene_005_sub_01.wav
+│       └── scene_005_sub_02.wav
 ├── segments_vocal/            # Vocal stem — Whisper transcription only
 │   ├── scene_001_vocal.wav
 │   └── ...
@@ -339,11 +673,13 @@ my_music_video/
 │   ├── scene_001.mp4
 │   ├── scene_002.mp4
 │   └── sub/
-│       ├── scene_003_a.mp4
-│       ├── scene_003_a_lastframe.png   ← continuity frame for sub-clip chaining
-│       └── scene_003_b.mp4
+│       ├── scene_005_a.mp4
+│       ├── scene_005_a_lastframe.png   ← continuity frame for sub-clip chaining
+│       ├── scene_005_b.mp4
+│       ├── scene_005_b_lastframe.png
+│       └── scene_005_c.mp4
 └── output/
-    ├── rough_cut.mp4
+    ├── rough_cut.mp4           ← original uncut audio muxed here
     ├── timeline.edl
     └── timeline.fcpxml
 ```
@@ -354,144 +690,153 @@ my_music_video/
 src/musicvision/
 ├── __init__.py
 ├── cli.py                    # CLI entry point
-├── llm.py                    # Unified LLM client (Anthropic + OpenAI-compat/vLLM)
-├── models.py                 # All Pydantic v2 data models
-├── project.py                # ProjectService (lifecycle, persistence)
-├── api/
-│   ├── __init__.py
-│   └── app.py                # FastAPI application (25+ endpoints, Swagger at /docs)
+├── api.py                    # FastAPI REST API
+├── llm.py                    # Unified LLM client (Anthropic + OpenAI/vLLM)
+├── models.py                 # Pydantic v2 data models
+├── engine_registry.py        # Engine constraints, frame math, sub-clip computation
 ├── intake/
-│   ├── __init__.py
-│   ├── audio_analysis.py     # BPM detection, vocal separation (RoFormer + Demucs)
-│   ├── pipeline.py           # run_intake() orchestrator
-│   ├── segmentation.py       # LLM-assisted scene segmentation + rule-based fallback
-│   └── transcription.py      # Whisper transcription + timestamp alignment
+│   ├── audio_analysis.py     # BPM detection, vocal separation
+│   ├── transcription.py      # Whisper large-v3 transcription + alignment
+│   ├── segmentation.py       # LLM-assisted scene segmentation + post-processing
+│   └── pipeline.py           # Intake orchestrator
 ├── imaging/
-│   ├── __init__.py
-│   ├── base.py               # Abstract ImageEngine base
-│   ├── factory.py            # create_image_engine()
-│   ├── flux_engine.py        # FLUX inference, VRAM-tiered loading
-│   ├── prompt_generator.py   # LLM-assisted FLUX prompt generation
-│   └── zimage_engine.py      # Placeholder / alternative engine stub
+│   ├── prompt_generator.py   # LLM-assisted FLUX image prompts
+│   ├── flux_engine.py        # FLUX inference wrapper
+│   └── storyboard.py         # Storyboard management
 ├── video/
-│   ├── __init__.py
-│   ├── audio_encoder.py      # HumoAudioEncoder: Whisper → 5-band features → windows
-│   ├── base.py               # Abstract VideoEngine base
-│   ├── block_swap.py         # BlockSwapManager: CPU↔GPU block migration
-│   ├── factory.py            # create_video_engine()
-│   ├── humo_engine.py        # HumoEngine: TIA inference orchestration
-│   ├── model_loader.py       # Tiered loaders (FP16, FP8Scaled, GGUF, Preview1.7B)
-│   ├── prompt_generator.py   # LLM-assisted HuMo video prompt generation
-│   ├── scheduler.py          # FlowMatchScheduler (Euler, shift=5.0)
-│   ├── wan_model.py          # Self-contained WanModel DiT (no wan.modules dependency)
-│   ├── wan_t5.py             # WanT5Encoder wrapping HuggingFace T5EncoderModel
-│   ├── wan_vae.py            # WanVideoVAE with CausalConv3d
-│   └── weight_registry.py    # Weight spec, locate/download/status functions
+│   ├── prompt_generator.py   # LLM-assisted video prompts
+│   ├── engine_base.py        # Abstract video engine interface
+│   ├── humo_engine.py        # HuMo TIA inference wrapper
+│   ├── hunyuan_engine.py     # HunyuanVideo 1.5 wrapper
+│   ├── ltx2_engine.py        # LTX-2 wrapper
+│   └── scene_manager.py      # Scene review/regeneration
 ├── assembly/
-│   ├── __init__.py
-│   ├── concatenator.py       # assemble_rough_cut() via ffmpeg concat demuxer
-│   ├── exporter.py           # export_edl() CMX 3600, export_fcpxml() FCPXML 1.10
+│   ├── concatenator.py       # ffmpeg clip joining + audio sync + duration assertion
+│   ├── exporter.py           # FCPXML/EDL generation
 │   └── timecode.py           # Timecode utilities
+├── vendor/                   # Vendored/patched model code
 └── utils/
-    ├── __init__.py
-    ├── audio.py              # ffmpeg wrappers: slice_audio(), mux_video_audio()
-    ├── gpu.py                # GPU detection, DeviceMap, recommend_tier(), vram_info()
-    └── paths.py              # ProjectPaths: all canonical project directory/file paths
+    ├── audio.py              # ffmpeg wrappers, slice, mux, duration
+    ├── gpu.py                # Device map, VRAM tier, recommend_tier()
+    └── paths.py              # ProjectPaths helper
 ```
 
-## API Architecture (Current)
+### New Module: `engine_registry.py`
 
-The pipeline is driven by a FastAPI REST API. A frontend has not been built yet — all interaction is via the API (Swagger UI at `/docs`) or CLI.
+Single source of truth for engine constraints and frame math:
 
-### Key Endpoints
+```python
+"""
+Engine constraints and frame-accurate sub-clip computation.
 
+This module is the ONLY place engine max/min frames, FPS, and sub-clip
+math are defined. All other modules import from here.
+"""
+
+import math
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class EngineConstraints:
+    name: str
+    max_frames: int
+    min_frames: int
+    fps: int
+    
+    @property
+    def max_seconds(self) -> float:
+        return self.max_frames / self.fps
+    
+    @property
+    def min_seconds(self) -> float:
+        return self.min_frames / self.fps
+
+ENGINES = {
+    "humo_17b":    EngineConstraints("HuMo 17B",          max_frames=97,  min_frames=25, fps=25),
+    "humo_1.7b":   EngineConstraints("HuMo 1.7B",         max_frames=97,  min_frames=25, fps=25),
+    "hunyuan_1.5": EngineConstraints("HunyuanVideo 1.5",  max_frames=129, min_frames=33, fps=25),
+    "ltx2":        EngineConstraints("LTX-2 19B",         max_frames=241, min_frames=33, fps=24),
+}
+
+def get_engine(name: str) -> EngineConstraints:
+    if name not in ENGINES:
+        raise ValueError(f"Unknown engine: {name}. Available: {list(ENGINES.keys())}")
+    return ENGINES[name]
+
+def scene_frames(time_start: float, time_end: float, fps: int) -> int:
+    return round((time_end - time_start) * fps)
+
+def compute_subclip_frames(
+    total_frames: int,
+    max_frames: int,
+    min_frames: int,
+) -> list[int]:
+    """See Frame-Accurate Alignment System section for algorithm."""
+    if total_frames <= max_frames:
+        return [total_frames]
+    
+    n = math.ceil(total_frames / max_frames)
+    remainder = total_frames - (n - 1) * max_frames
+    
+    if remainder < min_frames:
+        n -= 1
+        if n == 0:
+            return [total_frames]
+    
+    base = total_frames // n
+    extra = total_frames % n
+    counts = [base + 1] * extra + [base] * (n - extra)
+    
+    assert sum(counts) == total_frames
+    assert all(c >= min_frames for c in counts)
+    assert all(c <= max_frames for c in counts)
+    
+    return counts
 ```
-POST   /api/projects/create
-POST   /api/projects/open
-GET    /api/projects/config
-PUT    /api/projects/config
-PUT    /api/projects/config/style-sheet
-PUT    /api/projects/config/humo
-PUT    /api/projects/config/image-gen
 
-POST   /api/upload/audio
-POST   /api/upload/lyrics
-POST   /api/upload/acestep-json
+## REST API Endpoints
 
-GET    /api/scenes
-GET    /api/scenes/{id}
-PATCH  /api/scenes/{id}
-POST   /api/scenes/approve-all
+*(No changes to existing API endpoints. All 25+ endpoints remain as-is.)*
 
-POST   /api/pipeline/intake
-POST   /api/pipeline/generate-images
-POST   /api/pipeline/generate-videos
-POST   /api/pipeline/assemble
-```
+## CLI Commands
 
-### CLI Commands
+*(No changes to existing CLI. The `--video-engine` flag selects the active engine.)*
 
-```bash
-musicvision create <dir> --name "My Video"
-musicvision serve <dir> [--port 8000]
-musicvision info <dir>
-musicvision detect-hardware
-musicvision download-weights --tier {fp16|fp8_scaled|gguf_q8|gguf_q6|gguf_q4|preview}
-musicvision generate-video --project <dir> [--tier X] [--block-swap N] [--scene-ids ...]
-```
+## UI Plans
 
-## Planned Frontend (Not Built)
+### Layout: Tabbed Storyboard
 
-The intended user workflow is a storyboard-style UI. The REST API is designed to support it; the UI itself is not started. Two candidate approaches:
+**Tab 1: Project Setup** — Song upload, lyrics, engine selection, style sheet editor
 
-### Option A: React (preferred)
-CORS already open for Vite/CRA default ports. All data flows through the REST API.
+**Tab 2: Segmentation Editor** — Timeline view of scenes with:
+- Waveform display with scene boundaries
+- Drag-to-adjust scene boundaries (with frame-snap feedback)
+- Sub-clip preview: visual indicator showing how each scene will split
+- Per-scene type toggle (vocal/instrumental)
+- "Re-segment" button to re-run LLM segmentation
 
-### Option B: Gradio
-Simpler to build. Would replace (or wrap) the CLI.
+**Tab 3: Scene Grid** — Storyboard view:
 
-### Intended Tab Layout
-
-**Tab 1: Project Setup**
-- Song upload (WAV/MP3/FLAC) + lyrics upload or paste
-- Style sheet editor (visual style, color palette, characters, props, settings)
-- LoRA management (upload, assign to characters)
-- HuMo/FLUX config (tier, guidance scales, resolution)
-
-**Tab 2: Segmentation**
-- Lyrics display with word-level timestamps (from Whisper)
-- Editable scene boundary markers
-- Scene list with type labels (vocal/instrumental)
-- "Re-segment" button
-
-**Tab 3: Storyboard (main workflow)**
-
-Grid layout — one row per scene:
-
-| Column | Content | Interactive |
+| Column | Content | Interaction |
 |--------|---------|------------|
-| 1. Scene Info | Lyrics text (or "Instrumental"), timestamp range | Read-only |
-| 2. Reference Image | Generated image thumbnail | Click to enlarge |
-| 3. Image Prompt | Editable textbox with generated prompt | User editable + "Regenerate" |
-| 4. Video Prompt | Editable textbox + LoRA selector | User editable + "Regenerate" |
+| 1. ID | Scene number + section label | — |
+| 2. Time | Start → End (frames) | — |
+| 3. Lyrics | Scene lyrics excerpt | Editable |
+| 4. Reference Image | Generated thumbnail | Click to regenerate |
 | 5. Video Clip | Generated video player | Click to play + "Regenerate" |
 | 6. Status | Approve/reject toggles for image and video | Toggle |
+| 7. Sub-clips | Sub-clip count + frame distribution | Expandable detail |
 
-- Each row operates independently — regenerating scene 5 doesn't touch scene 4
-- Batch operations: "Generate All Images", "Generate All Videos", "Approve All"
-
-**Tab 4: Assembly & Export**
-- Full rough-cut video player with audio
-- Export controls: rough cut MP4, EDL, FCPXML
+**Tab 4: Assembly & Export** — Full rough-cut video player with original audio, export controls
 
 ## Open Questions / Future Work
 
 - **Frontend**: React vs Gradio — not decided. REST API is UI-agnostic.
-- **Progress feedback**: No SSE/WebSocket for long-running jobs. API endpoints are synchronous — a 50-scene video gen blocks for hours with no progress feedback.
-- **Partial failure recovery**: Exception propagates on failure; already-generated clips survive. Workaround: `--scene-ids` CLI flag. Needs a proper job/resume model.
+- **Progress feedback**: No SSE/WebSocket for long-running jobs. API endpoints are synchronous.
+- **Partial failure recovery**: Exception propagates on failure; already-generated clips survive. Needs a proper job/resume model.
 - **Transitions**: Currently hard cuts only. Future: AI-generated transitions, crossfades.
 - **Batch rendering**: Scenes generate sequentially. Future: multi-GPU or cloud parallelism.
 - **LoRA training**: Pipeline accepts LoRA paths but doesn't include training workflows.
-- **Camera movement**: HuMo handles some implicit camera motion via prompting. Could add explicit camera control via prompt templates.
-- **Character consistency**: LoRA is the current approach. Could explore IP-Adapter or other identity preservation methods.
-- **Render time estimation**: No upfront time estimate for users. 3× DiT passes × 50 steps × N scenes can take many hours.
+- **LTX-2 integration depth**: Unified audio+video generation could eliminate the separate audio slicing step entirely for some workflows. Needs investigation.
+- **Engine hot-swap**: Allow different engines per scene (e.g., LTX-2 for vocal scenes, HunyuanVideo for instrumentals).
+- **Render time estimation**: No upfront time estimate for users.
