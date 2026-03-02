@@ -1,8 +1,9 @@
-import type { ProjectConfig, Scene } from "../api/types";
+import type { PipelineStage, ProjectConfig, Scene } from "../api/types";
 
 interface Props {
   config: ProjectConfig;
   scenes: Scene[];
+  stage: PipelineStage;
 }
 
 function formatDuration(seconds: number | null): string {
@@ -12,7 +13,14 @@ function formatDuration(seconds: number | null): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-export default function ProjectHeader({ config, scenes }: Props) {
+const STAGE_LABELS: Record<PipelineStage, string> = {
+  upload: "Upload",
+  intake: "Intake",
+  images: "Images",
+  videos: "Videos",
+};
+
+export default function ProjectHeader({ config, scenes, stage }: Props) {
   const withImages = scenes.filter((s) => s.reference_image).length;
   const withVideo = scenes.filter(
     (s) => s.video_clip || s.sub_clips.some((sc) => sc.video_clip),
@@ -35,6 +43,7 @@ export default function ProjectHeader({ config, scenes }: Props) {
           <span className="stat">
             {withVideo}/{scenes.length} video
           </span>
+          <span className="stage-badge">{STAGE_LABELS[stage]}</span>
         </div>
       </div>
     </header>

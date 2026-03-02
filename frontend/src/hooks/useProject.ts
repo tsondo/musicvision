@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { getConfig, openProject, ApiError } from "../api/client";
+import { createProject, getConfig, openProject, ApiError } from "../api/client";
 import type { ProjectConfig } from "../api/types";
 
 export type ProjectState =
@@ -40,11 +40,24 @@ export function useProject() {
     }
   }, []);
 
+  const create = useCallback(async (name: string, directory: string) => {
+    setState({ status: "loading" });
+    try {
+      await createProject(name, directory);
+      localStorage.setItem(LAST_PROJECT_KEY, directory);
+      const config = await getConfig();
+      setState({ status: "loaded", config });
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.detail : String(err);
+      setState({ status: "error", message: msg });
+    }
+  }, []);
+
   useEffect(() => {
     tryLoadConfig();
   }, [tryLoadConfig]);
 
   const lastProjectPath = localStorage.getItem(LAST_PROJECT_KEY) ?? "";
 
-  return { state, open, reload: tryLoadConfig, lastProjectPath };
+  return { state, open, create, reload: tryLoadConfig, lastProjectPath };
 }

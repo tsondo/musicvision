@@ -9,6 +9,7 @@ import SceneRow from "./SceneRow";
 interface Props {
   scenes: Scene[];
   generating: Set<string>;
+  pipelineRunning?: boolean;
   onUpdate: (sceneId: string, updates: UpdateSceneRequest) => Promise<Scene>;
   onRegenImage: (
     sceneId: string,
@@ -23,6 +24,7 @@ interface Props {
 export default function Storyboard({
   scenes,
   generating,
+  pipelineRunning,
   onUpdate,
   onRegenImage,
   onRegenVideo,
@@ -30,7 +32,7 @@ export default function Storyboard({
   if (scenes.length === 0) {
     return (
       <div className="empty-state">
-        No scenes yet. Run the intake pipeline first.
+        No scenes yet. Use the pipeline controls above to run intake.
       </div>
     );
   }
@@ -53,6 +55,7 @@ export default function Storyboard({
           key={scene.id}
           scene={scene}
           generating={generating}
+          disabled={pipelineRunning}
           onUpdate={onUpdate}
           onRegenImage={onRegenImage}
           onRegenVideo={onRegenVideo}

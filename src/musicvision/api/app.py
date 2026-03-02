@@ -106,7 +106,9 @@ class RegenerateVideoRequest(BaseModel):
 @app.post("/api/projects/create")
 async def create_project(req: CreateProjectRequest):
     global _project
-    _project = ProjectService.create(Path(req.directory), name=req.name)
+    project_dir = Path(req.directory).resolve()
+    _project = ProjectService.create(project_dir, name=req.name)
+    mount_project_files(project_dir)
     return {"status": "created", "name": req.name, "directory": req.directory}
 
 

@@ -92,3 +92,17 @@ export interface RegenerateVideoRequest {
   engine?: VideoEngineType;
   seed?: number;
 }
+
+export interface IntakeResult {
+  status: string;
+  scene_count: number;
+}
+
+export interface BatchGenResult {
+  status: string;
+  generated: string[];
+  failed: { scene_id: string; error: string }[];
+  total: number;
+}
+
+export type PipelineStage = "upload" | "intake" | "images" | "videos";

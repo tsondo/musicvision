@@ -1,4 +1,6 @@
 import type {
+  BatchGenResult,
+  IntakeResult,
   ProjectConfig,
   RegenerateImageRequest,
   RegenerateVideoRequest,
@@ -29,6 +31,16 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 export async function getConfig(): Promise<ProjectConfig> {
   return request("/api/projects/config");
+}
+
+export async function createProject(
+  name: string,
+  directory: string,
+): Promise<{ status: string; name: string; directory: string }> {
+  return request("/api/projects/create", {
+    method: "POST",
+    body: JSON.stringify({ name, directory }),
+  });
 }
 
 export async function openProject(
@@ -85,6 +97,65 @@ export async function assemblePreview(): Promise<{
   return request("/api/pipeline/assemble", {
     method: "POST",
     body: JSON.stringify({}),
+  });
+}
+
+export async function uploadAudio(
+  file: File,
+): Promise<{ status: string; path: string }> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch("/api/upload/audio", { method: "POST", body: form });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new ApiError(res.status, body.detail ?? res.statusText);
+  }
+  return res.json();
+}
+
+export async function uploadLyrics(
+  file: File,
+): Promise<{ status: string; path: string }> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch("/api/upload/lyrics", { method: "POST", body: form });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new ApiError(res.status, body.detail ?? res.statusText);
+  }
+  return res.json();
+}
+
+export async function runIntake(opts?: {
+  useLlm?: boolean;
+  skipTranscription?: boolean;
+}): Promise<IntakeResult> {
+  const params = new URLSearchParams();
+  if (opts?.useLlm !== undefined)
+    params.set("use_llm", String(opts.useLlm));
+  if (opts?.skipTranscription !== undefined)
+    params.set("skip_transcription", String(opts.skipTranscription));
+  const qs = params.toString();
+  return request(`/api/pipeline/intake${qs ? `?${qs}` : ""}`, {
+    method: "POST",
+  });
+}
+
+export async function generateAllImages(
+  sceneIds?: string[],
+): Promise<BatchGenResult> {
+  return request("/api/pipeline/generate-images", {
+    method: "POST",
+    body: JSON.stringify({ scene_ids: sceneIds ?? [] }),
+  });
+}
+
+export async function generateAllVideos(
+  sceneIds?: string[],
+): Promise<BatchGenResult> {
+  return request("/api/pipeline/generate-videos", {
+    method: "POST",
+    body: JSON.stringify({ scene_ids: sceneIds ?? [] }),
   });
 }
 

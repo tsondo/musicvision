@@ -12,6 +12,7 @@ import type {
 interface Props {
   scene: Scene;
   generating: Set<string>;
+  disabled?: boolean;
   onUpdate: (sceneId: string, updates: UpdateSceneRequest) => Promise<Scene>;
   onRegenImage: (
     sceneId: string,
@@ -32,6 +33,7 @@ function formatTime(seconds: number): string {
 export default function SceneRow({
   scene,
   generating,
+  disabled,
   onUpdate,
   onRegenImage,
   onRegenVideo,
@@ -202,7 +204,7 @@ export default function SceneRow({
         </div>
         <button
           onClick={handleRegenImage}
-          disabled={isGenImage || !imagePrompt}
+          disabled={isGenImage || !imagePrompt || disabled}
           className="btn-regen"
         >
           {isGenImage ? "Generating..." : "Regenerate"}
@@ -241,7 +243,7 @@ export default function SceneRow({
         </div>
         <button
           onClick={handleRegenVideo}
-          disabled={isGenVideo || !videoPrompt || !scene.reference_image}
+          disabled={isGenVideo || !videoPrompt || !scene.reference_image || disabled}
           className="btn-regen"
         >
           {isGenVideo ? "Generating..." : "Regenerate"}
