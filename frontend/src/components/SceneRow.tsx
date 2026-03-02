@@ -63,6 +63,11 @@ export default function SceneRow({
   const hasImage = Boolean(scene.reference_image);
   const hasVideo = Boolean(scene.video_clip) || scene.sub_clips.some((sc) => sc.video_clip);
 
+  // Resolve the first available video clip path for preview
+  const videoClipPath = scene.video_clip || scene.sub_clips.find((sc) => sc.video_clip)?.video_clip || null;
+  const [showVideo, setShowVideo] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
   // Bump image version when image_status changes (new generation completed)
   const lastImageRef = useRef(scene.image_status);
   if (lastImageRef.current !== scene.image_status) {
@@ -217,9 +222,28 @@ export default function SceneRow({
         )}
       </div>
 
-      {/* Image thumbnail */}
-      <div className="cell cell-image">
-        {scene.reference_image ? (
+      {/* Image / Video thumbnail */}
+      <div
+        className={`cell cell-image${hasVideo ? " has-video" : ""}`}
+        onClick={() => {
+          if (!hasVideo) return;
+          setShowVideo((prev) => {
+            if (!prev && videoRef.current) videoRef.current.currentTime = 0;
+            return !prev;
+          });
+        }}
+      >
+        {showVideo && videoClipPath ? (
+          <video
+            ref={videoRef}
+            src={fileUrl(videoClipPath, imgVersion)}
+            autoPlay
+            loop
+            muted
+            playsInline
+            onEnded={() => setShowVideo(false)}
+          />
+        ) : scene.reference_image ? (
           <img
             src={fileUrl(scene.reference_image, imgVersion)}
             alt={`Scene ${scene.id}`}
@@ -227,6 +251,11 @@ export default function SceneRow({
           />
         ) : (
           <div className="image-placeholder">No image</div>
+        )}
+        {hasVideo && !showVideo && (
+          <div className="video-play-overlay" title="Click to preview video">
+            &#9654;
+          </div>
         )}
       </div>
 
