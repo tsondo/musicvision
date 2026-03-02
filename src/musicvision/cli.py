@@ -49,16 +49,22 @@ def cmd_serve(args: argparse.Namespace) -> None:
     from musicvision.api.app import app, mount_project_files
     from musicvision.project import ProjectService
 
-    project_dir = Path(args.directory).resolve()
+    if args.directory:
+        project_dir = Path(args.directory).resolve()
 
-    import musicvision.api.app as api_module
+        import musicvision.api.app as api_module
 
-    api_module._project = ProjectService.open(project_dir)
-    mount_project_files(project_dir)
+        api_module._project = ProjectService.open(project_dir)
+        mount_project_files(project_dir)
 
-    print(f"✓ Serving project '{api_module._project.config.name}'")
+        print(f"✓ Serving project '{api_module._project.config.name}'")
+        print(f"  Project:  {project_dir}")
+    else:
+        print("✓ Starting server with no project loaded")
+        print("  Use the frontend to create or open a project")
+
     print(f"  API:      http://localhost:{args.port}/docs")
-    print(f"  Project:  {project_dir}")
+    print(f"  Frontend: http://localhost:5173")
 
     uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="info")
 
@@ -533,8 +539,8 @@ def main() -> None:
     p_create.add_argument("--name", default="Untitled Project", help="Project name")
 
     # serve
-    p_serve = sub.add_parser("serve", help="Start the API server for a project")
-    p_serve.add_argument("directory", help="Project directory path")
+    p_serve = sub.add_parser("serve", help="Start the API server (optionally with a project)")
+    p_serve.add_argument("directory", nargs="?", default=None, help="Project directory path (optional — omit to start empty)")
     p_serve.add_argument("--port", type=int, default=8000, help="Port to serve on")
 
     # info
