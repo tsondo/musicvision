@@ -64,9 +64,36 @@ def get_project() -> ProjectService:
     return _project
 
 
+def _resolve_scene_audio(proj: ProjectService, scene, audio_path: Path) -> Path:
+    """Return the audio segment for video generation.
+
+    When lip_sync is disabled, returns a silent WAV of the same duration.
+    """
+    segment = proj.resolve_path(scene.audio_segment) if scene.audio_segment else audio_path
+    if not scene.effective_lip_sync:
+        from musicvision.utils.audio import generate_silence
+
+        silent_path = proj.paths.segments_dir / f"{scene.id}_silent.wav"
+        if not silent_path.exists():
+            generate_silence(silent_path, scene.duration)
+        return silent_path
+    return segment
+
+
 # ---------------------------------------------------------------------------
 # Request/Response schemas
 # ---------------------------------------------------------------------------
+
+class FilesystemListRequest(BaseModel):
+    """Query parameters for filesystem listing."""
+    path: str = ""
+    type: str = "all"  # "directory", "file", or "all"
+
+
+class ImportPathRequest(BaseModel):
+    """Request body for path-based file import."""
+    path: str
+
 
 class CreateProjectRequest(BaseModel):
     name: str = "Untitled Project"
@@ -82,11 +109,18 @@ class UpdateSceneRequest(BaseModel):
     video_prompt_user_override: Optional[str] = None
     image_status: Optional[ApprovalStatus] = None
     video_status: Optional[ApprovalStatus] = None
+    lip_sync: Optional[bool] = None
     notes: Optional[str] = None
 
 
-class GenerateRequest(BaseModel):
+class GenerateImagesRequest(BaseModel):
     scene_ids: list[str] = []  # empty = all scenes
+    model: str | None = None   # override project config model (e.g. "z-image-turbo")
+
+
+class GenerateVideosRequest(BaseModel):
+    scene_ids: list[str] = []
+    engine: str | None = None  # override project config engine (e.g. "hunyuan_avatar")
 
 
 class RegenerateImageRequest(BaseModel):
@@ -217,6 +251,104 @@ async def upload_acestep_json(file: UploadFile):
 
 
 # ---------------------------------------------------------------------------
+# Filesystem browser endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/api/filesystem/list")
+async def list_filesystem(path: str = "", type: str = "all"):
+    """Browse the local filesystem for files and directories.
+
+    Args:
+        path: Directory to list. Defaults to home directory.
+        type: Filter entries — "directory", "file", or "all" (default).
+    """
+    if not path:
+        target = Path.home()
+    else:
+        target = Path(path).expanduser().resolve()
+
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"Path does not exist: {target}")
+    if not target.is_dir():
+        raise HTTPException(status_code=400, detail=f"Path is not a directory: {target}")
+
+    entries = []
+    try:
+        for item in target.iterdir():
+            # Skip hidden files/directories
+            if item.name.startswith("."):
+                continue
+            try:
+                is_dir = item.is_dir()
+            except PermissionError:
+                continue
+            if type == "directory" and not is_dir:
+                continue
+            if type == "file" and is_dir:
+                continue
+            entries.append({
+                "name": item.name,
+                "path": str(item),
+                "is_dir": is_dir,
+            })
+    except PermissionError:
+        raise HTTPException(status_code=403, detail=f"Permission denied: {target}")
+
+    # Sort: directories first, then files, alphabetical within each group
+    entries.sort(key=lambda e: (not e["is_dir"], e["name"].lower()))
+
+    parent = str(target.parent) if target.parent != target else None
+    return {"entries": entries, "parent": parent}
+
+
+# ---------------------------------------------------------------------------
+# Path-based import endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/api/import/audio")
+async def import_audio(req: ImportPathRequest):
+    """Import audio file from a local path. Auto-detects sibling AceStep JSON."""
+    proj = get_project()
+    source = Path(req.path).expanduser().resolve()
+    if not source.exists():
+        raise HTTPException(status_code=404, detail=f"File not found: {source}")
+    if not source.is_file():
+        raise HTTPException(status_code=400, detail=f"Not a file: {source}")
+
+    # Check for companion AceStep JSON before import (to report in response)
+    acestep_json = source.with_suffix(".json")
+    has_acestep = acestep_json.exists()
+
+    proj.import_audio(source)
+
+    result: dict = {
+        "status": "imported",
+        "path": str(source),
+        "acestep_imported": has_acestep,
+    }
+    if has_acestep:
+        result["bpm"] = proj.config.song.bpm
+        result["duration_seconds"] = proj.config.song.duration_seconds
+        result["keyscale"] = proj.config.song.keyscale
+        result["has_lyrics"] = bool(proj.config.song.lyrics_file)
+    return result
+
+
+@app.post("/api/import/lyrics")
+async def import_lyrics(req: ImportPathRequest):
+    """Import lyrics file from a local path."""
+    proj = get_project()
+    source = Path(req.path).expanduser().resolve()
+    if not source.exists():
+        raise HTTPException(status_code=404, detail=f"File not found: {source}")
+    if not source.is_file():
+        raise HTTPException(status_code=400, detail=f"Not a file: {source}")
+
+    proj.import_lyrics(source)
+    return {"status": "imported", "path": str(source)}
+
+
+# ---------------------------------------------------------------------------
 # Scene endpoints
 # ---------------------------------------------------------------------------
 
@@ -248,6 +380,8 @@ async def update_scene(scene_id: str, req: UpdateSceneRequest):
         scene.image_status = req.image_status
     if req.video_status is not None:
         scene.video_status = req.video_status
+    if req.lip_sync is not None:
+        scene.lip_sync = req.lip_sync
     if req.notes is not None:
         scene.notes = req.notes
 
@@ -273,8 +407,9 @@ async def approve_all_scenes():
 
 @app.post("/api/scenes/{scene_id}/regenerate-image")
 async def regenerate_image(scene_id: str, req: RegenerateImageRequest) -> Scene:
-    """Regenerate a single scene's reference image."""
+    """Generate or regenerate a single scene's reference image."""
     from musicvision.imaging import create_engine
+    from musicvision.imaging.prompt_generator import generate_image_prompt
     from musicvision.utils.gpu import detect_devices
 
     proj = get_project()
@@ -282,9 +417,13 @@ async def regenerate_image(scene_id: str, req: RegenerateImageRequest) -> Scene:
     if not scene:
         raise HTTPException(status_code=404, detail=f"Scene {scene_id} not found")
 
+    # Auto-generate prompt if missing
     prompt = scene.effective_image_prompt
     if not prompt:
-        raise HTTPException(status_code=400, detail="Scene has no image prompt. Set one first.")
+        scene.image_prompt = generate_image_prompt(scene, proj.config)
+        prompt = scene.effective_image_prompt
+        if not prompt:
+            raise HTTPException(status_code=400, detail="Failed to generate image prompt.")
 
     # Build config — override model if provided
     config = proj.config.image_gen.model_copy()
@@ -336,7 +475,7 @@ async def regenerate_image(scene_id: str, req: RegenerateImageRequest) -> Scene:
 
 @app.post("/api/scenes/{scene_id}/regenerate-video")
 async def regenerate_video(scene_id: str, req: RegenerateVideoRequest) -> Scene:
-    """Regenerate a single scene's video clip at preview quality."""
+    """Generate or regenerate a single scene's video clip at preview quality."""
     from musicvision.engine_registry import (
         frames_to_seconds,
         get_constraints,
@@ -345,24 +484,29 @@ async def regenerate_video(scene_id: str, req: RegenerateVideoRequest) -> Scene:
     )
     from musicvision.models import SubClip
     from musicvision.video import create_video_engine
+    from musicvision.video.prompt_generator import generate_video_prompt
 
     proj = get_project()
     scene = proj.scenes.get_scene(scene_id)
     if not scene:
         raise HTTPException(status_code=404, detail=f"Scene {scene_id} not found")
 
+    # Auto-generate prompt if missing
     prompt = scene.effective_video_prompt
     if not prompt:
-        raise HTTPException(status_code=400, detail="Scene has no video prompt. Set one first.")
+        scene.video_prompt = generate_video_prompt(scene, proj.config)
+        prompt = scene.effective_video_prompt
+        if not prompt:
+            raise HTTPException(status_code=400, detail="Failed to generate video prompt.")
     if not scene.reference_image:
         raise HTTPException(status_code=400, detail="Scene has no reference image. Generate one first.")
 
-    # Resolve audio
+    # Resolve audio (silence if lip_sync is off)
     audio_file = proj.config.song.audio_file
     if not audio_file:
         raise HTTPException(status_code=400, detail="No audio file in project config.")
     audio_path = proj.resolve_path(audio_file)
-    segment = proj.resolve_path(scene.audio_segment) if scene.audio_segment else audio_path
+    segment = _resolve_scene_audio(proj, scene, audio_path)
 
     # Determine engine type
     engine_type = VideoEngineType(req.engine) if req.engine else (scene.video_engine or proj.config.video_engine)
@@ -463,13 +607,18 @@ async def run_intake(
 
 
 @app.post("/api/pipeline/generate-images")
-async def generate_images(req: GenerateRequest):
+async def generate_images(req: GenerateImagesRequest):
     """Stage 2: Generate reference images for specified scenes (or all)."""
     from musicvision.imaging import create_engine
     from musicvision.imaging.prompt_generator import generate_image_prompt
     from musicvision.utils.gpu import detect_devices
 
     proj = get_project()
+
+    # Apply model override if provided
+    if req.model:
+        proj.config.image_gen.model = ImageModel(req.model)
+        proj.save_config()
 
     # Resolve target scenes
     if req.scene_ids:
@@ -540,13 +689,12 @@ async def generate_images(req: GenerateRequest):
                 )
                 scene.reference_image = f"images/{scene.id}.png"
                 generated.append(scene.id)
+                proj.save_scenes()  # save after each so frontend can poll progress
             except Exception as exc:
                 log.error("Image generation failed for %s: %s", scene.id, exc)
                 failed.append({"scene_id": scene.id, "error": str(exc)})
     finally:
         engine.unload()
-
-    proj.save_scenes()
 
     return {
         "status": "complete",
@@ -557,7 +705,7 @@ async def generate_images(req: GenerateRequest):
 
 
 @app.post("/api/pipeline/generate-videos")
-async def generate_videos(req: GenerateRequest):
+async def generate_videos(req: GenerateVideosRequest):
     """Stage 3: Generate video clips for specified scenes (or all).
 
     Scenes are grouped by their ``video_engine`` field (falling back to the
@@ -577,6 +725,11 @@ async def generate_videos(req: GenerateRequest):
     from musicvision.video.prompt_generator import generate_video_prompt
 
     proj = get_project()
+
+    # Apply engine override if provided
+    if req.engine:
+        proj.config.video_engine = VideoEngineType(req.engine)
+        proj.save_config()
 
     # Resolve target scenes
     if req.scene_ids:
@@ -641,9 +794,10 @@ async def generate_videos(req: GenerateRequest):
             for scene in group_scenes:
                 try:
                     ref_image = proj.resolve_path(scene.reference_image)
-                    segment = proj.resolve_path(scene.audio_segment) if scene.audio_segment else audio_path
+                    segment = _resolve_scene_audio(proj, scene, audio_path)
 
                     # Resolve pre-computed sub-clip audio paths
+                    # TODO: when lip_sync is off, sub-clip audio should also be silent
                     subclip_audio = None
                     if scene.generation_audio_segments and len(scene.generation_audio_segments) > 1:
                         subclip_audio = [
@@ -684,14 +838,13 @@ async def generate_videos(req: GenerateRequest):
                         scene.video_clip = f"clips/{scene.id}.mp4"
 
                     generated.append(scene.id)
+                    proj.save_scenes()  # save after each so frontend can poll progress
 
                 except Exception as exc:
                     log.error("Video generation failed for %s: %s", scene.id, exc)
                     failed.append({"scene_id": scene.id, "error": str(exc)})
         finally:
             engine.unload()
-
-    proj.save_scenes()
 
     return {
         "status": "complete",

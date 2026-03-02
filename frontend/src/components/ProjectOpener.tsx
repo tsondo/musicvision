@@ -1,4 +1,5 @@
 import { useState } from "react";
+import FileBrowser from "./FileBrowser";
 
 interface Props {
   onOpen: (directory: string) => void;
@@ -12,6 +13,7 @@ export default function ProjectOpener({ onOpen, onCreate, lastPath, error }: Pro
   const [directory, setDirectory] = useState(lastPath);
   const [newName, setNewName] = useState("");
   const [newDirectory, setNewDirectory] = useState("");
+  const [browseTarget, setBrowseTarget] = useState<"open" | "create" | null>(null);
 
   const handleOpen = (e: React.FormEvent) => {
     e.preventDefault();
@@ -26,6 +28,20 @@ export default function ProjectOpener({ onOpen, onCreate, lastPath, error }: Pro
 
   return (
     <div className="project-opener">
+      {browseTarget && (
+        <FileBrowser
+          mode="directory"
+          title={browseTarget === "open" ? "Open Project Directory" : "Select Parent Directory"}
+          startPath={browseTarget === "open" ? directory : newDirectory}
+          onSelect={(path) => {
+            if (browseTarget === "open") setDirectory(path);
+            else setNewDirectory(path);
+            setBrowseTarget(null);
+          }}
+          onCancel={() => setBrowseTarget(null)}
+        />
+      )}
+
       <h1>MusicVision</h1>
       <p className="subtitle">AI Music Video Pipeline</p>
 
@@ -58,6 +74,13 @@ export default function ProjectOpener({ onOpen, onCreate, lastPath, error }: Pro
               placeholder="/path/to/project"
               autoFocus
             />
+            <button
+              type="button"
+              className="btn-browse"
+              onClick={() => setBrowseTarget("open")}
+            >
+              Browse
+            </button>
             <button type="submit" disabled={!directory.trim()}>
               Open
             </button>
@@ -85,6 +108,13 @@ export default function ProjectOpener({ onOpen, onCreate, lastPath, error }: Pro
               onChange={(e) => setNewDirectory(e.target.value)}
               placeholder="/path/to/new/project"
             />
+            <button
+              type="button"
+              className="btn-browse"
+              onClick={() => setBrowseTarget("create")}
+            >
+              Browse
+            </button>
             <button type="submit" disabled={!newName.trim() || !newDirectory.trim()}>
               Create
             </button>

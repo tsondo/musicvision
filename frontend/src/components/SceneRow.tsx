@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { fileUrl } from "../api/client";
 import type {
   ImageModelType,
@@ -52,12 +52,23 @@ export default function SceneRow({
     useState<VideoEngineType>("hunyuan_avatar");
   const [videoSeed, setVideoSeed] = useState(-1);
   const [regenError, setRegenError] = useState<string | null>(null);
+  const [imgVersion, setImgVersion] = useState(() => Date.now());
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
 
   const isGenImage = generating.has(scene.id + ":image");
   const isGenVideo = generating.has(scene.id + ":video");
+
+  const hasImage = Boolean(scene.reference_image);
+  const hasVideo = Boolean(scene.video_clip) || scene.sub_clips.some((sc) => sc.video_clip);
+
+  // Bump image version when image_status changes (new generation completed)
+  const lastImageRef = useRef(scene.image_status);
+  if (lastImageRef.current !== scene.image_status) {
+    lastImageRef.current = scene.image_status;
+    setImgVersion(Date.now());
+  }
 
   // Sync prompt state when scene changes externally
   const lastPromptRef = useRef({ img: effectiveImagePrompt, vid: effectiveVideoPrompt });
@@ -70,22 +81,78 @@ export default function SceneRow({
     if (videoPrompt !== effectiveVideoPrompt) setVideoPrompt(effectiveVideoPrompt);
   }
 
-  const saveImagePrompt = () => {
-    if (imagePrompt !== effectiveImagePrompt) {
-      onUpdate(scene.id, { image_prompt_user_override: imagePrompt });
-    }
+  // Debounced auto-save for prompts (1s after last keystroke)
+  const imgDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const vidDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [imgSaved, setImgSaved] = useState(true);
+  const [vidSaved, setVidSaved] = useState(true);
+
+  const saveImagePrompt = useCallback(() => {
+    if (imgDebounceRef.current) clearTimeout(imgDebounceRef.current);
+    imgDebounceRef.current = null;
+    onUpdate(scene.id, { image_prompt_user_override: imagePrompt }).then(() => setImgSaved(true));
+  }, [scene.id, imagePrompt, onUpdate]);
+
+  const saveVideoPrompt = useCallback(() => {
+    if (vidDebounceRef.current) clearTimeout(vidDebounceRef.current);
+    vidDebounceRef.current = null;
+    onUpdate(scene.id, { video_prompt_user_override: videoPrompt }).then(() => setVidSaved(true));
+  }, [scene.id, videoPrompt, onUpdate]);
+
+  const handleImagePromptChange = (val: string) => {
+    setImagePrompt(val);
+    setImgSaved(false);
+    if (imgDebounceRef.current) clearTimeout(imgDebounceRef.current);
+    imgDebounceRef.current = setTimeout(() => {
+      // Save via the ref'd value at timeout time — captured in the timeout closure
+      // We need to trigger via a state update, so we use a ref trick
+      imgDebounceRef.current = null;
+    }, 1000);
   };
 
-  const saveVideoPrompt = () => {
-    if (videoPrompt !== effectiveVideoPrompt) {
-      onUpdate(scene.id, { video_prompt_user_override: videoPrompt });
-    }
+  const handleVideoPromptChange = (val: string) => {
+    setVideoPrompt(val);
+    setVidSaved(false);
+    if (vidDebounceRef.current) clearTimeout(vidDebounceRef.current);
+    vidDebounceRef.current = setTimeout(() => {
+      vidDebounceRef.current = null;
+    }, 1000);
   };
+
+  // Effect-based debounce save: fires when prompt changes and debounce timer expires
+  const imgPromptRef = useRef(imagePrompt);
+  imgPromptRef.current = imagePrompt;
+  const vidPromptRef = useRef(videoPrompt);
+  vidPromptRef.current = videoPrompt;
+
+  useEffect(() => {
+    if (imgSaved) return;
+    const timer = setTimeout(() => {
+      if (imgPromptRef.current !== effectiveImagePrompt) {
+        onUpdate(scene.id, { image_prompt_user_override: imgPromptRef.current }).then(() => setImgSaved(true));
+      } else {
+        setImgSaved(true);
+      }
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [imagePrompt]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (vidSaved) return;
+    const timer = setTimeout(() => {
+      if (vidPromptRef.current !== effectiveVideoPrompt) {
+        onUpdate(scene.id, { video_prompt_user_override: vidPromptRef.current }).then(() => setVidSaved(true));
+      } else {
+        setVidSaved(true);
+      }
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [videoPrompt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleRegenImage = async () => {
     setRegenError(null);
     // Save prompt first if changed
-    if (imagePrompt !== effectiveImagePrompt) {
+    if (!imgSaved && imagePrompt !== effectiveImagePrompt) {
       await onUpdate(scene.id, { image_prompt_user_override: imagePrompt });
     }
     try {
@@ -97,7 +164,7 @@ export default function SceneRow({
 
   const handleRegenVideo = async () => {
     setRegenError(null);
-    if (videoPrompt !== effectiveVideoPrompt) {
+    if (!vidSaved && videoPrompt !== effectiveVideoPrompt) {
       await onUpdate(scene.id, { video_prompt_user_override: videoPrompt });
     }
     try {
@@ -154,7 +221,7 @@ export default function SceneRow({
       <div className="cell cell-image">
         {scene.reference_image ? (
           <img
-            src={fileUrl(scene.reference_image)}
+            src={fileUrl(scene.reference_image, imgVersion)}
             alt={`Scene ${scene.id}`}
             loading="lazy"
           />
@@ -167,11 +234,12 @@ export default function SceneRow({
       <div className="cell cell-prompt">
         <textarea
           value={imagePrompt}
-          onChange={(e) => setImagePrompt(e.target.value)}
+          onChange={(e) => handleImagePromptChange(e.target.value)}
           onBlur={saveImagePrompt}
           placeholder="Image description..."
           rows={4}
         />
+        {!imgSaved && <span className="save-indicator">saving...</span>}
       </div>
 
       {/* Source (lyrics) */}
@@ -204,10 +272,10 @@ export default function SceneRow({
         </div>
         <button
           onClick={handleRegenImage}
-          disabled={isGenImage || !imagePrompt || disabled}
+          disabled={isGenImage || disabled}
           className="btn-regen"
         >
-          {isGenImage ? "Generating..." : "Regenerate"}
+          {isGenImage ? "Generating..." : hasImage ? "Regenerate" : "Generate"}
         </button>
       </div>
 
@@ -215,11 +283,12 @@ export default function SceneRow({
       <div className="cell cell-prompt">
         <textarea
           value={videoPrompt}
-          onChange={(e) => setVideoPrompt(e.target.value)}
+          onChange={(e) => handleVideoPromptChange(e.target.value)}
           onBlur={saveVideoPrompt}
           placeholder="Motion description..."
           rows={4}
         />
+        {!vidSaved && <span className="save-indicator">saving...</span>}
       </div>
 
       {/* Generate video controls */}
@@ -233,6 +302,16 @@ export default function SceneRow({
           <option value="hunyuan_avatar">HunyuanVideo Avatar</option>
           <option value="humo">HuMo</option>
         </select>
+        <label className="checkbox-label">
+          <input
+            type="checkbox"
+            checked={scene.lip_sync ?? scene.type === "vocal"}
+            onChange={(e) =>
+              onUpdate(scene.id, { lip_sync: e.target.checked })
+            }
+          />
+          Lip sync
+        </label>
         <div className="seed-row">
           <label>Seed</label>
           <input
@@ -243,10 +322,10 @@ export default function SceneRow({
         </div>
         <button
           onClick={handleRegenVideo}
-          disabled={isGenVideo || !videoPrompt || !scene.reference_image || disabled}
+          disabled={isGenVideo || !scene.reference_image || disabled}
           className="btn-regen"
         >
-          {isGenVideo ? "Generating..." : "Regenerate"}
+          {isGenVideo ? "Generating..." : hasVideo ? "Regenerate" : "Generate"}
         </button>
       </div>
 

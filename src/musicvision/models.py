@@ -388,6 +388,8 @@ class Scene(BaseModel):
     video_clip: Optional[str] = None            # path: clips/scene_001.mp4
     video_status: ApprovalStatus = ApprovalStatus.PENDING
     video_engine: Optional[VideoEngineType] = None  # None → use project default
+    lip_sync: Optional[bool] = None  # None → auto (True for vocal, False for instrumental)
+    # TODO: per-scene face mask for multi-person lip sync targeting
 
     # Sub-clips for long scenes
     sub_clips: list[SubClip] = Field(default_factory=list)
@@ -398,6 +400,13 @@ class Scene(BaseModel):
     settings: list[str] = Field(default_factory=list)        # setting IDs
 
     notes: str = ""
+
+    @property
+    def effective_lip_sync(self) -> bool:
+        """Resolve lip_sync: explicit override wins, otherwise vocal=True, instrumental=False."""
+        if self.lip_sync is not None:
+            return self.lip_sync
+        return self.type == SceneType.VOCAL
 
     @property
     def duration(self) -> float:

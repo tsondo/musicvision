@@ -44,6 +44,7 @@ export interface Scene {
   video_clip: string | null;
   video_status: ApprovalStatus;
   video_engine: VideoEngineType | null;
+  lip_sync: boolean | null;
 
   sub_clips: SubClip[];
 
@@ -74,6 +75,7 @@ export interface UpdateSceneRequest {
   video_prompt_user_override?: string;
   image_status?: ApprovalStatus;
   video_status?: ApprovalStatus;
+  lip_sync?: boolean;
   notes?: string;
 }
 
@@ -98,11 +100,47 @@ export interface IntakeResult {
   scene_count: number;
 }
 
+export interface GenerateImagesRequest {
+  scene_ids?: string[];
+  model?: ImageModelType;
+}
+
+export interface GenerateVideosRequest {
+  scene_ids?: string[];
+  engine?: VideoEngineType;
+}
+
 export interface BatchGenResult {
   status: string;
   generated: string[];
   failed: { scene_id: string; error: string }[];
   total: number;
+}
+
+export interface FilesystemEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+}
+
+export interface FilesystemListResult {
+  entries: FilesystemEntry[];
+  parent: string | null;
+}
+
+export interface ImportAudioResult {
+  status: string;
+  path: string;
+  acestep_imported: boolean;
+  bpm?: number | null;
+  duration_seconds?: number | null;
+  keyscale?: string | null;
+  has_lyrics?: boolean;
+}
+
+export interface ImportLyricsResult {
+  status: string;
+  path: string;
 }
 
 export type PipelineStage = "upload" | "intake" | "images" | "videos";

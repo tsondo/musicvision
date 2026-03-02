@@ -1,11 +1,16 @@
 import type {
   BatchGenResult,
+  FilesystemListResult,
+  ImageModelType,
+  ImportAudioResult,
+  ImportLyricsResult,
   IntakeResult,
   ProjectConfig,
   RegenerateImageRequest,
   RegenerateVideoRequest,
   Scene,
   UpdateSceneRequest,
+  VideoEngineType,
 } from "./types";
 
 class ApiError extends Error {
@@ -100,6 +105,35 @@ export async function assemblePreview(): Promise<{
   });
 }
 
+export async function listFilesystem(
+  path?: string,
+  type?: string,
+): Promise<FilesystemListResult> {
+  const params = new URLSearchParams();
+  if (path) params.set("path", path);
+  if (type) params.set("type", type);
+  const qs = params.toString();
+  return request(`/api/filesystem/list${qs ? `?${qs}` : ""}`);
+}
+
+export async function importAudio(
+  path: string,
+): Promise<ImportAudioResult> {
+  return request("/api/import/audio", {
+    method: "POST",
+    body: JSON.stringify({ path }),
+  });
+}
+
+export async function importLyrics(
+  path: string,
+): Promise<ImportLyricsResult> {
+  return request("/api/import/lyrics", {
+    method: "POST",
+    body: JSON.stringify({ path }),
+  });
+}
+
 export async function uploadAudio(
   file: File,
 ): Promise<{ status: string; path: string }> {
@@ -143,24 +177,27 @@ export async function runIntake(opts?: {
 
 export async function generateAllImages(
   sceneIds?: string[],
+  model?: ImageModelType,
 ): Promise<BatchGenResult> {
   return request("/api/pipeline/generate-images", {
     method: "POST",
-    body: JSON.stringify({ scene_ids: sceneIds ?? [] }),
+    body: JSON.stringify({ scene_ids: sceneIds ?? [], model: model ?? null }),
   });
 }
 
 export async function generateAllVideos(
   sceneIds?: string[],
+  engine?: VideoEngineType,
 ): Promise<BatchGenResult> {
   return request("/api/pipeline/generate-videos", {
     method: "POST",
-    body: JSON.stringify({ scene_ids: sceneIds ?? [] }),
+    body: JSON.stringify({ scene_ids: sceneIds ?? [], engine: engine ?? null }),
   });
 }
 
-export function fileUrl(path: string): string {
-  return `/files/${path}`;
+export function fileUrl(path: string, bustCache?: number): string {
+  const base = `/files/${path}`;
+  return bustCache ? `${base}?t=${bustCache}` : base;
 }
 
 export { ApiError };

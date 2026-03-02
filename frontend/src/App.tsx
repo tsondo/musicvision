@@ -62,6 +62,8 @@ export default function App() {
         isRunning={pipeline.isRunning}
         onUploadAudio={pipeline.uploadAudio}
         onUploadLyrics={pipeline.uploadLyrics}
+        onImportAudio={pipeline.importAudio}
+        onImportLyrics={pipeline.importLyrics}
         onRunIntake={pipeline.runIntake}
         onGenerateImages={pipeline.generateImages}
         onGenerateVideos={pipeline.generateVideos}

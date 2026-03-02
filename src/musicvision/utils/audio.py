@@ -175,6 +175,25 @@ def slice_subclip_audio(
     return paths
 
 
+def generate_silence(output: Path, duration: float, sample_rate: int = 16000) -> Path:
+    """Generate a silent WAV file of the given duration."""
+    _check_ffmpeg()
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "lavfi",
+        "-i", f"anullsrc=r={sample_rate}:cl=mono",
+        "-t", f"{duration:.6f}",
+        "-c:a", "pcm_s16le",
+        str(output),
+    ]
+
+    subprocess.run(cmd, capture_output=True, check=True)
+    log.debug("Generated silence: %s (%.2fs)", output.name, duration)
+    return output
+
+
 def convert_to_wav(source: Path, output: Path, sample_rate: int = 16000) -> Path:
     """Convert any audio format to WAV (mono, 16-bit PCM). Used for Whisper input."""
     _check_ffmpeg()

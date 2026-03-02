@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import type { StepStatus } from "../hooks/usePipeline";
-import type { PipelineStage } from "../api/types";
+import type { ImageModelType, PipelineStage, VideoEngineType } from "../api/types";
+import FileBrowser from "./FileBrowser";
 
 interface Props {
   stage: PipelineStage;
@@ -17,9 +18,11 @@ interface Props {
   isRunning: boolean;
   onUploadAudio: (file: File) => void;
   onUploadLyrics: (file: File) => void;
+  onImportAudio: (path: string) => void;
+  onImportLyrics: (path: string) => void;
   onRunIntake: (opts?: { useLlm?: boolean; skipTranscription?: boolean }) => void;
-  onGenerateImages: () => void;
-  onGenerateVideos: () => void;
+  onGenerateImages: (sceneIds?: string[], model?: ImageModelType) => void;
+  onGenerateVideos: (sceneIds?: string[], engine?: VideoEngineType) => void;
 }
 
 type StepState = "disabled" | "active" | "done";
@@ -52,6 +55,8 @@ export default function PipelineBar({
   isRunning,
   onUploadAudio,
   onUploadLyrics,
+  onImportAudio,
+  onImportLyrics,
   onRunIntake,
   onGenerateImages,
   onGenerateVideos,
@@ -59,6 +64,9 @@ export default function PipelineBar({
   const audioRef = useRef<HTMLInputElement>(null);
   const lyricsRef = useRef<HTMLInputElement>(null);
   const [useLlm, setUseLlm] = useState(true);
+  const [browseTarget, setBrowseTarget] = useState<"audio" | "lyrics" | null>(null);
+  const [imageModel, setImageModel] = useState<ImageModelType>("z-image-turbo");
+  const [videoEngine, setVideoEngine] = useState<VideoEngineType>("hunyuan_avatar");
 
   const handleAudioChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -77,11 +85,29 @@ export default function PipelineBar({
 
   return (
     <div className="pipeline-bar">
+      {browseTarget && (
+        <FileBrowser
+          mode="file"
+          fileFilter={
+            browseTarget === "audio"
+              ? [".flac", ".wav", ".mp3", ".ogg", ".m4a", ".aac"]
+              : [".txt", ".lrc"]
+          }
+          title={browseTarget === "audio" ? "Select Audio File" : "Select Lyrics File"}
+          onSelect={(path) => {
+            if (browseTarget === "audio") onImportAudio(path);
+            else onImportLyrics(path);
+            setBrowseTarget(null);
+          }}
+          onCancel={() => setBrowseTarget(null)}
+        />
+      )}
+
       {/* Step 1: Upload */}
       <div className={`pipeline-step ${stepState("upload", stage, uploadStatus)}`}>
         <div className="step-label">
-          <span className="step-num">1</span> Upload
-          {hasAudio && <span className="step-check" title="Audio uploaded" />}
+          <span className="step-num">1</span> Import
+          {hasAudio && <span className="step-check" title="Audio imported" />}
         </div>
         <div className="step-controls">
           <input
@@ -101,10 +127,10 @@ export default function PipelineBar({
           <button
             className={`btn-sm ${hasAudio ? "btn-secondary" : ""}`}
             disabled={isRunning}
-            onClick={() => audioRef.current?.click()}
+            onClick={() => setBrowseTarget("audio")}
           >
             {uploadStatus === "running"
-              ? "Uploading..."
+              ? "Importing..."
               : hasAudio
                 ? "Replace Audio"
                 : "Audio"}
@@ -112,7 +138,7 @@ export default function PipelineBar({
           <button
             className={`btn-sm btn-secondary`}
             disabled={isRunning}
-            onClick={() => lyricsRef.current?.click()}
+            onClick={() => setBrowseTarget("lyrics")}
           >
             {hasLyrics ? "Replace Lyrics" : "Lyrics"}
           </button>
@@ -163,10 +189,21 @@ export default function PipelineBar({
           )}
         </div>
         <div className="step-controls">
+          <select
+            className="pipeline-select"
+            value={imageModel}
+            onChange={(e) => setImageModel(e.target.value as ImageModelType)}
+            disabled={isRunning}
+          >
+            <option value="z-image-turbo">Z-Image Turbo</option>
+            <option value="z-image">Z-Image</option>
+            <option value="flux-dev">FLUX Dev</option>
+            <option value="flux-schnell">FLUX Schnell</option>
+          </select>
           <button
             className="btn-sm"
             disabled={sceneCount === 0 || isRunning || imagesRemaining === 0}
-            onClick={() => onGenerateImages()}
+            onClick={() => onGenerateImages(undefined, imageModel)}
           >
             {imagesStatus === "running"
               ? "Generating..."
@@ -190,10 +227,19 @@ export default function PipelineBar({
           )}
         </div>
         <div className="step-controls">
+          <select
+            className="pipeline-select"
+            value={videoEngine}
+            onChange={(e) => setVideoEngine(e.target.value as VideoEngineType)}
+            disabled={isRunning}
+          >
+            <option value="hunyuan_avatar">HunyuanVideo Avatar</option>
+            <option value="humo">HuMo</option>
+          </select>
           <button
             className="btn-sm"
             disabled={sceneCount === 0 || isRunning || imagesRemaining > 0 || videosRemaining === 0}
-            onClick={() => onGenerateVideos()}
+            onClick={() => onGenerateVideos(undefined, videoEngine)}
           >
             {videosStatus === "running"
               ? "Generating..."

@@ -1,13 +1,15 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   uploadAudio as apiUploadAudio,
   uploadLyrics as apiUploadLyrics,
+  importAudio as apiImportAudio,
+  importLyrics as apiImportLyrics,
   runIntake as apiRunIntake,
   generateAllImages as apiGenerateImages,
   generateAllVideos as apiGenerateVideos,
   ApiError,
 } from "../api/client";
-import type { BatchGenResult, PipelineStage, ProjectConfig, Scene } from "../api/types";
+import type { BatchGenResult, ImageModelType, PipelineStage, ProjectConfig, Scene, VideoEngineType } from "../api/types";
 
 export type StepStatus = "idle" | "running" | "done" | "error";
 
@@ -95,6 +97,40 @@ export function usePipeline(
     [reloadConfig],
   );
 
+  const importAudio = useCallback(
+    async (path: string) => {
+      setUploadStatus("running");
+      setError(null);
+      try {
+        await apiImportAudio(path);
+        await reloadConfig();
+        setUploadStatus("done");
+      } catch (err) {
+        const msg = err instanceof ApiError ? err.detail : String(err);
+        setError(msg);
+        setUploadStatus("error");
+      }
+    },
+    [reloadConfig],
+  );
+
+  const importLyrics = useCallback(
+    async (path: string) => {
+      setUploadStatus("running");
+      setError(null);
+      try {
+        await apiImportLyrics(path);
+        await reloadConfig();
+        setUploadStatus("done");
+      } catch (err) {
+        const msg = err instanceof ApiError ? err.detail : String(err);
+        setError(msg);
+        setUploadStatus("error");
+      }
+    },
+    [reloadConfig],
+  );
+
   const runIntake = useCallback(
     async (opts?: { useLlm?: boolean; skipTranscription?: boolean }) => {
       setIntakeStatus("running");
@@ -113,11 +149,11 @@ export function usePipeline(
   );
 
   const generateImages = useCallback(
-    async (sceneIds?: string[]) => {
+    async (sceneIds?: string[], model?: ImageModelType) => {
       setImagesStatus("running");
       setError(null);
       try {
-        const result = await apiGenerateImages(sceneIds);
+        const result = await apiGenerateImages(sceneIds, model);
         setLastResult(result);
         await reloadScenes();
         setImagesStatus(result.failed.length > 0 ? "error" : "done");
@@ -136,11 +172,11 @@ export function usePipeline(
   );
 
   const generateVideos = useCallback(
-    async (sceneIds?: string[]) => {
+    async (sceneIds?: string[], engine?: VideoEngineType) => {
       setVideosStatus("running");
       setError(null);
       try {
-        const result = await apiGenerateVideos(sceneIds);
+        const result = await apiGenerateVideos(sceneIds, engine);
         setLastResult(result);
         await reloadScenes();
         setVideosStatus(result.failed.length > 0 ? "error" : "done");
@@ -157,6 +193,27 @@ export function usePipeline(
     },
     [reloadScenes],
   );
+
+  // Poll scenes while generation is running so new images/videos appear incrementally
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    const generating = imagesStatus === "running" || videosStatus === "running";
+    if (generating && !pollRef.current) {
+      pollRef.current = setInterval(() => {
+        reloadScenes();
+      }, 3000);
+    }
+    if (!generating && pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+  }, [imagesStatus, videosStatus, reloadScenes]);
 
   const pipelineState: PipelineState = {
     stage,
@@ -178,6 +235,8 @@ export function usePipeline(
     ...pipelineState,
     uploadAudio,
     uploadLyrics,
+    importAudio,
+    importLyrics,
     runIntake,
     generateImages,
     generateVideos,
