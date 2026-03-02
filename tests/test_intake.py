@@ -1,8 +1,14 @@
 """Tests for the intake pipeline components that don't require GPU or model weights."""
 
-from musicvision.intake.segmentation import segment_scenes_simple, _format_lyrics_for_llm
+from musicvision.engine_registry import EngineConstraints, get_constraints
+from musicvision.intake.segmentation import (
+    _engine_constraint_prompt,
+    _format_lyrics_for_llm,
+    _validate_and_adjust_scenes,
+    segment_scenes_simple,
+)
 from musicvision.intake.transcription import WordTimestamp, align_lyrics_with_timestamps, TranscriptionResult
-from musicvision.models import SceneType
+from musicvision.models import Scene, SceneType
 
 
 class TestSimpleSegmentation:
@@ -123,3 +129,75 @@ class TestLyricsAlignment:
         transcription = TranscriptionResult(text="", words=[])
         aligned = align_lyrics_with_timestamps("some lyrics", transcription)
         assert aligned == []
+
+
+# ---------------------------------------------------------------------------
+# Engine constraint injection
+# ---------------------------------------------------------------------------
+
+
+class TestEngineConstraintPrompt:
+    def test_contains_engine_name(self):
+        c = get_constraints("humo")
+        prompt = _engine_constraint_prompt(c)
+        assert "HuMo" in prompt
+
+    def test_contains_max_frames(self):
+        c = get_constraints("humo")
+        prompt = _engine_constraint_prompt(c)
+        assert "97 frames" in prompt
+        assert "3.88s" in prompt
+
+    def test_contains_min_frames(self):
+        c = get_constraints("humo")
+        prompt = _engine_constraint_prompt(c)
+        assert "25 frames" in prompt
+
+
+# ---------------------------------------------------------------------------
+# _validate_and_adjust_scenes
+# ---------------------------------------------------------------------------
+
+
+class TestValidateAndAdjustScenes:
+    def test_populates_frame_fields(self):
+        constraints = get_constraints("humo")
+        scenes = [
+            Scene(id="scene_001", order=1, time_start=0.0, time_end=3.88),
+            Scene(id="scene_002", order=2, time_start=3.88, time_end=8.0),
+        ]
+        result = _validate_and_adjust_scenes(scenes, 8.0, constraints)
+        assert result[0].frame_start == 0
+        assert result[0].frame_end == 97
+        assert result[0].total_frames == 97
+        assert result[0].subclip_frame_counts == [97]
+        assert result[1].total_frames == 103
+
+    def test_empty_list(self):
+        constraints = get_constraints("humo")
+        assert _validate_and_adjust_scenes([], 10.0, constraints) == []
+
+    def test_single_scene_covering_song(self):
+        constraints = get_constraints("hunyuan_avatar")
+        scenes = [Scene(id="scene_001", order=1, time_start=0.0, time_end=10.0)]
+        result = _validate_and_adjust_scenes(scenes, 10.0, constraints)
+        assert result[0].total_frames == 250
+        # 250 frames with max=129, min=33 → 2 clips
+        assert len(result[0].subclip_frame_counts) == 2
+        assert sum(result[0].subclip_frame_counts) == 250
+
+    def test_with_engine_constraints_simple_segmenter(self):
+        """Rule-based segmenter passes engine constraints through."""
+        words = [
+            WordTimestamp("Hello", 1.0, 1.5),
+            WordTimestamp("world", 1.5, 2.0),
+            WordTimestamp("Goodbye", 5.0, 5.5),
+            WordTimestamp("moon", 5.5, 6.0),
+        ]
+        constraints = get_constraints("humo")
+        result = segment_scenes_simple(words, song_duration=8.0, engine_constraints=constraints)
+        # All scenes should have frame fields populated
+        for scene in result.scenes:
+            assert scene.frame_start is not None
+            assert scene.total_frames is not None
+            assert scene.subclip_frame_counts is not None

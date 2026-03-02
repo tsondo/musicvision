@@ -2,13 +2,20 @@ import { useProject } from "./hooks/useProject";
 import { useScenes } from "./hooks/useScenes";
 import ProjectOpener from "./components/ProjectOpener";
 import ProjectHeader from "./components/ProjectHeader";
-import SceneGrid from "./components/SceneGrid";
+import Storyboard from "./components/Storyboard";
+import PreviewPanel from "./components/PreviewPanel";
 
 export default function App() {
   const { state, open, lastProjectPath } = useProject();
   const projectLoaded = state.status === "loaded";
-  const { scenes, loading, updateScene, approveAll } =
-    useScenes(projectLoaded);
+  const {
+    scenes,
+    loading,
+    generating,
+    updateScene,
+    regenerateImage,
+    regenerateVideo,
+  } = useScenes(projectLoaded);
 
   if (state.status === "loading" || (projectLoaded && loading)) {
     return <div className="loading">Loading...</div>;
@@ -28,14 +35,17 @@ export default function App() {
 
   return (
     <div className="app">
-      <ProjectHeader
-        config={state.config}
-        scenes={scenes}
-        onApproveAll={approveAll}
-      />
+      <ProjectHeader config={state.config} scenes={scenes} />
       <main>
-        <SceneGrid scenes={scenes} onUpdate={updateScene} />
+        <Storyboard
+          scenes={scenes}
+          generating={generating}
+          onUpdate={updateScene}
+          onRegenImage={regenerateImage}
+          onRegenVideo={regenerateVideo}
+        />
       </main>
+      <PreviewPanel />
     </div>
   );
 }

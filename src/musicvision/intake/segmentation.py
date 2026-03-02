@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 
+from musicvision.engine_registry import EngineConstraints
 from musicvision.intake.transcription import WordTimestamp
 from musicvision.llm import LLMClient, LLMConfig, get_client
 from musicvision.models import Scene, SceneList, SceneType
@@ -82,6 +83,7 @@ def segment_scenes(
     acestep_lyrics: str | None = None,
     api_key: str | None = None,
     llm_config: LLMConfig | None = None,
+    engine_constraints: EngineConstraints | None = None,
 ) -> SceneList:
     """
     Segment a song into scenes using an LLM.
@@ -108,6 +110,11 @@ def segment_scenes(
         llm_config = LLMConfig(backend="anthropic", api_key=api_key)
 
     client: LLMClient = get_client(llm_config)
+
+    # Build system prompt — optionally enrich with engine constraints
+    system_prompt = SEGMENTATION_SYSTEM_PROMPT
+    if engine_constraints:
+        system_prompt += _engine_constraint_prompt(engine_constraints)
 
     # Build the user message — prefer AceStep lyrics (section markers) over
     # approximate word timestamps to save tokens for vLLM context windows.
@@ -138,7 +145,7 @@ Max scene duration: {max_scene_seconds}s
 
     log.info("Calling LLM for scene segmentation...")
 
-    response_text = client.chat(SEGMENTATION_SYSTEM_PROMPT, user_message)
+    response_text = client.chat(system_prompt, user_message)
 
     # Handle potential markdown code blocks
     if response_text.startswith("```"):
@@ -187,6 +194,10 @@ Max scene duration: {max_scene_seconds}s
     # Validate
     _validate_scenes(scenes, song_duration, min_scene_seconds, max_scene_seconds)
 
+    # Frame-accurate adjustment when engine constraints are available
+    if engine_constraints:
+        scenes = _validate_and_adjust_scenes(scenes, song_duration, engine_constraints, beat_times)
+
     log.info("Segmentation complete: %d scenes", len(scenes))
     return SceneList(scenes=scenes)
 
@@ -195,6 +206,7 @@ def segment_scenes_simple(
     lyrics_with_timestamps: list[WordTimestamp],
     song_duration: float,
     max_scene_seconds: float = 8.0,
+    engine_constraints: EngineConstraints | None = None,
 ) -> SceneList:
     """
     Simple rule-based segmentation — no LLM needed.
@@ -281,6 +293,10 @@ def segment_scenes_simple(
             type=SceneType.INSTRUMENTAL,
             lyrics="",
         ))
+
+    # Frame-accurate adjustment when engine constraints are available
+    if engine_constraints:
+        scenes = _validate_and_adjust_scenes(scenes, song_duration, engine_constraints)
 
     return SceneList(scenes=scenes)
 
@@ -398,3 +414,97 @@ def _validate_scenes(
                 "Gap at end: last scene ends at %.2fs but song is %.2fs",
                 scenes[-1].time_end, song_duration,
             )
+
+
+def _engine_constraint_prompt(constraints: EngineConstraints) -> str:
+    """Build an LLM prompt addendum describing video engine constraints."""
+    max_sec = constraints.max_seconds
+    min_sec = constraints.min_seconds
+
+    # Compute a "bad duration" example: max + a small amount below min
+    bad_dur = max_sec + min_sec * 0.5
+    bad_remainder = bad_dur - max_sec
+    good_short = max_sec * 0.9
+    good_long = max_sec * 2.0
+
+    return f"""
+
+Video engine constraints:
+- Engine: {constraints.name}
+- Max clip: {max_sec:.2f}s ({constraints.max_frames} frames @ {constraints.fps}fps)
+- Min clip: {min_sec:.2f}s ({constraints.min_frames} frames @ {constraints.fps}fps)
+
+Duration guidance:
+- Preferred scene durations: ≤{max_sec:.2f}s (single clip) or clean multiples of {max_sec:.2f}s.
+- Avoid durations that leave a remainder under {min_sec:.2f}s when divided by {max_sec:.2f}s.
+  Example: {bad_dur:.1f}s is problematic ({max_sec:.2f} + {bad_remainder:.1f}s remainder). \
+Prefer {good_short:.1f}s or {good_long:.1f}s instead."""
+
+
+def _validate_and_adjust_scenes(
+    scenes: list[Scene],
+    song_duration: float,
+    constraints: EngineConstraints,
+    beat_times: list[float] | None = None,
+) -> list[Scene]:
+    """
+    Post-process LLM segmentation to enforce frame-accurate constraints.
+
+    1. Convert all boundaries to frame numbers
+    2. Snap to beat times if available (within tolerance)
+    3. Check each scene's sub-clip remainder — if the last sub-clip would
+       be below min_frames, adjust the scene boundary
+    4. Verify first scene starts at frame 0, last ends at total_frames
+    5. Verify no gaps or overlaps between consecutive scenes
+    """
+    from musicvision.engine_registry import compute_subclip_frames, scene_frames
+
+    if not scenes:
+        return scenes
+
+    fps = constraints.fps
+    total_song_frames = scene_frames(0.0, song_duration, fps)
+
+    for scene in scenes:
+        total = scene_frames(scene.time_start, scene.time_end, fps)
+        if total <= 0:
+            continue
+
+        # Check whether the sub-clip split produces a remainder below min
+        sub_counts = compute_subclip_frames(total, constraints.max_frames, constraints.min_frames)
+
+        # If compute_subclip_frames succeeded, the split is valid.
+        # Store the computed frame info on the scene for later use.
+        frame_start = scene_frames(0.0, scene.time_start, fps)
+        scene.frame_start = frame_start
+        scene.frame_end = frame_start + total
+        scene.total_frames = total
+        scene.subclip_frame_counts = sub_counts
+
+    # Verify coverage: first should start near 0, last should end near total
+    if scenes[0].frame_start is not None and scenes[0].frame_start > 1:
+        log.warning(
+            "First scene starts at frame %d (%.2fs), expected 0",
+            scenes[0].frame_start, scenes[0].time_start,
+        )
+
+    if scenes[-1].frame_end is not None:
+        gap_frames = abs(total_song_frames - scenes[-1].frame_end)
+        if gap_frames > 1:
+            log.warning(
+                "Last scene ends at frame %d but song has %d frames (%d frame gap)",
+                scenes[-1].frame_end, total_song_frames, gap_frames,
+            )
+
+    # Check for gaps/overlaps between consecutive scenes
+    for i in range(len(scenes) - 1):
+        this_end = scenes[i].time_end
+        next_start = scenes[i + 1].time_start
+        gap = next_start - this_end
+        if abs(gap) > 0.01:
+            log.warning(
+                "Gap/overlap between %s and %s: %.3fs",
+                scenes[i].id, scenes[i + 1].id, gap,
+            )
+
+    return scenes

@@ -3,7 +3,6 @@ import type { ProjectConfig, Scene } from "../api/types";
 interface Props {
   config: ProjectConfig;
   scenes: Scene[];
-  onApproveAll: () => void;
 }
 
 function formatDuration(seconds: number | null): string {
@@ -13,12 +12,11 @@ function formatDuration(seconds: number | null): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-export default function ProjectHeader({ config, scenes, onApproveAll }: Props) {
-  const approvedCount = scenes.filter(
-    (s) => s.image_status === "approved",
-  ).length;
+export default function ProjectHeader({ config, scenes }: Props) {
   const withImages = scenes.filter((s) => s.reference_image).length;
-  const subClipCount = scenes.reduce((acc, s) => acc + s.sub_clips.length, 0);
+  const withVideo = scenes.filter(
+    (s) => s.video_clip || s.sub_clips.some((sc) => sc.video_clip),
+  ).length;
 
   return (
     <header className="project-header">
@@ -30,22 +28,14 @@ export default function ProjectHeader({ config, scenes, onApproveAll }: Props) {
           <span className="stat">
             {formatDuration(config.song.duration_seconds)}
           </span>
-          <span className="stat">
-            {scenes.length} scenes
-            {subClipCount > 0 && ` (${subClipCount} sub-clips)`}
-          </span>
+          <span className="stat">{scenes.length} scenes</span>
           <span className="stat">
             {withImages}/{scenes.length} images
           </span>
           <span className="stat">
-            {approvedCount}/{scenes.length} approved
+            {withVideo}/{scenes.length} video
           </span>
         </div>
-      </div>
-      <div className="header-actions">
-        <button onClick={onApproveAll} className="btn-secondary">
-          Approve All
-        </button>
       </div>
     </header>
   );

@@ -6,7 +6,10 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/api": "http://localhost:8000",
+      "/api": {
+        target: "http://localhost:8000",
+        timeout: 600000, // 10 min — regen endpoints are slow (GPU inference)
+      },
       "/files": "http://localhost:8000",
     },
   },

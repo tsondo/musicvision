@@ -28,6 +28,10 @@ import tempfile
 import threading
 from pathlib import Path
 
+from musicvision.engine_registry import (
+    get_constraints,
+    sub_clip_suffixes as _registry_sub_clip_suffixes,
+)
 from musicvision.models import HunyuanAvatarConfig
 from musicvision.video.base import VideoEngine, VideoInput, VideoResult
 
@@ -44,14 +48,11 @@ _WRAPPER_TIMEOUT = 1800         # 30 min per clip (includes model loading)
 
 
 def _sub_clip_suffixes(n: int) -> list[str]:
-    """Generate sub-clip suffixes: a, b, ..., z, aa, ab, ..."""
-    result: list[str] = []
-    for i in range(n):
-        if i < 26:
-            result.append(chr(ord("a") + i))
-        else:
-            result.append(chr(ord("a") + (i // 26) - 1) + chr(ord("a") + (i % 26)))
-    return result
+    """Generate sub-clip suffixes: a, b, ..., z, aa, ab, ...
+
+    Deprecated: use ``engine_registry.sub_clip_suffixes()`` instead.
+    """
+    return _registry_sub_clip_suffixes(n)
 
 
 def _drain_stderr(proc: subprocess.Popen) -> None:
@@ -395,17 +396,59 @@ class HunyuanAvatarEngine(VideoEngine):
         output_dir: Path,
         scene_id: str,
         duration: float,
+        subclip_frame_counts: list[int] | None = None,
+        subclip_audio_paths: list[Path] | None = None,
     ) -> list[VideoResult]:
         """
         Generate video for a full scene, splitting into sub-clips if needed.
 
-        HunyuanVideo-Avatar supports longer clips than HuMo (5.16s default vs 3.88s),
-        but scenes longer than max_duration still need splitting.
+        When *subclip_frame_counts* and *subclip_audio_paths* are provided
+        (from ``engine_registry.plan_subclips``), those pre-computed values
+        are used directly.  Otherwise falls back to float-based splitting.
         """
         if not self._loaded:
             raise RuntimeError("Call load() before generate_scene()")
 
         output_dir.mkdir(parents=True, exist_ok=True)
+
+        # --- Frame-plan path (preferred) ---
+        if subclip_frame_counts is not None:
+            if len(subclip_frame_counts) == 1:
+                output_path = output_dir / f"{scene_id}.mp4"
+                result = self.generate(VideoInput(
+                    text_prompt=text_prompt,
+                    reference_image=reference_image,
+                    audio_segment=audio_segment,
+                    output_path=output_path,
+                ))
+                return [result]
+
+            n_sub = len(subclip_frame_counts)
+            suffixes = _sub_clip_suffixes(n_sub)
+            outputs: list[VideoResult] = []
+
+            for i, suffix in enumerate(suffixes):
+                sub_audio = (
+                    subclip_audio_paths[i]
+                    if subclip_audio_paths and i < len(subclip_audio_paths)
+                    else audio_segment.parent / f"{scene_id}_sub_{i:02d}.wav"
+                )
+                if not sub_audio.exists():
+                    log.warning("Sub-clip audio not found: %s, using full segment", sub_audio)
+                    sub_audio = audio_segment
+
+                output_path = output_dir / f"{scene_id}_{suffix}.mp4"
+                result = self.generate(VideoInput(
+                    text_prompt=text_prompt,
+                    reference_image=reference_image,
+                    audio_segment=sub_audio,
+                    output_path=output_path,
+                ))
+                outputs.append(result)
+
+            return outputs
+
+        # --- Legacy float-based path ---
         max_dur = self.config.max_duration
 
         if duration <= max_dur:
@@ -421,9 +464,8 @@ class HunyuanAvatarEngine(VideoEngine):
         # Split into sub-clips
         n_sub = math.ceil(duration / max_dur)
         suffixes = _sub_clip_suffixes(n_sub)
-        outputs: list[VideoResult] = []
+        outputs_legacy: list[VideoResult] = []
 
-        # Look for pre-sliced audio segments
         seg_dir = audio_segment.parent
 
         for i, suffix in enumerate(suffixes):
@@ -447,6 +489,6 @@ class HunyuanAvatarEngine(VideoEngine):
                 audio_segment=sub_audio,
                 output_path=output_path,
             ))
-            outputs.append(result)
+            outputs_legacy.append(result)
 
-        return outputs
+        return outputs_legacy

@@ -2,7 +2,7 @@
 
 ## Overview
 
-MusicVision is a music video production pipeline that combines open-source AI tools to turn a song (audio + lyrics) into a complete music video. It wraps multiple video generation backends (HunyuanVideo 1.5, LTX-2, HuMo) and FLUX for reference image generation into an iterative, user-controlled workflow.
+MusicVision is a music video production pipeline that combines open-source AI tools to turn a song (audio + lyrics) into a complete music video. It wraps multiple video generation backends (HunyuanVideo-Avatar, HuMo) and FLUX for reference image generation into an iterative, user-controlled workflow.
 
 ### Core Principle: Segment for Video, Assemble with Original Audio
 
@@ -15,7 +15,7 @@ The pipeline segments audio for **video generation only** — each scene's slice
 ## System Requirements
 
 ### Inference Workstation (image + video generation)
-- **Primary GPU (GPU0)**: NVIDIA RTX 5090 (32GB VRAM) — runs DiT for FLUX, HunyuanVideo, LTX-2, or HuMo
+- **Primary GPU (GPU0)**: NVIDIA RTX 5090 (32GB VRAM) — runs DiT for FLUX, HunyuanVideo-Avatar, or HuMo
 - **Secondary GPU (GPU1)**: NVIDIA RTX 4080 (16GB VRAM) — offloads text encoders, VAE, Whisper, audio separator
 - **Multi-GPU Strategy**: Proven in ComfyUI. DiT on GPU0 (5090), everything else on GPU1 (4080). This allows running large models at full quality while keeping encoders and VAE on the secondary GPU.
 - **Model Swapping**: FLUX and video engines run in different pipeline stages (not simultaneously). Within each stage, model components are split across both GPUs. Weights fully unloaded between stages.
@@ -42,9 +42,9 @@ The pipeline segments audio for **video generation only** — each scene's slice
 │  INTAKE &    │  IMAGE GEN &  │  VIDEO GEN         │  ASSEMBLY &      │
 │  SEGMENTATION│  STORYBOARD   │  (selectable)      │  EXPORT          │
 ├──────────────┼───────────────┼────────────────────┼──────────────────┤
-│ Whisper      │ FLUX          │ HunyuanVideo 1.5   │ ffmpeg           │
-│ ffmpeg       │ Z-Image       │ LTX-2 (19B)        │ FCPXML/EDL gen   │
-│ LLM (Claude) │ (LoRA)        │ HuMo TIA (17B/1.7B)│                 │
+│ Whisper      │ FLUX          │ HunyuanVideo-Avatar│ ffmpeg           │
+│ ffmpeg       │ Z-Image       │ HuMo TIA (17B/1.7B)│ FCPXML/EDL gen   │
+│ LLM (Claude) │ (LoRA)        │                    │                  │
 └──────────────┴───────────────┴────────────────────┴──────────────────┘
 ```
 
@@ -56,18 +56,15 @@ Each video engine has fixed frame constraints that govern the entire pipeline:
 |--------|-----------|-----|-------------|-----------|-------|
 | HuMo 17B | 97 | 25 | 3.88s | 25 (1.0s) | TIA mode (text+image+audio) |
 | HuMo 1.7B | 97 | 25 | 3.88s | 25 (1.0s) | Preview/iteration |
-| HunyuanVideo 1.5 | 129 | 25 | 5.16s | 33 (1.32s) | Step-distilled available |
-| LTX-2 19B | varies | 24 | ~10s | 33 (1.375s) | Unified audio+video; frames must be 8n+1 |
+| HunyuanVideo-Avatar | 129 | 25 | 5.16s | 33 (1.32s) | Audio-driven lip sync, subprocess engine |
 
 **The active engine's constraints are injected into segmentation and sub-clip splitting.** The pipeline must never assume a fixed max duration — always read from the engine config.
 
 ```python
 # Engine constraint constants — single source of truth
 ENGINE_CONSTRAINTS = {
-    "humo_17b":     {"max_frames": 97,  "fps": 25, "min_frames": 25},
-    "humo_1.7b":    {"max_frames": 97,  "fps": 25, "min_frames": 25},
-    "hunyuan_1.5":  {"max_frames": 129, "fps": 25, "min_frames": 33},
-    "ltx2":         {"max_frames": 241, "fps": 24, "min_frames": 33},  # 8n+1
+    "humo":              {"max_frames": 97,  "fps": 25, "min_frames": 25},
+    "hunyuan_avatar":    {"max_frames": 129, "fps": 25, "min_frames": 33},
 }
 ```
 
@@ -81,14 +78,10 @@ GPU0 — RTX 5090 (32 GB)          GPU1 — RTX 4080 (16 GB)
 │   FP8:  ~12 GB          │       │ Whisper          ~1.5 GB│
 ├─────────────────────────┤       │ Audio separator  ~0.5 GB│
 │ Stage 3 (one at a time):│       │                         │
-│  HunyuanVideo 1.5       │       │ For LTX-2:              │
-│   bf16: ~17 GB          │       │  Gemma-3-12B Q4  ~8 GB  │
-│   FP8:  ~9 GB           │       │  Audio VAE       ~0.5 GB│
-│  LTX-2 19B              │       │  Video VAE       ~0.5 GB│
-│   FP8:  ~16 GB          │       │                         │
-│   Q4_K_M: ~14 GB        │       │ Total: ~12-13 GB        │
-│  HuMo 17B               │       │ Headroom: ~3-4 GB       │
-│   fp8:  ~18 GB          │       └─────────────────────────┘
+│  HunyuanVideo-Avatar    │       │ Total: ~12-13 GB        │
+│   bf16 + cpu_offload    │       │ Headroom: ~3-4 GB       │
+│  HuMo 17B               │       └─────────────────────────┘
+│   fp8:  ~18 GB          │
 │   gguf: 11–18.5 GB      │
 │  HuMo 1.7B (preview)    │
 │   fp16: ~3.4 GB         │
@@ -186,7 +179,7 @@ Scene: 200 frames (8.0s)
   Result: [67, 67, 66] — all within [25, 97] ✓
 ```
 
-**Example (HunyuanVideo 1.5, max=129 frames, min=33 frames):**
+**Example (HunyuanVideo-Avatar, max=129 frames, min=33 frames):**
 
 ```
 Scene: 150 frames (6.0s)
@@ -345,7 +338,7 @@ def assemble_rough_cut(scenes, paths, original_audio, approved_only=True):
    - Vocal-separated versions also sliced (for Whisper only — see critical note below)
    - **Sub-clip audio is NOT sliced at this stage** — it happens in Stage 3 after `compute_subclip_frames()` determines the exact frame counts
 
-> **⚠️ Critical: The video engine receives the full audio mix, not isolated vocals.** The vocal stem is used *only* to improve Whisper transcription accuracy. HuMo/HunyuanVideo/LTX-2 were trained on mixed audio — feeding isolated vocals degrades A/V sync. Audio segments in `segments/` are always full-mix; `segments_vocal/` is consumed only by the transcription step.
+> **⚠️ Critical: The video engine receives the full audio mix, not isolated vocals.** The vocal stem is used *only* to improve Whisper transcription accuracy. HuMo and HunyuanVideo-Avatar were trained on mixed audio — feeding isolated vocals degrades A/V sync. Audio segments in `segments/` are always full-mix; `segments_vocal/` is consumed only by the transcription step.
 
 ### Outputs
 - `project.yaml` (initial)
@@ -373,9 +366,9 @@ def assemble_rough_cut(scenes, paths, original_audio, approved_only=True):
    - FLUX.1-dev is gated (requires `HUGGINGFACE_TOKEN`); FLUX.1-schnell is open
    - User can override individual prompts and regenerate per scene
 
-3. **Storyboard Review** *(planned — not built)*
-   - API endpoints exist for scene CRUD and approval (`PATCH /api/scenes/{id}`, `POST /api/scenes/approve-all`)
-   - Visual storyboard UI (grid layout with thumbnails) is not yet built
+3. **Storyboard Review**
+   - React storyboard with scene grid, preview panel, per-scene approval and regeneration.
+   - API endpoints for scene CRUD and approval (`PATCH /api/scenes/{id}`, `POST /api/scenes/approve-all`)
 
 ### Outputs
 - Updated `scenes.json` with image prompts and status
@@ -389,9 +382,8 @@ The active video engine is set in `project.yaml` → `video_engine`. All engines
 
 | Engine | Strengths | When to Use |
 |--------|----------|-------------|
-| HunyuanVideo 1.5 | Proven consumer GPU support, step-distilled fast mode, strong motion quality | Default for most projects |
-| LTX-2 | Unified audio+video generation, native lip sync, spatial/temporal upscalers | Music videos with singing/dialogue |
-| HuMo TIA | Audio-conditioned with dual CFG, character preservation | When audio reactivity is critical |
+| HunyuanVideo-Avatar | Audio-driven lip sync, full-body animation, excellent quality | Default for most projects (primary engine) |
+| HuMo TIA | Audio-conditioned with dual CFG, character preservation | When audio reactivity is critical (back burner) |
 
 ### Process
 
@@ -429,9 +421,9 @@ The active video engine is set in `project.yaml` → `video_engine`. All engines
    - Seed: always resolved (random if not provided), recorded in output
    - Config from `project.yaml` (engine-specific section)
 
-4. **Scene Review** *(planned — not built)*
-   - API endpoints for per-scene video status exist
-   - Visual clip review UI is not yet built
+4. **Scene Review**
+   - Scene review via React storyboard.
+   - API endpoints for per-scene video status and approval.
 
 ### Outputs
 - Updated `scenes.json` with video prompts, sub-clip frame counts, and status
@@ -478,7 +470,7 @@ song:
     caption: null
     lyrics: null
 
-video_engine: "hunyuan_1.5"    # hunyuan_1.5 | ltx2 | humo_17b | humo_1.7b
+video_engine: "hunyuan_avatar"  # hunyuan_avatar | humo
 
 humo:
   tier: "fp8_scaled"
@@ -496,12 +488,6 @@ hunyuan:
   infer_steps: 30
   cfg_scale: 7.5
   cpu_offload: true
-
-ltx2:
-  precision: "fp8"              # bf16 | fp8 | q6_k | q4_k_m
-  distilled: false              # Use 8-step distilled LoRA
-  spatial_upscale: false
-  temporal_upscale: false
 
 image_gen:
   model: "flux-dev"
@@ -549,7 +535,7 @@ vocal_separation:
       "video_prompt_user_override": null,
       "video_clip": "clips/scene_001.mp4",
       "video_status": "pending",
-      "video_engine": "hunyuan_1.5",
+      "video_engine": "hunyuan_avatar",
 
       "sub_clips": [],
 
@@ -590,7 +576,7 @@ vocal_separation:
       "video_prompt_user_override": null,
       "video_clip": null,
       "video_status": "pending",
-      "video_engine": "hunyuan_1.5",
+      "video_engine": "hunyuan_avatar",
 
       "sub_clips": [
         "clips/sub/scene_005_a.mp4",
@@ -704,12 +690,11 @@ src/musicvision/
 │   ├── flux_engine.py        # FLUX inference wrapper
 │   └── storyboard.py         # Storyboard management
 ├── video/
-│   ├── prompt_generator.py   # LLM-assisted video prompts
-│   ├── engine_base.py        # Abstract video engine interface
-│   ├── humo_engine.py        # HuMo TIA inference wrapper
-│   ├── hunyuan_engine.py     # HunyuanVideo 1.5 wrapper
-│   ├── ltx2_engine.py        # LTX-2 wrapper
-│   └── scene_manager.py      # Scene review/regeneration
+│   ├── prompt_generator.py        # LLM-assisted video prompts
+│   ├── base.py                    # Abstract video engine interface
+│   ├── factory.py                 # Engine factory dispatch
+│   ├── humo_engine.py             # HuMo TIA inference wrapper
+│   └── hunyuan_avatar_engine.py   # HunyuanVideo-Avatar subprocess wrapper
 ├── assembly/
 │   ├── concatenator.py       # ffmpeg clip joining + audio sync + duration assertion
 │   ├── exporter.py           # FCPXML/EDL generation
@@ -752,10 +737,8 @@ class EngineConstraints:
         return self.min_frames / self.fps
 
 ENGINES = {
-    "humo_17b":    EngineConstraints("HuMo 17B",          max_frames=97,  min_frames=25, fps=25),
-    "humo_1.7b":   EngineConstraints("HuMo 1.7B",         max_frames=97,  min_frames=25, fps=25),
-    "hunyuan_1.5": EngineConstraints("HunyuanVideo 1.5",  max_frames=129, min_frames=33, fps=25),
-    "ltx2":        EngineConstraints("LTX-2 19B",         max_frames=241, min_frames=33, fps=24),
+    "humo":             EngineConstraints("HuMo",                max_frames=97,  min_frames=25, fps=25),
+    "hunyuan_avatar":   EngineConstraints("HunyuanVideo-Avatar", max_frames=129, min_frames=33, fps=25),
 }
 
 def get_engine(name: str) -> EngineConstraints:
@@ -802,41 +785,31 @@ def compute_subclip_frames(
 
 *(No changes to existing CLI. The `--video-engine` flag selects the active engine.)*
 
-## UI Plans
+## UI — React Storyboard
 
-### Layout: Tabbed Storyboard
+A React + Vite frontend is implemented for scene review and approval. It communicates with the FastAPI backend via proxied `/api` and `/files` routes.
 
-**Tab 1: Project Setup** — Song upload, lyrics, engine selection, style sheet editor
+**Implemented features:**
+- Scene grid with thumbnails showing reference images and video clip status
+- Preview panel for viewing generated images and video clips
+- Per-scene prompt editing (image and video prompts)
+- Per-scene approval and regeneration controls
+- Project header with song info, BPM, duration, and engine selection
+- Dark theme, plain CSS + React 19, no state management library
 
-**Tab 2: Segmentation Editor** — Timeline view of scenes with:
-- Waveform display with scene boundaries
-- Drag-to-adjust scene boundaries (with frame-snap feedback)
-- Sub-clip preview: visual indicator showing how each scene will split
-- Per-scene type toggle (vocal/instrumental)
-- "Re-segment" button to re-run LLM segmentation
-
-**Tab 3: Scene Grid** — Storyboard view:
-
-| Column | Content | Interaction |
-|--------|---------|------------|
-| 1. ID | Scene number + section label | — |
-| 2. Time | Start → End (frames) | — |
-| 3. Lyrics | Scene lyrics excerpt | Editable |
-| 4. Reference Image | Generated thumbnail | Click to regenerate |
-| 5. Video Clip | Generated video player | Click to play + "Regenerate" |
-| 6. Status | Approve/reject toggles for image and video | Toggle |
-| 7. Sub-clips | Sub-clip count + frame distribution | Expandable detail |
-
-**Tab 4: Assembly & Export** — Full rough-cut video player with original audio, export controls
+**Future UI work (not yet built):**
+- Waveform display with scene boundary editing
+- Drag-to-reorder scenes
+- Assembly & export controls
+- Progress feedback for long-running generation jobs (SSE/WebSocket)
 
 ## Open Questions / Future Work
 
-- **Frontend**: React vs Gradio — not decided. REST API is UI-agnostic.
 - **Progress feedback**: No SSE/WebSocket for long-running jobs. API endpoints are synchronous.
 - **Partial failure recovery**: Exception propagates on failure; already-generated clips survive. Needs a proper job/resume model.
 - **Transitions**: Currently hard cuts only. Future: AI-generated transitions, crossfades.
 - **Batch rendering**: Scenes generate sequentially. Future: multi-GPU or cloud parallelism.
 - **LoRA training**: Pipeline accepts LoRA paths but doesn't include training workflows.
-- **LTX-2 integration depth**: Unified audio+video generation could eliminate the separate audio slicing step entirely for some workflows. Needs investigation.
-- **Engine hot-swap**: Allow different engines per scene (e.g., LTX-2 for vocal scenes, HunyuanVideo for instrumentals).
+- **Future engine integrations**: LTX-2 (unified audio+video generation) and HunyuanVideo 1.5 (step-distilled fast mode) are candidates for future integration.
+- **Engine hot-swap**: Per-scene engine selection is implemented. Future: UI for per-scene engine assignment.
 - **Render time estimation**: No upfront time estimate for users.

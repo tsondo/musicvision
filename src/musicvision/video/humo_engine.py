@@ -50,6 +50,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from musicvision.engine_registry import (
+    ENGINES,
+    get_constraints,
+    sub_clip_suffixes as _registry_sub_clip_suffixes,
+)
 from musicvision.models import HumoConfig, HumoTier
 from musicvision.video.model_loader import HumoModelBundle, get_loader
 
@@ -58,10 +63,12 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-# HuMo hard limits
-MAX_FRAMES   = 97           # 97 frames @ 25 fps = 3.88 s
-FPS          = 25
-MAX_DURATION = MAX_FRAMES / FPS   # 3.88 s
+# HuMo hard limits — canonical values now live in engine_registry.ENGINES["humo"].
+# These are kept as deprecated aliases for any external code that imports them.
+_HUMO_CONSTRAINTS = get_constraints("humo")
+MAX_FRAMES   = _HUMO_CONSTRAINTS.max_frames   # 97
+FPS          = _HUMO_CONSTRAINTS.fps            # 25
+MAX_DURATION = _HUMO_CONSTRAINTS.max_seconds    # 3.88
 
 
 # ---------------------------------------------------------------------------
@@ -284,20 +291,18 @@ class HumoEngine:
         output_dir: Path,
         scene_id: str,
         duration: float,
+        subclip_frame_counts: list[int] | None = None,
+        subclip_audio_paths: list[Path] | None = None,
     ) -> list[HumoOutput]:
         """
         Generate video for a full scene, splitting into sub-clips when duration > 3.88s.
 
+        When *subclip_frame_counts* and *subclip_audio_paths* are provided
+        (from ``engine_registry.plan_subclips``), those pre-computed values
+        are used directly.  Otherwise falls back to the old float-based path.
+
         Sub-clip continuity (config.sub_clip_continuity, default True):
             Sub-clip N+1 uses the last frame of sub-clip N as its reference image.
-            This produces smooth visual continuity across sub-clips without requiring
-            the model to re-anchor to a static reference image for each segment.
-            The first sub-clip always uses the scene's original reference image.
-            Disable via HumoConfig.sub_clip_continuity = False to revert to static
-            reference behaviour (all sub-clips share the original reference image).
-
-        Sub-clip audio segments must be pre-sliced and stored as
-        <segment_dir>/scene_XXX_sub_NN.wav by the intake pipeline.
 
         Returns:
             List of HumoOutput (one per sub-clip, or a single item for short scenes).
@@ -307,6 +312,58 @@ class HumoEngine:
 
         output_dir.mkdir(parents=True, exist_ok=True)
 
+        # --- Frame-plan path (preferred) ---
+        if subclip_frame_counts is not None:
+            if len(subclip_frame_counts) == 1:
+                output_path = output_dir / f"{scene_id}.mp4"
+                result = self.generate(HumoInput(
+                    text_prompt=text_prompt,
+                    reference_image=reference_image,
+                    audio_segment=audio_segment,
+                    output_path=output_path,
+                ))
+                return [result]
+
+            # Multiple sub-clips with pre-computed frame counts
+            n_sub = len(subclip_frame_counts)
+            suffixes = _sub_clip_suffixes(n_sub)
+            outputs: list[HumoOutput] = []
+            current_reference = reference_image
+
+            for i in range(n_sub):
+                sub_audio = (
+                    subclip_audio_paths[i]
+                    if subclip_audio_paths and i < len(subclip_audio_paths)
+                    else audio_segment.parent / f"{scene_id}_sub_{i:02d}.wav"
+                )
+                if not sub_audio.exists():
+                    log.warning("Sub-clip audio not found: %s — skipping sub-clip %d", sub_audio.name, i)
+                    continue
+
+                suffix = suffixes[i]
+                sub_id = f"{scene_id}_{suffix}"
+                sub_out = output_dir / f"{sub_id}.mp4"
+
+                result = self.generate(HumoInput(
+                    text_prompt=text_prompt,
+                    reference_image=current_reference,
+                    audio_segment=sub_audio,
+                    output_path=sub_out,
+                ))
+                outputs.append(result)
+
+                if self.config.sub_clip_continuity and i < n_sub - 1:
+                    lastframe_path = output_dir / f"{sub_id}_lastframe.png"
+                    try:
+                        _extract_last_frame(result.video_path, lastframe_path)
+                        current_reference = lastframe_path
+                    except Exception as exc:
+                        log.warning("Failed to extract last frame from %s: %s", result.video_path.name, exc)
+                        current_reference = reference_image
+
+            return outputs
+
+        # --- Legacy float-based path ---
         if duration <= MAX_DURATION:
             output_path = output_dir / f"{scene_id}.mp4"
             output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -319,7 +376,7 @@ class HumoEngine:
             return [result]
 
         # Scene is longer than one clip — split into sub-clips
-        outputs: list[HumoOutput] = []
+        outputs_legacy: list[HumoOutput] = []
         n_sub = math.ceil(duration / MAX_DURATION)
         suffixes = _sub_clip_suffixes(n_sub)
         log.info(
@@ -327,7 +384,7 @@ class HumoEngine:
             scene_id, duration, n_sub,
         )
 
-        current_reference = reference_image  # updated per sub-clip when continuity is on
+        current_reference = reference_image
 
         for i in range(n_sub):
             sub_audio = audio_segment.parent / f"{scene_id}_sub_{i:02d}.wav"
@@ -348,18 +405,13 @@ class HumoEngine:
                 audio_segment=sub_audio,
                 output_path=sub_out,
             ))
-            outputs.append(result)
+            outputs_legacy.append(result)
 
-            # Extract last frame for next sub-clip (continuity mode)
             if self.config.sub_clip_continuity and i < n_sub - 1:
                 lastframe_path = output_dir / f"{sub_id}_lastframe.png"
                 try:
                     _extract_last_frame(result.video_path, lastframe_path)
                     current_reference = lastframe_path
-                    log.debug(
-                        "Sub-clip continuity: using %s as reference for sub-clip %d",
-                        lastframe_path.name, i + 1,
-                    )
                 except Exception as exc:
                     log.warning(
                         "Failed to extract last frame from %s: %s — "
@@ -368,7 +420,7 @@ class HumoEngine:
                     )
                     current_reference = reference_image
 
-        return outputs
+        return outputs_legacy
 
     # ------------------------------------------------------------------
     # VRAM management: offload / reload models on encoder GPU
@@ -863,14 +915,11 @@ def _extract_last_frame(video_path: Path, output_path: Path) -> None:
 
 
 def _sub_clip_suffixes(n: int) -> list[str]:
-    """Generate sub-clip suffixes: a, b, c, ... aa, ab, ..."""
-    suffixes = []
-    for i in range(n):
-        if i < 26:
-            suffixes.append(chr(ord("a") + i))
-        else:
-            suffixes.append(chr(ord("a") + i // 26 - 1) + chr(ord("a") + i % 26))
-    return suffixes
+    """Generate sub-clip suffixes: a, b, c, ... aa, ab, ...
+
+    Deprecated: use ``engine_registry.sub_clip_suffixes()`` instead.
+    """
+    return _registry_sub_clip_suffixes(n)
 
 
 def _audio_duration(path: Path) -> float:

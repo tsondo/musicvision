@@ -12,6 +12,7 @@ export interface SubClip {
   video_prompt: string | null;
   video_clip: string | null;
   status: ApprovalStatus;
+  frame_count: number | null;
 }
 
 export interface Scene {
@@ -21,6 +22,14 @@ export interface Scene {
   time_end: number;
   type: SceneType;
   lyrics: string;
+  section: string;
+
+  // Frame-accurate fields (populated by engine_registry.plan_subclips)
+  frame_start: number | null;
+  frame_end: number | null;
+  total_frames: number | null;
+  subclip_frame_counts: number[] | null;
+  generation_audio_segments: string[] | null;
 
   audio_segment: string | null;
   audio_segment_vocal: string | null;
@@ -66,4 +75,20 @@ export interface UpdateSceneRequest {
   image_status?: ApprovalStatus;
   video_status?: ApprovalStatus;
   notes?: string;
+}
+
+export type ImageModelType =
+  | "z-image-turbo"
+  | "z-image"
+  | "flux-dev"
+  | "flux-schnell";
+
+export interface RegenerateImageRequest {
+  model?: ImageModelType;
+  seed?: number;
+}
+
+export interface RegenerateVideoRequest {
+  engine?: VideoEngineType;
+  seed?: number;
 }

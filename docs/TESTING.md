@@ -19,6 +19,7 @@ MusicVision uses a two-layer test strategy: fast unit tests that run anywhere, a
 | `test_intake.py` | Segmentation logic, timestamp parsing, AceStep metadata integration |
 | `test_image_engine.py` | FLUX + Z-Image engine config, factory dispatch, prompt generator, batch prompt parsing |
 | `test_video_engine.py` | HuMo engine config, video prompt construction, sub-clip splitting logic |
+| `test_engine_registry.py` | Engine constraints, frame math, sub-clip computation |
 | `test_hunyuan_avatar_engine.py` | HVA config, VideoEngineType enum, factory dispatch, engine lifecycle, scene splitting |
 
 ---
@@ -61,7 +62,7 @@ musicvision assemble --project ./test_storyboard
 
 ## Recommended Test Workflow
 
-1. **After code changes:** `python -m pytest tests/ -v --tb=short` (123 tests, <10 seconds)
+1. **After code changes:** `python -m pytest tests/ -v --tb=short` (~107 tests, <10 seconds)
 2. **After LLM prompt changes:** run pytest, then `python scripts/test_vllm_prompts.py`
 3. **After image engine changes:** `python scripts/test_image_gen.py`
 4. **After HuMo/video changes:** `python scripts/test_gpu_pipeline.py`

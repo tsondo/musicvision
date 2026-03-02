@@ -11,10 +11,14 @@ import logging
 from pathlib import Path
 
 from musicvision.models import ApprovalStatus, Scene, SceneList
-from musicvision.utils.audio import concat_videos, mux_video_audio
+from musicvision.utils.audio import concat_videos, get_duration, mux_video_audio
 from musicvision.utils.paths import ProjectPaths
 
 log = logging.getLogger(__name__)
+
+
+class SyncError(RuntimeError):
+    """Raised when assembled video duration does not match audio duration."""
 
 
 def assemble_rough_cut(
@@ -83,6 +87,23 @@ def assemble_rough_cut(
     else:
         silent_cut = paths.output_dir / "_rough_cut_silent.mp4"
         concat_videos(clip_paths, silent_cut)
+
+    # Duration sync check: verify video matches audio within one frame
+    try:
+        video_dur = get_duration(silent_cut)
+        audio_dur = get_duration(original_audio)
+        fps = 25  # default; could be made configurable via engine constraints
+        tolerance = 1.0 / fps
+        drift = abs(video_dur - audio_dur)
+
+        if drift > tolerance:
+            log.warning(
+                "SYNC WARNING: video=%.4fs, audio=%.4fs, drift=%.4fs (%.1f frames)",
+                video_dur, audio_dur, drift, drift * fps,
+            )
+            # Log but don't raise — assembly can still proceed, the mux uses -shortest
+    except Exception as exc:
+        log.debug("Could not verify sync: %s", exc)
 
     output = paths.output_dir / "rough_cut.mp4"
     mux_video_audio(silent_cut, original_audio, output)

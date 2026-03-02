@@ -51,3 +51,26 @@ class VideoEngine(ABC):
     @abstractmethod
     def is_loaded(self) -> bool:
         """Whether the model is currently loaded in memory."""
+
+    def generate_scene(
+        self,
+        text_prompt: str,
+        reference_image: Path,
+        audio_segment: Path,
+        output_dir: Path,
+        scene_id: str,
+        duration: float,
+        subclip_frame_counts: list[int] | None = None,
+        subclip_audio_paths: list[Path] | None = None,
+    ) -> list[VideoResult]:
+        """Generate video for a full scene, splitting into sub-clips if needed.
+
+        When *subclip_frame_counts* and *subclip_audio_paths* are provided
+        (from ``engine_registry.plan_subclips``), those pre-computed values
+        are used directly.  Otherwise the engine falls back to its own
+        float-based splitting logic.
+
+        Subclasses should override this method for engine-specific behaviour
+        (e.g. last-frame continuity chaining in HuMo).
+        """
+        raise NotImplementedError("Subclass must implement generate_scene()")

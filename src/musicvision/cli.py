@@ -423,6 +423,12 @@ def cmd_generate_video(args: argparse.Namespace) -> None:
         generate_video_prompts_batch(needs_prompts, svc.config.style_sheet, config=svc.config)
         svc.save_scenes()
 
+    # Pre-compute sub-clip frame plans
+    from musicvision.engine_registry import get_constraints, plan_subclips, sub_clip_suffixes, frames_to_seconds
+    constraints = get_constraints(engine_type.value)
+    plan_subclips(targets, constraints, svc.paths.segments_dir, svc.paths.sub_segments_dir)
+    svc.save_scenes()
+
     # Create engine
     if engine_type == VideoEngineType.HUNYUAN_AVATAR:
         engine = create_video_engine(svc.config.hunyuan_avatar, engine_type=engine_type)
@@ -437,13 +443,6 @@ def cmd_generate_video(args: argparse.Namespace) -> None:
         )
 
     engine.load()
-
-    # Determine max_duration for sub-clip time calculations
-    if engine_type == VideoEngineType.HUNYUAN_AVATAR:
-        max_dur = svc.config.hunyuan_avatar.max_duration
-    else:
-        from musicvision.video.humo_engine import MAX_DURATION
-        max_dur = MAX_DURATION
 
     generated = 0
     errors = []
@@ -462,6 +461,15 @@ def cmd_generate_video(args: argparse.Namespace) -> None:
             ref_image = svc.resolve_path(scene.reference_image)
             audio_seg = svc.resolve_path(scene.audio_segment)
 
+            # Resolve pre-computed sub-clip audio paths
+            subclip_audio = None
+            if scene.generation_audio_segments and len(scene.generation_audio_segments) > 1:
+                from pathlib import Path as _Path
+                subclip_audio = [
+                    svc.resolve_path(p) if not _Path(p).is_absolute() else _Path(p)
+                    for p in scene.generation_audio_segments
+                ]
+
             print(f"  Generating {scene.id} ({scene.duration:.2f}s)…")
             try:
                 outputs = engine.generate_scene(
@@ -471,19 +479,29 @@ def cmd_generate_video(args: argparse.Namespace) -> None:
                     output_dir=svc.paths.clips_dir,
                     scene_id=scene.id,
                     duration=scene.duration,
+                    subclip_frame_counts=scene.subclip_frame_counts,
+                    subclip_audio_paths=subclip_audio,
                 )
                 if outputs:
                     if len(outputs) == 1:
                         scene.video_clip = str(outputs[0].video_path.relative_to(svc.paths.root))
                     else:
                         from musicvision.models import SubClip, ApprovalStatus
+                        suffixes = sub_clip_suffixes(len(outputs))
+                        frame_counts = scene.subclip_frame_counts or []
                         scene.sub_clips = []
-                        for i, out in enumerate(outputs):
+                        cursor = 0
+                        for i, (out, suffix) in enumerate(zip(outputs, suffixes)):
+                            fc = frame_counts[i] if i < len(frame_counts) else None
+                            sub_start = scene.time_start + frames_to_seconds(cursor, constraints.fps)
+                            cursor += fc or 0
+                            sub_end = scene.time_start + frames_to_seconds(cursor, constraints.fps)
                             sc = SubClip(
-                                id=f"{scene.id}_sub_{i:02d}",
-                                time_start=scene.time_start + i * max_dur,
-                                time_end=min(scene.time_start + (i + 1) * max_dur, scene.time_end),
+                                id=f"{scene.id}_{suffix}",
+                                time_start=sub_start,
+                                time_end=min(sub_end, scene.time_end),
                                 video_clip=str(out.video_path.relative_to(svc.paths.root)),
+                                frame_count=fc,
                             )
                             scene.sub_clips.append(sc)
                     from musicvision.models import ApprovalStatus

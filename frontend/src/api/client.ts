@@ -1,4 +1,10 @@
-import type { ProjectConfig, Scene, UpdateSceneRequest } from "./types";
+import type {
+  ProjectConfig,
+  RegenerateImageRequest,
+  RegenerateVideoRequest,
+  Scene,
+  UpdateSceneRequest,
+} from "./types";
 
 class ApiError extends Error {
   constructor(
@@ -50,6 +56,36 @@ export async function updateScene(
 
 export async function approveAll(): Promise<{ status: string; count: number }> {
   return request("/api/scenes/approve-all", { method: "POST" });
+}
+
+export async function regenerateImage(
+  sceneId: string,
+  req: RegenerateImageRequest,
+): Promise<Scene> {
+  return request(`/api/scenes/${sceneId}/regenerate-image`, {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export async function regenerateVideo(
+  sceneId: string,
+  req: RegenerateVideoRequest,
+): Promise<Scene> {
+  return request(`/api/scenes/${sceneId}/regenerate-video`, {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export async function assemblePreview(): Promise<{
+  status: string;
+  rough_cut: string;
+}> {
+  return request("/api/pipeline/assemble", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
 }
 
 export function fileUrl(path: string): string {

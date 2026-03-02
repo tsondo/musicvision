@@ -145,6 +145,36 @@ def concat_videos(clip_paths: list[Path], output_path: Path) -> Path:
     return output_path
 
 
+def slice_subclip_audio(
+    scene_audio: Path,
+    scene_id: str,
+    subclip_frames: list[int],
+    fps: int,
+    output_dir: Path,
+) -> list[Path]:
+    """
+    Slice a scene's audio segment into sub-clip audio files.
+
+    Timing is derived from frame counts to maintain frame-accuracy.
+    Called AFTER compute_subclip_frames(), BEFORE video generation.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    paths: list[Path] = []
+    cursor_frames = 0
+
+    for i, n_frames in enumerate(subclip_frames):
+        start_sec = cursor_frames / fps
+        end_sec = (cursor_frames + n_frames) / fps
+
+        sub_audio = output_dir / f"{scene_id}_sub_{i:02d}.wav"
+        slice_audio(scene_audio, sub_audio, start_sec, end_sec)
+        paths.append(sub_audio)
+
+        cursor_frames += n_frames
+
+    return paths
+
+
 def convert_to_wav(source: Path, output: Path, sample_rate: int = 16000) -> Path:
     """Convert any audio format to WAV (mono, 16-bit PCM). Used for Whisper input."""
     _check_ffmpeg()

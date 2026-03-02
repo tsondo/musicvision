@@ -64,6 +64,10 @@ class ProjectPaths:
     def segments_vocal_dir(self) -> Path:
         return self.root / "segments_vocal"
 
+    @property
+    def sub_segments_dir(self) -> Path:
+        return self.segments_dir / "sub"
+
     # --- Generated images ---
 
     @property
@@ -116,6 +120,7 @@ class ProjectPaths:
             self.settings_dir,
             self.loras_dir,
             self.segments_dir,
+            self.sub_segments_dir,
             self.segments_vocal_dir,
             self.images_dir,
             self.clips_dir,

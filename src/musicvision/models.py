@@ -349,6 +349,7 @@ class SubClip(BaseModel):
     video_prompt: Optional[str] = None
     video_clip: Optional[str] = None    # path to generated clip
     status: ApprovalStatus = ApprovalStatus.PENDING
+    frame_count: Optional[int] = None   # authoritative duration in frames
 
 
 # ---------------------------------------------------------------------------
@@ -362,6 +363,14 @@ class Scene(BaseModel):
     time_end: float
     type: SceneType = SceneType.VOCAL
     lyrics: str = ""
+    section: str = ""                   # e.g. "verse_1", "chorus" — from LLM or AceStep markers
+
+    # Frame-accurate fields (populated by engine_registry.plan_subclips)
+    frame_start: Optional[int] = None
+    frame_end: Optional[int] = None
+    total_frames: Optional[int] = None
+    subclip_frame_counts: Optional[list[int]] = None
+    generation_audio_segments: Optional[list[str]] = None
 
     # Audio
     audio_segment: Optional[str] = None         # path: segments/scene_001.wav
@@ -396,7 +405,11 @@ class Scene(BaseModel):
 
     @property
     def needs_sub_clips(self) -> bool:
-        """HuMo max is 97 frames @ 25fps ≈ 3.88s."""
+        """HuMo max is 97 frames @ 25fps ≈ 3.88s.
+
+        Deprecated: use ``needs_sub_clips_for_engine()`` with engine constraints
+        from ``engine_registry`` for accurate frame-based checks.
+        """
         return self.duration > 3.88
 
     def needs_sub_clips_for_engine(

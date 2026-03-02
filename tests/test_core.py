@@ -85,6 +85,64 @@ class TestModels:
         )
         assert scene.effective_image_prompt == "my custom prompt"
 
+    def test_scene_frame_fields_roundtrip(self, tmp_path):
+        """New frame-accurate fields survive JSON roundtrip."""
+        scenes = SceneList(scenes=[
+            Scene(
+                id="scene_001", order=1,
+                time_start=0.0, time_end=8.0,
+                frame_start=0, frame_end=200, total_frames=200,
+                section="verse_1",
+                subclip_frame_counts=[67, 67, 66],
+                generation_audio_segments=[
+                    "segments/sub/scene_001_sub_00.wav",
+                    "segments/sub/scene_001_sub_01.wav",
+                    "segments/sub/scene_001_sub_02.wav",
+                ],
+            ),
+        ])
+        path = tmp_path / "scenes.json"
+        scenes.save(path)
+        loaded = SceneList.load(path)
+
+        s = loaded.scenes[0]
+        assert s.frame_start == 0
+        assert s.frame_end == 200
+        assert s.total_frames == 200
+        assert s.section == "verse_1"
+        assert s.subclip_frame_counts == [67, 67, 66]
+        assert len(s.generation_audio_segments) == 3
+
+    def test_subclip_frame_count_roundtrip(self, tmp_path):
+        """SubClip.frame_count survives JSON roundtrip."""
+        from musicvision.models import SubClip as SubClipModel
+        scenes = SceneList(scenes=[
+            Scene(
+                id="scene_001", order=1,
+                time_start=0.0, time_end=8.0,
+                sub_clips=[
+                    SubClipModel(id="scene_001_a", time_start=0.0, time_end=2.68, frame_count=67),
+                    SubClipModel(id="scene_001_b", time_start=2.68, time_end=5.36, frame_count=67),
+                    SubClipModel(id="scene_001_c", time_start=5.36, time_end=8.0, frame_count=66),
+                ],
+            ),
+        ])
+        path = tmp_path / "scenes.json"
+        scenes.save(path)
+        loaded = SceneList.load(path)
+        assert loaded.scenes[0].sub_clips[0].frame_count == 67
+        assert loaded.scenes[0].sub_clips[2].frame_count == 66
+
+    def test_scene_defaults_backward_compat(self):
+        """New fields default to None/empty — old scenes.json files load fine."""
+        scene = Scene(id="s1", order=1, time_start=0, time_end=3.0)
+        assert scene.frame_start is None
+        assert scene.frame_end is None
+        assert scene.total_frames is None
+        assert scene.section == ""
+        assert scene.subclip_frame_counts is None
+        assert scene.generation_audio_segments is None
+
     def test_humo_config_resolution(self):
         hd = HumoConfig(resolution="720p")
         sd = HumoConfig(resolution="480p")

@@ -175,6 +175,15 @@ def run_intake(
         acestep_lyrics = config.song.acestep.lyrics
         log.info("Passing AceStep caption + section-marked lyrics to segmenter")
 
+    # Resolve engine constraints for frame-accurate segmentation
+    engine_constraints = None
+    try:
+        from musicvision.engine_registry import get_constraints
+        engine_constraints = get_constraints(config.video_engine.value)
+        log.info("Engine constraints: %s (max %d frames, %dfps)", engine_constraints.name, engine_constraints.max_frames, engine_constraints.fps)
+    except Exception:
+        log.debug("Could not resolve engine constraints — segmenting without frame awareness")
+
     if use_llm_segmentation and words:
         log.info("Segmenting with Claude API...")
         scene_list = segment_scenes(
@@ -184,12 +193,14 @@ def run_intake(
             beat_times=beat_times,
             acestep_caption=acestep_caption,
             acestep_lyrics=acestep_lyrics,
+            engine_constraints=engine_constraints,
         )
     else:
         log.info("Segmenting with rule-based splitter...")
         scene_list = segment_scenes_simple(
             lyrics_with_timestamps=words,
             song_duration=duration,
+            engine_constraints=engine_constraints,
         )
 
     # --- Slice audio into per-scene segments ---

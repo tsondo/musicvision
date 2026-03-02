@@ -28,9 +28,11 @@ from musicvision.models import (
     ApprovalStatus,
     HumoConfig,
     ImageGenConfig,
+    ImageModel,
     ProjectConfig,
     Scene,
     StyleSheet,
+    VideoEngineType,
 )
 
 # Backward compat — keep FluxConfig importable from here
@@ -85,6 +87,16 @@ class UpdateSceneRequest(BaseModel):
 
 class GenerateRequest(BaseModel):
     scene_ids: list[str] = []  # empty = all scenes
+
+
+class RegenerateImageRequest(BaseModel):
+    model: str | None = None   # "z-image-turbo" | "z-image" | "flux-dev" | "flux-schnell"
+    seed: int = -1             # -1 = random
+
+
+class RegenerateVideoRequest(BaseModel):
+    engine: str | None = None  # "hunyuan_avatar" | "humo"
+    seed: int = -1
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +266,175 @@ async def approve_all_scenes():
 
 
 # ---------------------------------------------------------------------------
+# Per-scene regeneration endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/api/scenes/{scene_id}/regenerate-image")
+async def regenerate_image(scene_id: str, req: RegenerateImageRequest) -> Scene:
+    """Regenerate a single scene's reference image."""
+    from musicvision.imaging import create_engine
+    from musicvision.utils.gpu import detect_devices
+
+    proj = get_project()
+    scene = proj.scenes.get_scene(scene_id)
+    if not scene:
+        raise HTTPException(status_code=404, detail=f"Scene {scene_id} not found")
+
+    prompt = scene.effective_image_prompt
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Scene has no image prompt. Set one first.")
+
+    # Build config — override model if provided
+    config = proj.config.image_gen.model_copy()
+    if req.model:
+        config.model = ImageModel(req.model)
+
+    # Resolve dimensions from style sheet
+    ss = proj.config.style_sheet
+    res_parts = ss.resolution.split("x") if "x" in ss.resolution else ["1280", "720"]
+    width, height = int(res_parts[0]), int(res_parts[1])
+
+    # Character LoRA
+    char_loras: dict[str, tuple[str, float]] = {}
+    for char_def in proj.config.style_sheet.characters:
+        if char_def.lora_path:
+            char_loras[char_def.id] = (char_def.lora_path, char_def.lora_weight)
+
+    lora_path = None
+    lora_weight = 0.8
+    for cid in scene.characters:
+        if cid in char_loras:
+            lora_path, lora_weight = char_loras[cid]
+            break
+
+    device_map = detect_devices()
+    engine = create_engine(config, device_map)
+    engine.load()
+
+    try:
+        output_path = proj.paths.image_path(scene.id)
+        seed = req.seed if req.seed >= 0 else None
+        engine.generate(
+            prompt=prompt,
+            width=width,
+            height=height,
+            lora_path=lora_path,
+            lora_weight=lora_weight,
+            output_path=output_path,
+            seed=seed,
+        )
+        scene.reference_image = f"images/{scene.id}.png"
+        scene.image_status = ApprovalStatus.PENDING
+    finally:
+        engine.unload()
+
+    proj.save_scenes()
+    return scene
+
+
+@app.post("/api/scenes/{scene_id}/regenerate-video")
+async def regenerate_video(scene_id: str, req: RegenerateVideoRequest) -> Scene:
+    """Regenerate a single scene's video clip at preview quality."""
+    from musicvision.engine_registry import (
+        frames_to_seconds,
+        get_constraints,
+        plan_subclips,
+        sub_clip_suffixes,
+    )
+    from musicvision.models import SubClip
+    from musicvision.video import create_video_engine
+
+    proj = get_project()
+    scene = proj.scenes.get_scene(scene_id)
+    if not scene:
+        raise HTTPException(status_code=404, detail=f"Scene {scene_id} not found")
+
+    prompt = scene.effective_video_prompt
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Scene has no video prompt. Set one first.")
+    if not scene.reference_image:
+        raise HTTPException(status_code=400, detail="Scene has no reference image. Generate one first.")
+
+    # Resolve audio
+    audio_file = proj.config.song.audio_file
+    if not audio_file:
+        raise HTTPException(status_code=400, detail="No audio file in project config.")
+    audio_path = proj.resolve_path(audio_file)
+    segment = proj.resolve_path(scene.audio_segment) if scene.audio_segment else audio_path
+
+    # Determine engine type
+    engine_type = VideoEngineType(req.engine) if req.engine else (scene.video_engine or proj.config.video_engine)
+
+    # Pre-compute sub-clip frame plan
+    constraints = get_constraints(engine_type.value)
+    plan_subclips([scene], constraints, proj.paths.segments_dir, proj.paths.sub_segments_dir)
+
+    if engine_type == VideoEngineType.HUNYUAN_AVATAR:
+        config = proj.config.hunyuan_avatar.model_copy()
+        config.infer_steps = 10
+        config.image_size = 320
+        engine = create_video_engine(config, engine_type=engine_type)
+    else:
+        from musicvision.utils.gpu import detect_devices
+
+        config = HumoConfig.from_quality("preview")
+        device_map = detect_devices()
+        engine = create_video_engine(config, device_map=device_map, engine_type=engine_type)
+
+    # Resolve pre-computed sub-clip audio paths
+    subclip_audio = None
+    if scene.generation_audio_segments and len(scene.generation_audio_segments) > 1:
+        subclip_audio = [
+            proj.resolve_path(p) if not Path(p).is_absolute() else Path(p)
+            for p in scene.generation_audio_segments
+        ]
+
+    engine.load()
+    try:
+        ref_image = proj.resolve_path(scene.reference_image)
+        results = engine.generate_scene(
+            text_prompt=prompt,
+            reference_image=ref_image,
+            audio_segment=segment,
+            output_dir=proj.paths.clips_dir,
+            scene_id=scene.id,
+            duration=scene.duration,
+            subclip_frame_counts=scene.subclip_frame_counts,
+            subclip_audio_paths=subclip_audio,
+        )
+
+        if len(results) > 1:
+            scene.sub_clips = []
+            suffixes = sub_clip_suffixes(len(results))
+            frame_counts = scene.subclip_frame_counts or []
+            cursor = 0
+            for j, (r, suffix) in enumerate(zip(results, suffixes)):
+                fc = frame_counts[j] if j < len(frame_counts) else None
+                sub_start = scene.time_start + frames_to_seconds(cursor, constraints.fps)
+                cursor += fc or 0
+                sub_end = scene.time_start + frames_to_seconds(cursor, constraints.fps)
+                scene.sub_clips.append(SubClip(
+                    id=f"{scene.id}_{suffix}",
+                    time_start=sub_start,
+                    time_end=min(sub_end, scene.time_end),
+                    video_prompt=prompt,
+                    video_clip=str(r.video_path.relative_to(proj.paths.root)),
+                    frame_count=fc,
+                ))
+            scene.video_clip = None
+        else:
+            scene.video_clip = f"clips/{scene.id}.mp4"
+            scene.sub_clips = []
+
+        scene.video_status = ApprovalStatus.PENDING
+    finally:
+        engine.unload()
+
+    proj.save_scenes()
+    return scene
+
+
+# ---------------------------------------------------------------------------
 # Pipeline stage endpoints (stubs — will call into engine modules)
 # ---------------------------------------------------------------------------
 
@@ -383,6 +564,12 @@ async def generate_videos(req: GenerateRequest):
     """
     from collections import defaultdict
 
+    from musicvision.engine_registry import (
+        frames_to_seconds,
+        get_constraints,
+        plan_subclips,
+        sub_clip_suffixes,
+    )
     from musicvision.models import SubClip, VideoEngineType
     from musicvision.video import create_video_engine
     from musicvision.video.prompt_generator import generate_video_prompt
@@ -434,16 +621,17 @@ async def generate_videos(req: GenerateRequest):
     failed: list[dict] = []
 
     for engine_type, group_scenes in engine_groups.items():
+        # Pre-compute sub-clip frame plans for this engine group
+        constraints = get_constraints(engine_type.value)
+        plan_subclips(group_scenes, constraints, proj.paths.segments_dir, proj.paths.sub_segments_dir)
+
         # Create engine for this group
         if engine_type == VideoEngineType.HUNYUAN_AVATAR:
             engine = create_video_engine(proj.config.hunyuan_avatar, engine_type=engine_type)
-            max_dur = proj.config.hunyuan_avatar.max_duration
         else:
             from musicvision.utils.gpu import detect_devices
             device_map = detect_devices()
             engine = create_video_engine(proj.config.humo, device_map=device_map, engine_type=engine_type)
-            from musicvision.video.humo_engine import MAX_DURATION
-            max_dur = MAX_DURATION
 
         engine.load()
 
@@ -453,6 +641,14 @@ async def generate_videos(req: GenerateRequest):
                     ref_image = proj.resolve_path(scene.reference_image)
                     segment = proj.resolve_path(scene.audio_segment) if scene.audio_segment else audio_path
 
+                    # Resolve pre-computed sub-clip audio paths
+                    subclip_audio = None
+                    if scene.generation_audio_segments and len(scene.generation_audio_segments) > 1:
+                        subclip_audio = [
+                            proj.resolve_path(p) if not Path(p).is_absolute() else Path(p)
+                            for p in scene.generation_audio_segments
+                        ]
+
                     results = engine.generate_scene(
                         text_prompt=scene.effective_video_prompt,
                         reference_image=ref_image,
@@ -460,21 +656,27 @@ async def generate_videos(req: GenerateRequest):
                         output_dir=proj.paths.clips_dir,
                         scene_id=scene.id,
                         duration=scene.duration,
+                        subclip_frame_counts=scene.subclip_frame_counts,
+                        subclip_audio_paths=subclip_audio,
                     )
 
                     if len(results) > 1:
                         scene.sub_clips = []
-                        from musicvision.video.humo_engine import _sub_clip_suffixes
-                        suffixes = _sub_clip_suffixes(len(results))
+                        suffixes = sub_clip_suffixes(len(results))
+                        frame_counts = scene.subclip_frame_counts or []
+                        cursor = 0
                         for j, (r, suffix) in enumerate(zip(results, suffixes)):
-                            sub_start = scene.time_start + j * max_dur
-                            sub_end = min(scene.time_start + (j + 1) * max_dur, scene.time_end)
+                            fc = frame_counts[j] if j < len(frame_counts) else None
+                            sub_start = scene.time_start + frames_to_seconds(cursor, constraints.fps)
+                            cursor += fc or 0
+                            sub_end = scene.time_start + frames_to_seconds(cursor, constraints.fps)
                             scene.sub_clips.append(SubClip(
                                 id=f"{scene.id}_{suffix}",
                                 time_start=sub_start,
-                                time_end=sub_end,
+                                time_end=min(sub_end, scene.time_end),
                                 video_prompt=scene.effective_video_prompt,
                                 video_clip=str(r.video_path.relative_to(proj.paths.root)),
+                                frame_count=fc,
                             ))
                     else:
                         scene.video_clip = f"clips/{scene.id}.mp4"

@@ -1,11 +1,22 @@
 import { useCallback, useEffect, useState } from "react";
-import { getScenes, updateScene as apiUpdateScene, approveAll as apiApproveAll } from "../api/client";
-import type { Scene, UpdateSceneRequest } from "../api/types";
+import {
+  getScenes,
+  updateScene as apiUpdateScene,
+  regenerateImage as apiRegenImage,
+  regenerateVideo as apiRegenVideo,
+} from "../api/client";
+import type {
+  RegenerateImageRequest,
+  RegenerateVideoRequest,
+  Scene,
+  UpdateSceneRequest,
+} from "../api/types";
 
 export function useScenes(projectLoaded: boolean) {
   const [scenes, setScenes] = useState<Scene[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [generating, setGenerating] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -35,10 +46,54 @@ export function useScenes(projectLoaded: boolean) {
     [],
   );
 
-  const approveAll = useCallback(async () => {
-    await apiApproveAll();
-    await load();
-  }, [load]);
+  const regenerateImage = useCallback(
+    async (sceneId: string, req: RegenerateImageRequest) => {
+      setGenerating((prev) => new Set(prev).add(sceneId + ":image"));
+      try {
+        const updated = await apiRegenImage(sceneId, req);
+        setScenes((prev) =>
+          prev.map((s) => (s.id === sceneId ? updated : s)),
+        );
+        return updated;
+      } finally {
+        setGenerating((prev) => {
+          const next = new Set(prev);
+          next.delete(sceneId + ":image");
+          return next;
+        });
+      }
+    },
+    [],
+  );
 
-  return { scenes, loading, error, reload: load, updateScene, approveAll };
+  const regenerateVideo = useCallback(
+    async (sceneId: string, req: RegenerateVideoRequest) => {
+      setGenerating((prev) => new Set(prev).add(sceneId + ":video"));
+      try {
+        const updated = await apiRegenVideo(sceneId, req);
+        setScenes((prev) =>
+          prev.map((s) => (s.id === sceneId ? updated : s)),
+        );
+        return updated;
+      } finally {
+        setGenerating((prev) => {
+          const next = new Set(prev);
+          next.delete(sceneId + ":video");
+          return next;
+        });
+      }
+    },
+    [],
+  );
+
+  return {
+    scenes,
+    loading,
+    error,
+    generating,
+    reload: load,
+    updateScene,
+    regenerateImage,
+    regenerateVideo,
+  };
 }

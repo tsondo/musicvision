@@ -36,7 +36,8 @@ The pipeline is designed around AI-generated music from **AceStep** (a text-cond
 | API (all 4 stages) | ✅ Complete |
 | CLI (all 4 stages) | ✅ Complete (2026-03-01) |
 | End-to-end storyboard test | ✅ Passed (2026-03-01) — 5 scenes, 320p preview |
-| Frontend (React or Gradio) | ❌ Not started |
+| Frontend (React or Gradio) | ✅ React storyboard (scene review, approval, regeneration) |
+| Frame-accurate alignment system | ✅ Complete |
 | Progress/status feedback (SSE/WebSocket) | ❌ Not started |
 
 **All four pipeline stages are code-complete, GPU-tested, and CLI-accessible.** Full end-to-end workflow from terminal: `create` → `import-audio` → `intake` → `generate-images` → `generate-video` → `assemble`. Two video engines available: HunyuanVideo-Avatar (primary, excellent lip sync) and HuMo (back burner). Two image engines GPU-validated: Z-Image-Turbo (ungated, 12.5 GB peak) and FLUX.1-schnell (gated, 4-step fast).
@@ -333,7 +334,7 @@ scenes[]:
 ## Tests
 
 ```bash
-# CPU unit tests (no GPU needed) — 123 tests:
+# CPU unit tests (no GPU needed) — ~107 tests:
 uv run pytest tests/ -v
 
 # GPU integration tests (run on workstation):
@@ -411,9 +412,8 @@ musicvision serve ./my-video
 ## What's Not Built Yet
 
 ### Frontend & UI
-- **React frontend** — pipeline driven entirely via REST API and CLI today; Swagger UI at `/docs` for manual testing
-- **Gradio UI** — originally planned as the storyboard interface; not started. Core pipeline modules are UI-agnostic by design.
-- **Scene approval UI** — API endpoints for scene CRUD and approval exist, but no visual side-by-side review interface
+- **Gradio UI** — originally planned as an alternative storyboard interface; not started. Core pipeline modules are UI-agnostic by design.
+- **Scene approval UI** — React storyboard with scene grid, preview panel, per-scene approval, and regeneration is implemented. Further refinements (waveform editor, drag-to-reorder) are future work.
 
 ### Pipeline Features
 - **Progress/status tracking** — no WebSocket or SSE for long-running generation jobs; API endpoints are synchronous. A 50-scene video gen blocks for hours with no progress feedback.

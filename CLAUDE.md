@@ -14,6 +14,7 @@ src/musicvision/
 ├── api.py              # FastAPI REST API (musicvision serve)
 ├── llm.py              # Unified LLM client (Anthropic + OpenAI/vLLM)
 ├── models.py           # Pydantic v2 data models (ProjectConfig, Scene, SceneList, etc.)
+├── engine_registry.py  # Engine constraints, frame math, sub-clip computation
 ├── intake/
 │   ├── audio_analysis.py    # BPM detection, vocal separation
 │   ├── transcription.py     # Whisper large-v3 transcription + alignment
@@ -41,7 +42,7 @@ frontend/                    # React + Vite scene review GUI
 │   ├── App.tsx              # Main app shell (state machine: no-project → loaded)
 │   ├── api/client.ts        # Fetch wrapper for backend API
 │   ├── api/types.ts         # TS interfaces matching Pydantic models
-│   ├── components/          # ProjectOpener, ProjectHeader, SceneGrid, SceneCard, AudioPlayer
+│   ├── components/          # ProjectOpener, ProjectHeader, Storyboard, SceneRow, PreviewPanel, AudioPlayer
 │   └── hooks/               # useProject, useScenes
 ├── vite.config.ts           # Proxies /api and /files to localhost:8000
 └── package.json
@@ -104,13 +105,15 @@ Two-layer strategy. See docs/TESTING.md for full details.
 ```bash
 python -m pytest tests/ -v --tb=short
 ```
-No GPU, no network, fast (<10s). Run after every code change. Currently 89 tests.
+No GPU, no network, fast (<10s). Run after every code change. Currently ~107 tests.
 
 Test files:
 - `test_core.py` — project config, scene models, style sheet, ProjectService lifecycle
 - `test_intake.py` — segmentation logic, timestamp parsing, AceStep metadata
 - `test_image_engine.py` — FLUX engine config, prompt generator, batch prompt parsing
 - `test_video_engine.py` — HuMo engine config, video prompt construction, sub-clip splitting
+- `test_engine_registry.py` — engine constraints, frame math, sub-clip computation
+- `test_hunyuan_avatar_engine.py` — HVA config, factory dispatch, engine lifecycle, scene splitting
 
 ### Integration tests (scripts/)
 ```bash
