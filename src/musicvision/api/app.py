@@ -102,9 +102,11 @@ async def create_project(req: CreateProjectRequest):
 async def open_project(req: OpenProjectRequest):
     global _project
     try:
-        _project = ProjectService.open(Path(req.directory))
+        project_dir = Path(req.directory).resolve()
+        _project = ProjectService.open(project_dir)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    mount_project_files(project_dir)
     return {"status": "opened", "name": _project.config.name, "directory": req.directory}
 
 
@@ -555,4 +557,6 @@ async def assemble(req: AssembleRequest = AssembleRequest()):
 
 def mount_project_files(project_dir: Path) -> None:
     """Mount the project directory as static files so the frontend can load images/clips."""
+    # Remove existing mount if present (allows re-mounting when opening a different project)
+    app.routes[:] = [r for r in app.routes if getattr(r, "name", None) != "project_files"]
     app.mount("/files", StaticFiles(directory=str(project_dir)), name="project_files")

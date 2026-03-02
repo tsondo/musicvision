@@ -109,27 +109,30 @@ def segment_scenes(
 
     client: LLMClient = get_client(llm_config)
 
-    # Build the user message with all context
-    lyrics_text = _format_lyrics_for_llm(lyrics_with_timestamps)
-
+    # Build the user message — prefer AceStep lyrics (section markers) over
+    # approximate word timestamps to save tokens for vLLM context windows.
     user_message = f"""Song duration: {song_duration:.1f} seconds
 BPM: {bpm or 'unknown'}
 Min scene duration: {min_scene_seconds}s
 Max scene duration: {max_scene_seconds}s
+"""
 
-Lyrics with timestamps:
-{lyrics_text}
+    if acestep_lyrics:
+        # AceStep lyrics have section markers — better for the LLM, skip timestamps
+        user_message += f"\nLyrics with section markers:\n{acestep_lyrics}\n"
+    else:
+        lyrics_text = _format_lyrics_for_llm(lyrics_with_timestamps)
+        user_message += f"\nLyrics with timestamps:\n{lyrics_text}\n"
 
-Please segment this song into scenes for a music video."""
+    user_message += "\nPlease segment this song into scenes for a music video."
 
     if beat_times:
-        # Include a subset of beat times to help with boundary decisions
-        beat_str = ", ".join(f"{t:.2f}" for t in beat_times[:50])
-        user_message += f"\n\nBeat timestamps (first 50): [{beat_str}]"
+        # Include a sparse subset of beat times (every 4th beat) to save tokens
+        sparse_beats = beat_times[::4][:20]
+        beat_str = ", ".join(f"{t:.1f}" for t in sparse_beats)
+        user_message += f"\n\nBeat timestamps (sample): [{beat_str}]"
 
-    # AceStep provides section markers in lyrics and a genre/mood caption
-    if acestep_lyrics:
-        user_message += f"\n\nOriginal lyrics with section markers (from AceStep):\n{acestep_lyrics}"
+    # AceStep caption adds genre/mood context
     if acestep_caption:
         user_message += f"\n\nSong description (genre/mood/instrumentation):\n{acestep_caption}"
 
@@ -145,11 +148,14 @@ Please segment this song into scenes for a music video."""
         response_text = response_text.strip()
 
     try:
-        scene_dicts = json.loads(response_text)
+        scene_dicts = json.loads(response_text, strict=False)
     except json.JSONDecodeError as e:
-        log.error("Failed to parse LLM response as JSON: %s", e)
-        log.error("Response was: %s", response_text[:500])
-        raise ValueError(f"LLM returned invalid JSON: {e}")
+        log.warning("JSON parse failed (%s), attempting truncated JSON recovery...", e)
+        scene_dicts = _recover_truncated_json(response_text)
+        if not scene_dicts:
+            log.error("Could not recover any scenes from LLM response")
+            log.error("Response was: %s", response_text[:500])
+            raise ValueError(f"LLM returned invalid JSON: {e}")
 
     # Convert to Scene objects
     scenes = []
@@ -163,6 +169,16 @@ Please segment this song into scenes for a music video."""
             lyrics=sd.get("lyrics", ""),
         )
         scenes.append(scene)
+
+    # If truncated recovery gave us scenes that don't cover the end, extend last scene
+    if scenes and scenes[-1].time_end < song_duration - 1.0:
+        gap = song_duration - scenes[-1].time_end
+        log.warning(
+            "Last scene ends at %.1fs but song is %.1fs (%.1fs gap) — "
+            "extending last scene to cover remainder",
+            scenes[-1].time_end, song_duration, gap,
+        )
+        scenes[-1].time_end = song_duration
 
     # Snap to beat times if available
     if beat_times:
@@ -272,6 +288,37 @@ def segment_scenes_simple(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _recover_truncated_json(text: str) -> list[dict] | None:
+    """Try to recover scene objects from a truncated JSON array.
+
+    vLLM may cut off the response mid-JSON when hitting max_model_len.
+    We find the last complete `}` that closes a scene object and close
+    the array there.
+    """
+    import re
+
+    # Find the opening bracket
+    start = text.find("[")
+    if start == -1:
+        return None
+
+    # Find all complete JSON objects by looking for `},` or `}` followed by `]`
+    # Strategy: progressively try closing the array after each `}`
+    best: list[dict] | None = None
+    for m in re.finditer(r"\}", text):
+        candidate = text[start:m.end()] + "]"
+        try:
+            parsed = json.loads(candidate, strict=False)
+            if isinstance(parsed, list) and parsed:
+                best = parsed
+        except json.JSONDecodeError:
+            continue
+
+    if best:
+        log.info("Recovered %d scenes from truncated JSON response", len(best))
+    return best
+
 
 def _format_lyrics_for_llm(words: list[WordTimestamp]) -> str:
     """Format word timestamps as readable text for the LLM."""

@@ -35,6 +35,16 @@ src/musicvision/
     ├── gpu.py               # Multi-GPU device maps, VRAM tiers, recommend_tier()
     ├── audio.py             # ffmpeg wrappers
     └── paths.py             # Project directory management
+
+frontend/                    # React + Vite scene review GUI
+├── src/
+│   ├── App.tsx              # Main app shell (state machine: no-project → loaded)
+│   ├── api/client.ts        # Fetch wrapper for backend API
+│   ├── api/types.ts         # TS interfaces matching Pydantic models
+│   ├── components/          # ProjectOpener, ProjectHeader, SceneGrid, SceneCard, AudioPlayer
+│   └── hooks/               # useProject, useScenes
+├── vite.config.ts           # Proxies /api and /files to localhost:8000
+└── package.json
 ```
 
 ## Hardware
@@ -145,6 +155,17 @@ Song audio + lyrics
 ```
 
 Each stage produces artifacts on disk. Any stage can be re-run independently. User reviews and approves at each stage.
+
+## Frontend (Scene Review GUI)
+
+```bash
+cd frontend && npm install    # first time only
+cd frontend && npm run dev    # starts Vite dev server on :5173
+```
+
+Requires the backend running: `musicvision serve <project-dir>`. Vite proxies `/api` and `/files` to `localhost:8000`.
+
+No UI framework — plain CSS + React 19. Dark theme. No state management library.
 
 ## Common Tasks
 

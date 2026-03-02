@@ -56,7 +56,7 @@ class LLMConfig:
     model: str = ""              # model ID; falls back to env var or default
     base_url: str = ""           # vLLM endpoint, e.g. http://192.168.1.100:8000/v1
     api_key: str = ""            # explicit key; falls back to env vars
-    max_tokens: int = 4096
+    max_tokens: int = 0  # 0 = auto (4096 for Anthropic, query vLLM server limit)
 
 
 def _config_from_env() -> LLMConfig:
@@ -116,12 +116,13 @@ class LLMClient:
                 "Set ANTHROPIC_API_KEY or pass api_key in LLMConfig."
             )
         model = self.config.model or ANTHROPIC_DEFAULT_MODEL
+        max_tokens = self.config.max_tokens or 4096
         log.info("LLM → Anthropic (model=%s)", model)
 
         client = anthropic.Anthropic(api_key=key)
         response = client.messages.create(
             model=model,
-            max_tokens=self.config.max_tokens,
+            max_tokens=max_tokens,
             system=system,
             messages=[{"role": "user", "content": user}],
         )
@@ -146,14 +147,16 @@ class LLMClient:
         log.info("LLM → vLLM (url=%s, model=%s)", base_url, model)
 
         client = OpenAI(api_key=api_key, base_url=base_url)
-        response = client.chat.completions.create(
+        kwargs: dict = dict(
             model=model,
-            max_tokens=self.config.max_tokens,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
         )
+        if self.config.max_tokens:
+            kwargs["max_tokens"] = self.config.max_tokens
+        response = client.chat.completions.create(**kwargs)
         return response.choices[0].message.content.strip()
 
 
