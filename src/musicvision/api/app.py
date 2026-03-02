@@ -567,7 +567,13 @@ async def regenerate_video(scene_id: str, req: RegenerateVideoRequest) -> Scene:
                     video_clip=str(r.video_path.relative_to(proj.paths.root)),
                     frame_count=fc,
                 ))
-            scene.video_clip = None
+            # Join sub-clips into a single preview clip
+            from musicvision.utils.audio import concat_videos
+
+            sub_paths = [r.video_path for r in results]
+            joined = proj.paths.clips_dir / f"{scene.id}_joined.mp4"
+            concat_videos(sub_paths, joined)
+            scene.video_clip = str(joined.relative_to(proj.paths.root))
         else:
             scene.video_clip = f"clips/{scene.id}.mp4"
             scene.sub_clips = []
@@ -834,6 +840,13 @@ async def generate_videos(req: GenerateVideosRequest):
                                 video_clip=str(r.video_path.relative_to(proj.paths.root)),
                                 frame_count=fc,
                             ))
+                        # Join sub-clips into a single preview clip
+                        from musicvision.utils.audio import concat_videos
+
+                        sub_paths = [r.video_path for r in results]
+                        joined = proj.paths.clips_dir / f"{scene.id}_joined.mp4"
+                        concat_videos(sub_paths, joined)
+                        scene.video_clip = str(joined.relative_to(proj.paths.root))
                     else:
                         scene.video_clip = f"clips/{scene.id}.mp4"
 
