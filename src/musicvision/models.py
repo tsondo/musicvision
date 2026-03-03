@@ -242,7 +242,7 @@ class HunyuanAvatarConfig(BaseModel):
     hva_repo_dir: str = ""              # path to cloned HunyuanVideoAvatar repo; env: HVA_REPO_DIR
     hva_venv_python: str = ""           # path to python in HVA venv; env: HVA_VENV_PYTHON
     checkpoint: str = "bf16"            # "bf16" (recommended) or "fp8" — bf16 works with block offloading
-    image_size: int = 704               # width (height auto-calculated for portrait)
+    image_size: int = 512               # width (height auto-calculated for portrait)
     sample_n_frames: int = 129          # 129 frames @ 25fps ≈ 5.16s (fixed by HVA, cannot be reduced)
     cfg_scale: float = 7.5
     infer_steps: int = 30               # 30 good balance; 50 highest quality
@@ -388,6 +388,7 @@ class Scene(BaseModel):
     video_clip: Optional[str] = None            # path: clips/scene_001.mp4
     video_status: ApprovalStatus = ApprovalStatus.PENDING
     video_engine: Optional[VideoEngineType] = None  # None → use project default
+    video_seed: Optional[int] = None                # seed used for last generation (locked when approved)
     lip_sync: Optional[bool] = None  # None → auto (True for vocal, False for instrumental)
     # TODO: per-scene face mask for multi-person lip sync targeting
 

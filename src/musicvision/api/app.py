@@ -121,6 +121,7 @@ class GenerateImagesRequest(BaseModel):
 class GenerateVideosRequest(BaseModel):
     scene_ids: list[str] = []
     engine: str | None = None  # override project config engine (e.g. "hunyuan_avatar")
+    render_mode: str = "preview"  # "preview" (256p/10steps) or "final" (512p/30steps)
 
 
 class RegenerateImageRequest(BaseModel):
@@ -131,6 +132,7 @@ class RegenerateImageRequest(BaseModel):
 class RegenerateVideoRequest(BaseModel):
     engine: str | None = None  # "hunyuan_avatar" | "humo"
     seed: int = -1
+    render_mode: str = "preview"  # "preview" (256p/10steps) or "final" (512p/30steps)
 
 
 # ---------------------------------------------------------------------------
@@ -515,10 +517,15 @@ async def regenerate_video(scene_id: str, req: RegenerateVideoRequest) -> Scene:
     constraints = get_constraints(engine_type.value)
     plan_subclips([scene], constraints, proj.paths.segments_dir, proj.paths.sub_segments_dir)
 
+    # Apply render mode
     if engine_type == VideoEngineType.HUNYUAN_AVATAR:
         config = proj.config.hunyuan_avatar.model_copy()
-        config.infer_steps = 10
-        config.image_size = 320
+        if req.render_mode == "preview":
+            config.image_size = 256
+            config.infer_steps = 10
+        else:
+            config.image_size = 512
+            config.infer_steps = 30
         engine = create_video_engine(config, engine_type=engine_type)
     else:
         from musicvision.utils.gpu import detect_devices
@@ -526,6 +533,17 @@ async def regenerate_video(scene_id: str, req: RegenerateVideoRequest) -> Scene:
         config = HumoConfig.from_quality("preview")
         device_map = detect_devices()
         engine = create_video_engine(config, device_map=device_map, engine_type=engine_type)
+
+    # Resolve seed: use locked seed if approved, use request seed if specified, else random
+    import random
+    if scene.video_status.value == "approved" and scene.video_seed is not None:
+        scene_seed = scene.video_seed
+    elif req.seed and req.seed >= 0:
+        scene_seed = req.seed
+    else:
+        scene_seed = random.randint(0, 2**31 - 1)
+    scene.video_seed = scene_seed
+    config.seed = scene_seed
 
     # Resolve pre-computed sub-clip audio paths
     subclip_audio = None
@@ -778,9 +796,64 @@ async def generate_videos(req: GenerateVideosRequest):
         etype = scene.video_engine or proj.config.video_engine
         engine_groups[etype].append(scene)
 
+    from musicvision.utils.gpu import _oom_suggestion, estimate_vram_gb, is_oom_error
+
     generated: list[str] = []
     failed: list[dict] = []
+    vram_warnings: list[dict] = []
 
+    # --- Pre-flight VRAM check (advisory, does not block) ---
+    for engine_type, group_scenes in engine_groups.items():
+        estimated = estimate_vram_gb(
+            engine_type.value,
+            image_size=getattr(
+                proj.config.hunyuan_avatar if engine_type == VideoEngineType.HUNYUAN_AVATAR else proj.config.humo,
+                "image_size", 0,
+            ),
+            cpu_offload=getattr(
+                proj.config.hunyuan_avatar if engine_type == VideoEngineType.HUNYUAN_AVATAR else proj.config.humo,
+                "cpu_offload", True,
+            ),
+        )
+        if estimated > 0:
+            try:
+                import torch
+                free_bytes, total_bytes = torch.cuda.mem_get_info(0)
+                available_gb = round(free_bytes / 1024**3, 1)
+            except Exception:
+                available_gb = None
+
+            if available_gb is not None and estimated + 2.0 > available_gb:
+                engine_config = (
+                    proj.config.hunyuan_avatar
+                    if engine_type == VideoEngineType.HUNYUAN_AVATAR
+                    else proj.config.humo
+                )
+                warning = {
+                    "engine": engine_type.value,
+                    "estimated_gb": estimated,
+                    "available_gb": available_gb,
+                    "message": (
+                        f"{engine_type.value} estimated {estimated} GB but only "
+                        f"{available_gb} GB available. "
+                        f"{_oom_suggestion(engine_type.value, engine_config)}"
+                    ),
+                }
+                vram_warnings.append(warning)
+                log.warning("VRAM pre-flight: %s", warning["message"])
+
+    # --- Apply render mode to engine configs (ephemeral, not saved to disk) ---
+    render_mode = req.render_mode
+    if render_mode == "preview":
+        proj.config.hunyuan_avatar.image_size = 256
+        proj.config.hunyuan_avatar.infer_steps = 10
+    else:  # "final"
+        proj.config.hunyuan_avatar.image_size = 512
+        proj.config.hunyuan_avatar.infer_steps = 30
+    log.info("Render mode: %s (HVA: %dp / %d steps)", render_mode,
+             proj.config.hunyuan_avatar.image_size, proj.config.hunyuan_avatar.infer_steps)
+
+    # --- Generation loop with OOM detection + early abort ---
     for engine_type, group_scenes in engine_groups.items():
         # Pre-compute sub-clip frame plans for this engine group
         constraints = get_constraints(engine_type.value)
@@ -795,10 +868,49 @@ async def generate_videos(req: GenerateVideosRequest):
             engine = create_video_engine(proj.config.humo, device_map=device_map, engine_type=engine_type)
 
         engine.load()
+        consecutive_ooms = 0
 
         try:
             for scene in group_scenes:
+                # Early abort: skip remaining scenes after 2 consecutive OOMs
+                if consecutive_ooms >= 2:
+                    engine_config = (
+                        proj.config.hunyuan_avatar
+                        if engine_type == VideoEngineType.HUNYUAN_AVATAR
+                        else proj.config.humo
+                    )
+                    log.warning(
+                        "Skipping %s — %d consecutive OOMs, remaining scenes in "
+                        "%s group will also fail",
+                        scene.id, consecutive_ooms, engine_type.value,
+                    )
+                    failed.append({
+                        "scene_id": scene.id,
+                        "error": f"Skipped after {consecutive_ooms} consecutive OOMs",
+                        "error_type": "oom_skipped",
+                        "oom_context": {
+                            "engine": engine_type.value,
+                            "image_size": getattr(engine_config, "image_size", 0),
+                            "suggestion": _oom_suggestion(engine_type.value, engine_config),
+                        },
+                    })
+                    continue
+
                 try:
+                    # Resolve seed: use locked seed if approved, else generate random
+                    import random
+                    if scene.video_status.value == "approved" and scene.video_seed is not None:
+                        scene_seed = scene.video_seed
+                    else:
+                        scene_seed = random.randint(0, 2**31 - 1)
+                        scene.video_seed = scene_seed
+
+                    # Set seed on engine config for this clip
+                    if engine_type == VideoEngineType.HUNYUAN_AVATAR:
+                        proj.config.hunyuan_avatar.seed = scene_seed
+                    else:
+                        proj.config.humo.seed = scene_seed
+
                     ref_image = proj.resolve_path(scene.reference_image)
                     segment = _resolve_scene_audio(proj, scene, audio_path)
 
@@ -851,20 +963,46 @@ async def generate_videos(req: GenerateVideosRequest):
                         scene.video_clip = f"clips/{scene.id}.mp4"
 
                     generated.append(scene.id)
+                    consecutive_ooms = 0  # reset on success
                     proj.save_scenes()  # save after each so frontend can poll progress
 
                 except Exception as exc:
-                    log.error("Video generation failed for %s: %s", scene.id, exc)
-                    failed.append({"scene_id": scene.id, "error": str(exc)})
+                    if is_oom_error(exc):
+                        consecutive_ooms += 1
+                        engine_config = (
+                            proj.config.hunyuan_avatar
+                            if engine_type == VideoEngineType.HUNYUAN_AVATAR
+                            else proj.config.humo
+                        )
+                        log.error(
+                            "OOM on %s (%d consecutive): %s", scene.id, consecutive_ooms, exc,
+                        )
+                        failed.append({
+                            "scene_id": scene.id,
+                            "error": str(exc),
+                            "error_type": "oom",
+                            "oom_context": {
+                                "engine": engine_type.value,
+                                "image_size": getattr(engine_config, "image_size", 0),
+                                "suggestion": _oom_suggestion(engine_type.value, engine_config),
+                            },
+                        })
+                    else:
+                        consecutive_ooms = 0  # non-OOM error resets counter
+                        log.error("Video generation failed for %s: %s", scene.id, exc)
+                        failed.append({"scene_id": scene.id, "error": str(exc)})
         finally:
             engine.unload()
 
-    return {
+    result: dict = {
         "status": "complete",
         "generated": generated,
         "failed": failed,
         "total": len(scenes),
     }
+    if vram_warnings:
+        result["vram_warnings"] = vram_warnings
+    return result
 
 
 class AssembleRequest(BaseModel):

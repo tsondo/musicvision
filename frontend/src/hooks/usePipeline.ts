@@ -9,7 +9,7 @@ import {
   generateAllVideos as apiGenerateVideos,
   ApiError,
 } from "../api/client";
-import type { BatchGenResult, ImageModelType, PipelineStage, ProjectConfig, Scene, VideoEngineType } from "../api/types";
+import type { BatchGenResult, ImageModelType, PipelineStage, ProjectConfig, RenderMode, Scene, VideoEngineType } from "../api/types";
 
 export type StepStatus = "idle" | "running" | "done" | "error";
 
@@ -172,11 +172,11 @@ export function usePipeline(
   );
 
   const generateVideos = useCallback(
-    async (sceneIds?: string[], engine?: VideoEngineType) => {
+    async (sceneIds?: string[], engine?: VideoEngineType, renderMode?: RenderMode) => {
       setVideosStatus("running");
       setError(null);
       try {
-        const result = await apiGenerateVideos(sceneIds, engine);
+        const result = await apiGenerateVideos(sceneIds, engine, renderMode);
         setLastResult(result);
         await reloadScenes();
         setVideosStatus(result.failed.length > 0 ? "error" : "done");

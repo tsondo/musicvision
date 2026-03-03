@@ -162,6 +162,10 @@ class HunyuanAvatarEngine(VideoEngine):
 
         log.info("Starting HVA server: %s", " ".join(cmd[:4]) + " ...")
 
+        import os
+        env = os.environ.copy()
+        env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:512")
+
         self._server_proc = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
@@ -169,6 +173,7 @@ class HunyuanAvatarEngine(VideoEngine):
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,  # line-buffered
+            env=env,
         )
 
         # Drain stderr in background so it doesn't block
@@ -275,6 +280,8 @@ class HunyuanAvatarEngine(VideoEngine):
 
     def generate(self, input: VideoInput) -> VideoResult:
         """Generate a single video clip, using server or wrapper mode."""
+        from musicvision.utils.gpu import is_oom_error
+
         if not self._loaded:
             raise RuntimeError("Call load() before generate()")
 
@@ -290,6 +297,10 @@ class HunyuanAvatarEngine(VideoEngine):
                 self._drain_stale_response()
                 return self._generate_via_wrapper(input)
             except Exception as exc:
+                # OOM → don't fall back to wrapper (it will also OOM with identical params)
+                if is_oom_error(exc):
+                    log.error("Server OOM — skipping wrapper fallback (same params will OOM again)")
+                    raise
                 log.warning("Server generation failed, falling back to wrapper for this clip: %s", exc)
                 if not self._server_alive():
                     log.warning("Server process died — disabling server mode")
@@ -306,6 +317,7 @@ class HunyuanAvatarEngine(VideoEngine):
             "output_path": str(input.output_path),
             "sample_n_frames": self.config.sample_n_frames,
             "fps": self.config.fps,
+            "seed": self.config.seed,
         }
 
         log.info("Sending to HVA server: %s → %s", input.reference_image.name, input.output_path.name)
@@ -359,12 +371,17 @@ class HunyuanAvatarEngine(VideoEngine):
 
             log.info("Running HVA wrapper: %s → %s", input.reference_image.name, input.output_path.name)
 
+            import os
+            wrapper_env = os.environ.copy()
+            wrapper_env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:512")
+
             try:
                 result = subprocess.run(
                     cmd,
                     capture_output=True,
                     text=True,
                     timeout=_WRAPPER_TIMEOUT,
+                    env=wrapper_env,
                 )
             except subprocess.TimeoutExpired as exc:
                 raise RuntimeError(f"HVA subprocess timed out: {exc}") from exc

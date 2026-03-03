@@ -67,11 +67,15 @@ export default function SceneRow({
   const videoClipPath = scene.video_clip || scene.sub_clips.find((sc) => sc.video_clip)?.video_clip || null;
   const [showVideo, setShowVideo] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const videoAudioRef = useRef<HTMLAudioElement | null>(null);
 
-  // Bump image version when image_status changes (new generation completed)
-  const lastImageRef = useRef(scene.image_status);
-  if (lastImageRef.current !== scene.image_status) {
-    lastImageRef.current = scene.image_status;
+  // Bump cache-buster when assets change (e.g. first generation sets the path)
+  const lastAssetsRef = useRef({ img: scene.reference_image, vid: scene.video_clip });
+  if (
+    lastAssetsRef.current.img !== scene.reference_image ||
+    lastAssetsRef.current.vid !== scene.video_clip
+  ) {
+    lastAssetsRef.current = { img: scene.reference_image, vid: scene.video_clip };
     setImgVersion(Date.now());
   }
 
@@ -162,6 +166,7 @@ export default function SceneRow({
     }
     try {
       await onRegenImage(scene.id, { model: imageModel, seed: imageSeed });
+      setImgVersion(Date.now());
     } catch (err) {
       setRegenError(String(err));
     }
@@ -174,6 +179,7 @@ export default function SceneRow({
     }
     try {
       await onRegenVideo(scene.id, { engine: videoEngine, seed: videoSeed });
+      setImgVersion(Date.now());
     } catch (err) {
       setRegenError(String(err));
     }
@@ -227,22 +233,71 @@ export default function SceneRow({
         className={`cell cell-image${hasVideo ? " has-video" : ""}`}
         onClick={() => {
           if (!hasVideo) return;
-          setShowVideo((prev) => {
-            if (!prev && videoRef.current) videoRef.current.currentTime = 0;
-            return !prev;
-          });
+          if (showVideo) {
+            // Toggle pause/play on click while video is showing
+            const vid = videoRef.current;
+            if (vid) {
+              if (vid.paused) {
+                vid.play();
+                if (videoAudioRef.current) videoAudioRef.current.play();
+              } else {
+                vid.pause();
+                if (videoAudioRef.current) videoAudioRef.current.pause();
+              }
+            }
+          } else {
+            // Start video preview
+            setShowVideo(true);
+            if (videoRef.current) videoRef.current.currentTime = 0;
+          }
+        }}
+        onDoubleClick={() => {
+          if (!showVideo) return;
+          // Double-click stops and returns to image
+          if (videoRef.current) {
+            videoRef.current.pause();
+            videoRef.current.currentTime = 0;
+          }
+          if (videoAudioRef.current) {
+            videoAudioRef.current.pause();
+            videoAudioRef.current.currentTime = 0;
+          }
+          setShowVideo(false);
         }}
       >
         {showVideo && videoClipPath ? (
-          <video
-            ref={videoRef}
-            src={fileUrl(videoClipPath, imgVersion)}
-            autoPlay
-            loop
-            muted
-            playsInline
-            onEnded={() => setShowVideo(false)}
-          />
+          <>
+            <video
+              ref={videoRef}
+              src={fileUrl(videoClipPath, imgVersion)}
+              autoPlay
+              playsInline
+              onEnded={() => {
+                setShowVideo(false);
+                if (videoAudioRef.current) {
+                  videoAudioRef.current.pause();
+                  videoAudioRef.current.currentTime = 0;
+                }
+              }}
+              onPlay={() => {
+                // Sync audio playback with video
+                if (scene.audio_segment && videoAudioRef.current) {
+                  videoAudioRef.current.currentTime = videoRef.current?.currentTime ?? 0;
+                  videoAudioRef.current.play();
+                }
+              }}
+            />
+            {scene.audio_segment && (
+              <audio
+                ref={videoAudioRef}
+                src={fileUrl(scene.audio_segment)}
+                preload="auto"
+              />
+            )}
+            <div className="video-stop-overlay" title="Click to pause / double-click to stop">
+              {videoRef.current?.paused ? "\u25B6" : "\u275A\u275A"}
+            </div>
+          </>
         ) : scene.reference_image ? (
           <img
             src={fileUrl(scene.reference_image, imgVersion)}
@@ -348,6 +403,11 @@ export default function SceneRow({
             value={videoSeed}
             onChange={(e) => setVideoSeed(Number(e.target.value))}
           />
+          {scene.video_seed != null && (
+            <span className="seed-locked" title={`Last seed: ${scene.video_seed}`}>
+              #{scene.video_seed}
+            </span>
+          )}
         </div>
         <button
           onClick={handleRegenVideo}
@@ -356,6 +416,20 @@ export default function SceneRow({
         >
           {isGenVideo ? "Generating..." : hasVideo ? "Regenerate" : "Generate"}
         </button>
+        {hasVideo && (
+          <label className="checkbox-label approved-toggle">
+            <input
+              type="checkbox"
+              checked={scene.video_status === "approved"}
+              onChange={(e) =>
+                onUpdate(scene.id, {
+                  video_status: e.target.checked ? "approved" : "pending",
+                })
+              }
+            />
+            Approved
+          </label>
+        )}
       </div>
 
       {regenError && <div className="row-error">{regenError}</div>}

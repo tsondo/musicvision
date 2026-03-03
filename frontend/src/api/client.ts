@@ -8,6 +8,7 @@ import type {
   ProjectConfig,
   RegenerateImageRequest,
   RegenerateVideoRequest,
+  RenderMode,
   Scene,
   UpdateSceneRequest,
   VideoEngineType,
@@ -188,10 +189,15 @@ export async function generateAllImages(
 export async function generateAllVideos(
   sceneIds?: string[],
   engine?: VideoEngineType,
+  renderMode?: RenderMode,
 ): Promise<BatchGenResult> {
   return request("/api/pipeline/generate-videos", {
     method: "POST",
-    body: JSON.stringify({ scene_ids: sceneIds ?? [], engine: engine ?? null }),
+    body: JSON.stringify({
+      scene_ids: sceneIds ?? [],
+      engine: engine ?? null,
+      render_mode: renderMode ?? "preview",
+    }),
   });
 }
 

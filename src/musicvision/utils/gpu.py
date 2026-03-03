@@ -223,6 +223,97 @@ def recommend_tier(device_map: DeviceMap) -> "HumoTier":
     return HumoTier.PREVIEW
 
 
+def is_oom_error(exc: BaseException) -> bool:
+    """Detect CUDA out-of-memory errors, including from subprocess stderr.
+
+    Works for direct ``torch.cuda.OutOfMemoryError``, as well as
+    ``RuntimeError`` and ``subprocess.CalledProcessError`` whose message
+    embeds the CUDA OOM string.
+    """
+    # Direct PyTorch OOM type (also catches subclasses)
+    try:
+        import torch
+        if isinstance(exc, torch.cuda.OutOfMemoryError):
+            return True
+    except Exception:
+        pass
+
+    msg = str(exc).lower()
+    return "out of memory" in msg or "outofmemoryerror" in msg
+
+
+# ---------------------------------------------------------------------------
+# Empirical VRAM estimation
+# ---------------------------------------------------------------------------
+
+# Known data points: (image_size, pixel_count, peak_vram_gb)
+# HVA on RTX 5090, BF16 + block offload, 129 frames:
+_HVA_SIZES: dict[int, tuple[int, int]] = {
+    320: (320, 480),
+    512: (512, 768),
+    704: (704, 1216),
+}
+
+_HVA_KNOWN: list[tuple[int, float]] = [
+    # (pixel_count, peak_vram_gb) — cpu_offload=True
+    (320 * 480, 16.6),
+    (704 * 1216, 31.9),
+]
+
+
+def estimate_vram_gb(
+    engine: str,
+    image_size: int,
+    n_frames: int = 129,
+    cpu_offload: bool = True,
+) -> float:
+    """Empirical peak-VRAM estimate for a given engine configuration.
+
+    Returns 0.0 for unknown engines (caller decides what to do).
+
+    Currently supports:
+      - ``"hunyuan_avatar"`` — linear interpolation by pixel count
+    """
+    if engine != "hunyuan_avatar":
+        return 0.0
+
+    wh = _HVA_SIZES.get(image_size)
+    if wh is None:
+        # Approximate: assume roughly 3:2 aspect ratio
+        wh = (image_size, int(image_size * 1.5))
+    pixels = wh[0] * wh[1]
+
+    # Linear interpolation between known data points
+    (px0, gb0), (px1, gb1) = _HVA_KNOWN[0], _HVA_KNOWN[1]
+    slope = (gb1 - gb0) / (px1 - px0)
+    estimated = gb0 + slope * (pixels - px0)
+
+    # Without cpu_offload, model weights stay on GPU (~29 GB for BF16 transformer)
+    if not cpu_offload:
+        estimated += 29.0
+
+    return round(max(estimated, 0.0), 1)
+
+
+def _oom_suggestion(engine_type: str, config: object | None = None) -> str:
+    """Human-readable suggestion for resolving an OOM error."""
+    if engine_type == "hunyuan_avatar":
+        parts = [
+            "Reduce image_size (e.g. 704 → 512 or 320)",
+            "Ensure cpu_offload is enabled",
+        ]
+        if config is not None:
+            image_size = getattr(config, "image_size", None)
+            cpu_offload = getattr(config, "cpu_offload", None)
+            if image_size and image_size <= 256:
+                parts = ["Already at minimum resolution (256p). Need a GPU with more VRAM."]
+            elif cpu_offload is False:
+                parts = ["Enable cpu_offload (currently disabled)"]
+        return ". ".join(parts)
+
+    return "Reduce resolution or enable model offloading"
+
+
 def vram_info() -> list[dict]:
     """Return VRAM/RAM info for available accelerators as a list of dicts (for CLI/API output)."""
     import torch

@@ -26,7 +26,7 @@ export default function PreviewPanel() {
         disabled={assembling}
         className="btn-preview"
       >
-        {assembling ? "Rendering..." : "Render Preview"}
+        {assembling ? "Stitching..." : "Stitch and Mux"}
       </button>
       {roughCut && (
         <a

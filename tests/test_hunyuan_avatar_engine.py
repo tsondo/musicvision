@@ -77,7 +77,7 @@ class TestVideoEngineType:
 class TestHunyuanAvatarConfig:
     def test_defaults(self):
         cfg = HunyuanAvatarConfig()
-        assert cfg.image_size == 704
+        assert cfg.image_size == 512
         assert cfg.sample_n_frames == 129
         assert cfg.cfg_scale == 7.5
         assert cfg.infer_steps == 30

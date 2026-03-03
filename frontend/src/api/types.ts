@@ -44,6 +44,7 @@ export interface Scene {
   video_clip: string | null;
   video_status: ApprovalStatus;
   video_engine: VideoEngineType | null;
+  video_seed: number | null;
   lip_sync: boolean | null;
 
   sub_clips: SubClip[];
@@ -90,9 +91,12 @@ export interface RegenerateImageRequest {
   seed?: number;
 }
 
+export type RenderMode = "preview" | "final";
+
 export interface RegenerateVideoRequest {
   engine?: VideoEngineType;
   seed?: number;
+  render_mode?: RenderMode;
 }
 
 export interface IntakeResult {
@@ -108,13 +112,36 @@ export interface GenerateImagesRequest {
 export interface GenerateVideosRequest {
   scene_ids?: string[];
   engine?: VideoEngineType;
+  render_mode?: RenderMode;
+}
+
+export interface OomContext {
+  engine: string;
+  image_size: number;
+  suggestion: string;
+}
+
+export interface BatchGenFailure {
+  scene_id: string;
+  error: string;
+  error_type?: "oom" | "oom_skipped" | "error";
+  oom_context?: OomContext;
+}
+
+export interface VramWarning {
+  engine: string;
+  estimated_gb: number;
+  available_gb: number;
+  message: string;
 }
 
 export interface BatchGenResult {
   status: string;
   generated: string[];
-  failed: { scene_id: string; error: string }[];
+  failed: BatchGenFailure[];
   total: number;
+  vram_warnings?: VramWarning[];
+  rough_cut?: string;
 }
 
 export interface FilesystemEntry {

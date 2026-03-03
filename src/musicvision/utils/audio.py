@@ -8,6 +8,7 @@ No ffmpeg Python bindings — they add complexity and break on WSL more often th
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -20,6 +21,56 @@ def _check_ffmpeg() -> str:
     if not path:
         raise RuntimeError("ffmpeg not found in PATH. Install with: sudo apt install ffmpeg")
     return path
+
+
+def detect_silences(
+    audio_path: Path,
+    min_silence_duration: float = 0.15,
+    silence_threshold_db: float = -35.0,
+) -> list[tuple[float, float]]:
+    """
+    Detect silence intervals in an audio file using ffmpeg silencedetect.
+
+    Args:
+        audio_path: Path to audio file (any format ffmpeg supports).
+        min_silence_duration: Minimum silence length in seconds to report.
+        silence_threshold_db: Volume threshold below which audio is considered silent.
+
+    Returns:
+        List of (start, end) tuples in seconds. Sorted by start time.
+    """
+    _check_ffmpeg()
+
+    cmd = [
+        "ffmpeg", "-i", str(audio_path),
+        "-af", f"silencedetect=noise={silence_threshold_db}dB:d={min_silence_duration}",
+        "-f", "null", "-",
+    ]
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    # silencedetect writes to stderr
+    stderr = result.stderr
+
+    starts: list[float] = []
+    ends: list[float] = []
+    for line in stderr.splitlines():
+        m_start = re.search(r"silence_start:\s*([\d.]+)", line)
+        if m_start:
+            starts.append(float(m_start.group(1)))
+            continue
+        m_end = re.search(r"silence_end:\s*([\d.]+)", line)
+        if m_end:
+            ends.append(float(m_end.group(1)))
+
+    # Pair starts and ends. If a silence is still active at EOF, ffmpeg may
+    # emit a start without a matching end — cap it at the file duration.
+    silences: list[tuple[float, float]] = []
+    for i, s in enumerate(starts):
+        e = ends[i] if i < len(ends) else s + min_silence_duration
+        silences.append((s, e))
+
+    log.debug("Detected %d silence intervals in %s", len(silences), audio_path.name)
+    return silences
 
 
 def get_duration(audio_path: Path) -> float:

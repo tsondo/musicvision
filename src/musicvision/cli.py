@@ -448,10 +448,34 @@ def cmd_generate_video(args: argparse.Namespace) -> None:
             f"block_swap={svc.config.humo.block_swap_count})…"
         )
 
+    from musicvision.utils.gpu import _oom_suggestion, estimate_vram_gb, is_oom_error
+
+    # --- Pre-flight VRAM check (advisory) ---
+    engine_config = svc.config.hunyuan_avatar if engine_type == VideoEngineType.HUNYUAN_AVATAR else svc.config.humo
+    estimated = estimate_vram_gb(
+        engine_type.value,
+        image_size=getattr(engine_config, "image_size", 0),
+        cpu_offload=getattr(engine_config, "cpu_offload", True),
+    )
+    if estimated > 0:
+        try:
+            import torch
+            free_bytes, _ = torch.cuda.mem_get_info(0)
+            available_gb = round(free_bytes / 1024**3, 1)
+            if estimated + 2.0 > available_gb:
+                print(
+                    f"\n  WARNING: {engine_type.value} estimated {estimated} GB but only "
+                    f"{available_gb} GB free. {_oom_suggestion(engine_type.value, engine_config)}\n"
+                )
+        except Exception:
+            pass
+
     engine.load()
 
     generated = 0
     errors = []
+    oom_scenes: list[str] = []
+    consecutive_ooms = 0
     try:
         for scene in targets:
             if not scene.reference_image:
@@ -461,6 +485,12 @@ def cmd_generate_video(args: argparse.Namespace) -> None:
             if not scene.audio_segment:
                 print(f"  SKIP {scene.id}: no audio segment")
                 errors.append(scene.id)
+                continue
+
+            # Early abort: skip remaining scenes after 2 consecutive OOMs
+            if consecutive_ooms >= 2:
+                print(f"  SKIP {scene.id}: aborting after {consecutive_ooms} consecutive OOMs")
+                oom_scenes.append(scene.id)
                 continue
 
             prompt = scene.effective_video_prompt or scene.effective_image_prompt or scene.lyrics or f"Scene {scene.id}"
@@ -513,10 +543,17 @@ def cmd_generate_video(args: argparse.Namespace) -> None:
                     from musicvision.models import ApprovalStatus
                     scene.video_status = ApprovalStatus.PENDING
                     generated += 1
+                    consecutive_ooms = 0  # reset on success
                     print(f"  ✓ {scene.id} → {scene.video_clip or f'{len(outputs)} sub-clips'}")
             except Exception as exc:
-                print(f"  ✗ {scene.id}: {exc}")
-                errors.append(scene.id)
+                if is_oom_error(exc):
+                    consecutive_ooms += 1
+                    oom_scenes.append(scene.id)
+                    print(f"  ✗ {scene.id}: OOM ({consecutive_ooms} consecutive)")
+                else:
+                    consecutive_ooms = 0  # non-OOM error resets counter
+                    print(f"  ✗ {scene.id}: {exc}")
+                    errors.append(scene.id)
     finally:
         engine.unload()
 
@@ -524,6 +561,12 @@ def cmd_generate_video(args: argparse.Namespace) -> None:
     print(f"\nGenerated {generated}/{len(targets)} clips.")
     if errors:
         print(f"Failed: {errors}")
+    if oom_scenes:
+        suggestion = _oom_suggestion(engine_type.value, engine_config)
+        print(f"\nOOM failures ({len(oom_scenes)} scenes): {oom_scenes}")
+        print(f"  Suggestion: {suggestion}")
+        print(f"  Re-run with adjusted settings:")
+        print(f"    musicvision generate-video --project {project_dir} --scene-ids {' '.join(oom_scenes)}")
 
 
 def main() -> None:

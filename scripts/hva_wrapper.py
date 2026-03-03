@@ -145,6 +145,7 @@ def run_hva(request: dict) -> dict:
         env["DISABLE_SP"] = "1"
         env["MODEL_BASE"] = str(weights_dir)
         env["PYTHONUNBUFFERED"] = "1"
+        env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:512")
 
         try:
             result = subprocess.run(

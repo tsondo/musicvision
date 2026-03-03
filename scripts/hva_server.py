@@ -33,6 +33,12 @@ import traceback
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
+# 0. Reduce CUDA fragmentation-induced OOMs
+# ---------------------------------------------------------------------------
+if "PYTORCH_CUDA_ALLOC_CONF" not in os.environ:
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
+
+# ---------------------------------------------------------------------------
 # 1. Capture real stdout BEFORE anything else can print to it
 # ---------------------------------------------------------------------------
 _output_fd = os.dup(sys.stdout.fileno())
@@ -224,6 +230,13 @@ def process_clip(
     output_path = Path(request["output_path"])
     sample_n_frames = request.get("sample_n_frames", 129)
     fps = request.get("fps", 25)
+
+    # Per-request seed override
+    req_seed = request.get("seed")
+    if req_seed is not None:
+        torch.manual_seed(req_seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(req_seed)
 
     with tempfile.TemporaryDirectory(prefix="hva_clip_") as tmpdir:
         tmpdir = Path(tmpdir)

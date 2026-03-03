@@ -59,5 +59,9 @@ export function useProject() {
 
   const lastProjectPath = localStorage.getItem(LAST_PROJECT_KEY) ?? "";
 
-  return { state, open, create, reload: tryLoadConfig, lastProjectPath };
+  const close = useCallback(() => {
+    setState({ status: "no-project" });
+  }, []);
+
+  return { state, open, create, close, reload: tryLoadConfig, lastProjectPath };
 }

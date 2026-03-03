@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import type { StepStatus } from "../hooks/usePipeline";
-import type { ImageModelType, PipelineStage, VideoEngineType } from "../api/types";
+import type { ImageModelType, PipelineStage, RenderMode, VideoEngineType } from "../api/types";
 import FileBrowser from "./FileBrowser";
 
 interface Props {
@@ -22,7 +22,7 @@ interface Props {
   onImportLyrics: (path: string) => void;
   onRunIntake: (opts?: { useLlm?: boolean; skipTranscription?: boolean }) => void;
   onGenerateImages: (sceneIds?: string[], model?: ImageModelType) => void;
-  onGenerateVideos: (sceneIds?: string[], engine?: VideoEngineType) => void;
+  onGenerateVideos: (sceneIds?: string[], engine?: VideoEngineType, renderMode?: RenderMode) => void;
 }
 
 type StepState = "disabled" | "active" | "done";
@@ -67,6 +67,7 @@ export default function PipelineBar({
   const [browseTarget, setBrowseTarget] = useState<"audio" | "lyrics" | null>(null);
   const [imageModel, setImageModel] = useState<ImageModelType>("z-image-turbo");
   const [videoEngine, setVideoEngine] = useState<VideoEngineType>("hunyuan_avatar");
+  const [renderMode, setRenderMode] = useState<RenderMode>("preview");
 
   const handleAudioChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -236,15 +237,33 @@ export default function PipelineBar({
             <option value="hunyuan_avatar">HunyuanVideo Avatar</option>
             <option value="humo">HuMo</option>
           </select>
+          <div className="render-mode-toggle">
+            <button
+              className={`btn-toggle${renderMode === "preview" ? " active" : ""}`}
+              onClick={() => setRenderMode("preview")}
+              disabled={isRunning}
+              title="256p / 10 steps — fast preview"
+            >
+              Preview
+            </button>
+            <button
+              className={`btn-toggle${renderMode === "final" ? " active" : ""}`}
+              onClick={() => setRenderMode("final")}
+              disabled={isRunning}
+              title="512p / 30 steps — final quality"
+            >
+              Final
+            </button>
+          </div>
           <button
             className="btn-sm"
             disabled={sceneCount === 0 || isRunning || imagesRemaining > 0 || videosRemaining === 0}
-            onClick={() => onGenerateVideos(undefined, videoEngine)}
+            onClick={() => onGenerateVideos(undefined, videoEngine, renderMode)}
           >
             {videosStatus === "running"
-              ? "Generating..."
+              ? "Rendering..."
               : videosRemaining > 0
-                ? `Generate ${videosRemaining} Video${videosRemaining > 1 ? "s" : ""}`
+                ? `Render ${videosRemaining} ${renderMode} video${videosRemaining > 1 ? "s" : ""}`
                 : "All Done"}
           </button>
         </div>

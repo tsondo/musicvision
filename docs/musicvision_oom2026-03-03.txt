@@ -1,0 +1,616 @@
+22:39:40 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server] ========================= load llava =========================
+22:39:40 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server] 2026-03-02 22:39:40.603 | INFO     | hymm_sp.text_encoder:load_text_encoder:29 - Loading text encoder model (llava-llama-3-8b) from: /home/tsondo/HunyuanVideoAvatar/weights/ckpts/llava_llama_image
+22:39:40 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]
+22:39:41 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server] Loading checkpoint shards:   0%|          | 0/4 [00:00<?, ?it/s]
+22:39:43 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server] Loading checkpoint shards:  25%|██▌       | 1/4 [00:01<00:03,  1.19s/it]
+22:39:46 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server] Loading checkpoint shards:  50%|█████     | 2/4 [00:03<00:03,  1.67s/it]
+22:39:47 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server] Loading checkpoint shards:  75%|███████▌  | 3/4 [00:05<00:02,  2.07s/it]
+22:39:47 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server] Loading checkpoint shards: 100%|██████████| 4/4 [00:06<00:00,  1.60s/it]
+22:39:47 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server] Loading checkpoint shards: 100%|██████████| 4/4 [00:06<00:00,  1.66s/it]
+22:39:50 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server] 2026-03-02 22:39:50.242 | INFO     | hymm_sp.text_encoder:load_text_encoder:49 - Text encoder to dtype: torch.float16
+22:39:50 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server] 2026-03-02 22:39:50.246 | INFO     | hymm_sp.text_encoder:load_tokenizer:64 - Loading tokenizer (llava-llama-3-8b) from: /home/tsondo/HunyuanVideoAvatar/weights/ckpts/llava_llama_image
+22:39:50 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server] You are using the default legacy behaviour of the <class 'transformers.models.llama.tokenization_llama_fast.LlamaTokenizerFast'>. This is expected, and simply means that the `legacy` (previous) behavior will be used so nothing changes for you. If you want to use the new behaviour, set `legacy=False`. This should only be set if you understand what it means, and thoroughly read the reason why this was added as explained in https://github.com/huggingface/transformers/pull/24565 - if you loaded a llama tokenizer from a GGUF file you can ignore this message.
+22:39:50 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server] 2026-03-02 22:39:50.534 | INFO     | hymm_sp.text_encoder:load_text_encoder:29 - Loading text encoder model (clipL) from: /home/tsondo/HunyuanVideoAvatar/weights/ckpts/text_encoder_2
+22:39:50 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server] 2026-03-02 22:39:50.907 | INFO     | hymm_sp.text_encoder:load_text_encoder:49 - Text encoder to dtype: torch.float16
+22:39:50 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server] 2026-03-02 22:39:50.908 | INFO     | hymm_sp.text_encoder:load_tokenizer:64 - Loading tokenizer (clipL) from: /home/tsondo/HunyuanVideoAvatar/weights/ckpts/text_encoder_2
+22:39:50 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server] /home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/transformers/tokenization_utils_base.py:1617: FutureWarning: `clean_up_tokenization_spaces` was not set. It will be set to `True` by default. This behavior will be deprecated in transformers v4.45, and will be then set to `False` by default. For more details check this issue: https://github.com/huggingface/transformers/issues/31884
+22:39:50 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]   warnings.warn(
+22:39:50 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server] load hunyuan model successful...
+22:39:51 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server] [hva_server] All models loaded successfully
+22:39:51 [INFO] musicvision.video.hunyuan_avatar_engine: HVA persistent server started — models will load once
+22:39:51 [INFO] musicvision.video.hunyuan_avatar_engine: Sending to HVA server: scene_001.png → scene_001_a.mp4
+22:39:53 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server] /home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/functional.py:505: UserWarning: torch.meshgrid: in an upcoming release, it will be required to pass the indexing argument. (Triggered internally at /pytorch/aten/src/ATen/native/TensorShape.cpp:4381.)
+22:39:53 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]   return _VF.meshgrid(tensors, **kwargs)  # type: ignore[attr-defined]
+22:40:43 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server] 2026-03-02 22:40:43.168 | INFO     | hymm_sp.sample_inference_audio:predict:180 -
+22:40:43 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]                     prompt: Authentic, Realistic, Natural, High-quality, Lens-Fixed, A man steps p to the microphone.
+22:40:43 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]                 image_path: /home/tsondo/Music/images/scene_001.png
+22:40:43 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]                 audio_path: /home/tsondo/Music/segments/sub/scene_001_sub_00.wav
+22:40:43 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]            negative_prompt: Aerial view, aerial view, overexposed, low quality, deformation, a poor composition, bad hands, bad teeth, bad eyes, bad limbs, distortion, blurring, Lens changes
+22:40:43 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]                       seed: 1024
+22:40:43 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]                        fps: 25.0
+22:40:43 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]                infer_steps: 30
+22:40:43 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]              target_height: 704
+22:40:43 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]               target_width: 1216
+22:40:43 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]              target_length: 129
+22:40:43 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]             guidance_scale: 7.5
+22:40:43 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]
+22:40:44 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server] Expanding inputs for image tokens in LLaVa should be done in processing. Please add `patch_size` and `vision_feature_select_strategy` to the model's processing config or set directly with `processor.patch_size = {{patch_size}}` and processor.vision_feature_select_strategy = {{vision_feature_select_strategy}}`. Using processors without these attributes in the config is deprecated and will throw an error in v4.47.
+22:41:21 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server] Starting from v4.46, the `logits` model output will have the same type as the model (except at train time, where it will always be FP32)
+22:42:03 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]
+22:42:03 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]   0%|          | 0/30 [00:00<?, ?it/s]cpu_offload=True and torch.Size([88, 152]) is large, split infer noise-pred
+22:49:30 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]   3%|▎         | 1/30 [07:26<3:35:41, 446.24s/it]
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]   3%|▎         | 1/30 [10:11<4:55:27, 611.28s/it]
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server] Traceback (most recent call last):
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]   File "/home/tsondo/musicvision/scripts/hva_server.py", line 191, in main
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]     result = process_clip(
+22:52:15 [WARNING] musicvision.video.hunyuan_avatar_engine: Server generation failed, falling back to wrapper for this clip: HVA server generation failed: Inference failed: CUDA out of memory. Tried to allocate 3.28 GiB. GPU 0 has a total capacity of 31.84 GiB of which 662.87 MiB is free. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. Of the allocated memory 25.03 GiB is allocated by PyTorch, and 3.82 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]              ^^^^^^^^^^^^^
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]   File "/home/tsondo/musicvision/scripts/hva_server.py", line 260, in process_clip
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]     samples = sampler.predict(hva_args, batch, wav2vec, feature_extractor, align_instance)
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]   File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/utils/_contextlib.py", line 124, in decorate_context
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]     return func(*args, **kwargs)
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]            ^^^^^^^^^^^^^^^^^^^^^
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]   File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/sample_inference_audio.py", line 185, in predict
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]     samples = self.pipeline(prompt=prompt,
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]   File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/utils/_contextlib.py", line 124, in decorate_context
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]     return func(*args, **kwargs)
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]            ^^^^^^^^^^^^^^^^^^^^^
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]   File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/diffusion/pipelines/pipeline_hunyuan_video_audio.py", line 1189, in __call__
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]     noise_pred_uncond = self.transformer(latent_model_input[:1], t_expand[:1], ref_latents=ref_latents[:1], text_states=prompt_embeds_input[:1], text_mask=prompt_mask_input[:1], text_states_2=prompt_embeds_2_input[:1], freqs_cos=freqs_cis[0], freqs_sin=freqs_cis[1], guidance=guidance_expand, return_dict=True, is_cache=is_cache, **additional_kwargs,)['x']
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]   File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]     return self._call_impl(*args, **kwargs)
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]   File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]     return forward_call(*args, **kwargs)
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]   File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]     output = function_reference.forward(*args, **kwargs)
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]   File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 663, in forward
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]     x = block(*single_block_args)
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]         ^^^^^^^^^^^^^^^^^^^^^^^^^
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]   File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]     return self._call_impl(*args, **kwargs)
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]   File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]     return forward_call(*args, **kwargs)
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]   File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]     output = function_reference.forward(*args, **kwargs)
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]   File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 343, in forward
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]     output = self.linear2(torch.cat((attn, self.mlp_act(mlp)), 2))
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server]                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: [hva_server] torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 3.28 GiB. GPU 0 has a total capacity of 31.84 GiB of which 662.87 MiB is free. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. Of the allocated memory 25.03 GiB is allocated by PyTorch, and 3.82 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+22:52:15 [INFO] musicvision.video.hunyuan_avatar_engine: Running HVA wrapper: scene_001.png → scene_001_a.mp4
+23:06:30 [ERROR] musicvision.api.app: Video generation failed for scene_001: HVA generation failed: HVA exited with code 1: module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 663, in forward
+    x = block(*single_block_args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 343, in forward
+    output = self.linear2(torch.cat((attn, self.mlp_act(mlp)), 2))
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 3.28 GiB. GPU 0 has a total capacity of 31.84 GiB of which 662.81 MiB is free. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. Of the allocated memory 25.03 GiB is allocated by PyTorch, and 3.82 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+
+23:06:30 [INFO] musicvision.video.hunyuan_avatar_engine: Running HVA wrapper: scene_002.png → scene_002.mp4
+23:11:08 [ERROR] musicvision.api.app: Video generation failed for scene_002: HVA generation failed: HVA exited with code 1: s/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 663, in forward
+    x = block(*single_block_args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 343, in forward
+    output = self.linear2(torch.cat((attn, self.mlp_act(mlp)), 2))
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 3.28 GiB. GPU 0 has a total capacity of 31.84 GiB of which 1.37 GiB is free. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. Of the allocated memory 20.20 GiB is allocated by PyTorch, and 7.93 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+
+23:11:08 [INFO] musicvision.video.hunyuan_avatar_engine: Running HVA wrapper: scene_005.png → scene_005.mp4
+23:15:52 [ERROR] musicvision.api.app: Video generation failed for scene_005: HVA generation failed: HVA exited with code 1: s/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 663, in forward
+    x = block(*single_block_args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 343, in forward
+    output = self.linear2(torch.cat((attn, self.mlp_act(mlp)), 2))
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 3.28 GiB. GPU 0 has a total capacity of 31.84 GiB of which 1.37 GiB is free. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. Of the allocated memory 20.20 GiB is allocated by PyTorch, and 7.93 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+
+23:15:52 [INFO] musicvision.video.hunyuan_avatar_engine: Running HVA wrapper: scene_003.png → scene_003_a.mp4
+23:30:04 [ERROR] musicvision.api.app: Video generation failed for scene_003: HVA generation failed: HVA exited with code 1: module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 663, in forward
+    x = block(*single_block_args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 343, in forward
+    output = self.linear2(torch.cat((attn, self.mlp_act(mlp)), 2))
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 3.28 GiB. GPU 0 has a total capacity of 31.84 GiB of which 653.69 MiB is free. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. Of the allocated memory 25.03 GiB is allocated by PyTorch, and 3.82 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+
+23:30:04 [INFO] musicvision.video.hunyuan_avatar_engine: Running HVA wrapper: scene_004.png → scene_004_a.mp4
+23:44:00 [ERROR] musicvision.api.app: Video generation failed for scene_004: HVA generation failed: HVA exited with code 1: module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 663, in forward
+    x = block(*single_block_args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 343, in forward
+    output = self.linear2(torch.cat((attn, self.mlp_act(mlp)), 2))
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 3.28 GiB. GPU 0 has a total capacity of 31.84 GiB of which 662.81 MiB is free. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. Of the allocated memory 25.03 GiB is allocated by PyTorch, and 3.82 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+
+23:44:00 [INFO] musicvision.video.hunyuan_avatar_engine: Running HVA wrapper: scene_006.png → scene_006_a.mp4
+23:58:41 [ERROR] musicvision.api.app: Video generation failed for scene_006: HVA generation failed: HVA exited with code 1: module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 663, in forward
+    x = block(*single_block_args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 343, in forward
+    output = self.linear2(torch.cat((attn, self.mlp_act(mlp)), 2))
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 3.28 GiB. GPU 0 has a total capacity of 31.84 GiB of which 548.93 MiB is free. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. Of the allocated memory 25.03 GiB is allocated by PyTorch, and 3.82 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+
+23:58:41 [INFO] musicvision.video.hunyuan_avatar_engine: Running HVA wrapper: scene_007.png → scene_007.mp4
+00:03:34 [ERROR] musicvision.api.app: Video generation failed for scene_007: HVA generation failed: HVA exited with code 1: s/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 663, in forward
+    x = block(*single_block_args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 343, in forward
+    output = self.linear2(torch.cat((attn, self.mlp_act(mlp)), 2))
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 3.28 GiB. GPU 0 has a total capacity of 31.84 GiB of which 1.37 GiB is free. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. Of the allocated memory 20.20 GiB is allocated by PyTorch, and 7.93 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+
+00:03:34 [INFO] musicvision.video.hunyuan_avatar_engine: Running HVA wrapper: scene_008.png → scene_008_a.mp4
+00:17:51 [ERROR] musicvision.api.app: Video generation failed for scene_008: HVA generation failed: HVA exited with code 1: module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 663, in forward
+    x = block(*single_block_args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 343, in forward
+    output = self.linear2(torch.cat((attn, self.mlp_act(mlp)), 2))
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 3.28 GiB. GPU 0 has a total capacity of 31.84 GiB of which 662.81 MiB is free. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. Of the allocated memory 25.03 GiB is allocated by PyTorch, and 3.82 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+
+00:17:51 [INFO] musicvision.video.hunyuan_avatar_engine: Running HVA wrapper: scene_009.png → scene_009_a.mp4
+00:32:16 [ERROR] musicvision.api.app: Video generation failed for scene_009: HVA generation failed: HVA exited with code 1: module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 663, in forward
+    x = block(*single_block_args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 343, in forward
+    output = self.linear2(torch.cat((attn, self.mlp_act(mlp)), 2))
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 3.28 GiB. GPU 0 has a total capacity of 31.84 GiB of which 662.81 MiB is free. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. Of the allocated memory 25.03 GiB is allocated by PyTorch, and 3.82 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+
+00:32:16 [INFO] musicvision.video.hunyuan_avatar_engine: Running HVA wrapper: scene_010.png → scene_010.mp4
+00:39:41 [ERROR] musicvision.api.app: Video generation failed for scene_010: HVA generation failed: HVA exited with code 1: img), shift=img_mod2_shift, scale=img_mod2_scale)), gate=img_mod2_gate)
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/mlp_layers.py", line 45, in forward
+    x = self.act(x)
+        ^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/activation.py", line 815, in forward
+    return F.gelu(input, approximate=self.approximate)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.60 GiB. GPU 0 has a total capacity of 31.84 GiB of which 1.14 GiB is free. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. Of the allocated memory 22.54 GiB is allocated by PyTorch, and 5.71 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+
+00:39:41 [INFO] musicvision.video.hunyuan_avatar_engine: Running HVA wrapper: scene_011.png → scene_011_a.mp4
+00:57:04 [ERROR] musicvision.api.app: Video generation failed for scene_011: HVA generation failed: HVA exited with code 1: module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 663, in forward
+    x = block(*single_block_args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 343, in forward
+    output = self.linear2(torch.cat((attn, self.mlp_act(mlp)), 2))
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 3.28 GiB. GPU 0 has a total capacity of 31.84 GiB of which 662.81 MiB is free. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. Of the allocated memory 25.03 GiB is allocated by PyTorch, and 3.82 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+
+00:57:04 [INFO] musicvision.video.hunyuan_avatar_engine: Running HVA wrapper: scene_012.png → scene_012_a.mp4
+01:10:02 [ERROR] musicvision.api.app: Video generation failed for scene_012: HVA generation failed: HVA exited with code 1: module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 663, in forward
+    x = block(*single_block_args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 343, in forward
+    output = self.linear2(torch.cat((attn, self.mlp_act(mlp)), 2))
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 3.28 GiB. GPU 0 has a total capacity of 31.84 GiB of which 662.81 MiB is free. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. Of the allocated memory 25.03 GiB is allocated by PyTorch, and 3.82 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+
+01:10:02 [INFO] musicvision.video.hunyuan_avatar_engine: Running HVA wrapper: scene_013.png → scene_013_a.mp4
+01:23:07 [ERROR] musicvision.api.app: Video generation failed for scene_013: HVA generation failed: HVA exited with code 1: module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 663, in forward
+    x = block(*single_block_args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 343, in forward
+    output = self.linear2(torch.cat((attn, self.mlp_act(mlp)), 2))
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 3.28 GiB. GPU 0 has a total capacity of 31.84 GiB of which 662.81 MiB is free. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. Of the allocated memory 25.03 GiB is allocated by PyTorch, and 3.82 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+
+01:23:07 [INFO] musicvision.video.hunyuan_avatar_engine: Running HVA wrapper: scene_014.png → scene_014_a.mp4
+01:36:09 [ERROR] musicvision.api.app: Video generation failed for scene_014: HVA generation failed: HVA exited with code 1: s/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 663, in forward
+    x = block(*single_block_args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 343, in forward
+    output = self.linear2(torch.cat((attn, self.mlp_act(mlp)), 2))
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 3.28 GiB. GPU 0 has a total capacity of 31.84 GiB of which 1.21 GiB is free. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. Of the allocated memory 25.03 GiB is allocated by PyTorch, and 3.15 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+
+01:36:09 [INFO] musicvision.video.hunyuan_avatar_engine: Running HVA wrapper: scene_015.png → scene_015.mp4
+01:43:45 [ERROR] musicvision.api.app: Video generation failed for scene_015: HVA generation failed: HVA exited with code 1: img), shift=img_mod2_shift, scale=img_mod2_scale)), gate=img_mod2_gate)
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/mlp_layers.py", line 45, in forward
+    x = self.act(x)
+        ^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/activation.py", line 815, in forward
+    return F.gelu(input, approximate=self.approximate)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.60 GiB. GPU 0 has a total capacity of 31.84 GiB of which 1.25 GiB is free. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. Of the allocated memory 22.54 GiB is allocated by PyTorch, and 5.71 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+
+01:43:45 [INFO] musicvision.video.hunyuan_avatar_engine: Running HVA wrapper: scene_016.png → scene_016_a.mp4
+02:03:33 [ERROR] musicvision.api.app: Video generation failed for scene_016: HVA generation failed: HVA exited with code 1: module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 663, in forward
+    x = block(*single_block_args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 343, in forward
+    output = self.linear2(torch.cat((attn, self.mlp_act(mlp)), 2))
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 3.28 GiB. GPU 0 has a total capacity of 31.84 GiB of which 662.81 MiB is free. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. Of the allocated memory 25.03 GiB is allocated by PyTorch, and 3.82 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+
+02:03:33 [INFO] musicvision.video.hunyuan_avatar_engine: Running HVA wrapper: scene_017.png → scene_017.mp4
+02:17:58 [ERROR] musicvision.api.app: Video generation failed for scene_017: HVA generation failed: HVA exited with code 1: module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 663, in forward
+    x = block(*single_block_args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 343, in forward
+    output = self.linear2(torch.cat((attn, self.mlp_act(mlp)), 2))
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 3.28 GiB. GPU 0 has a total capacity of 31.84 GiB of which 662.81 MiB is free. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. Of the allocated memory 25.03 GiB is allocated by PyTorch, and 3.82 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+
+02:17:58 [INFO] musicvision.video.hunyuan_avatar_engine: Running HVA wrapper: scene_018.png → scene_018_a.mp4
+02:32:09 [ERROR] musicvision.api.app: Video generation failed for scene_018: HVA generation failed: HVA exited with code 1: s/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 663, in forward
+    x = block(*single_block_args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 343, in forward
+    output = self.linear2(torch.cat((attn, self.mlp_act(mlp)), 2))
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 3.28 GiB. GPU 0 has a total capacity of 31.84 GiB of which 1.32 GiB is free. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. Of the allocated memory 25.03 GiB is allocated by PyTorch, and 3.15 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+
+02:32:09 [INFO] musicvision.video.hunyuan_avatar_engine: Running HVA wrapper: scene_019.png → scene_019.mp4
+02:46:10 [ERROR] musicvision.api.app: Video generation failed for scene_019: HVA generation failed: HVA exited with code 1: module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 663, in forward
+    x = block(*single_block_args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 343, in forward
+    output = self.linear2(torch.cat((attn, self.mlp_act(mlp)), 2))
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 3.28 GiB. GPU 0 has a total capacity of 31.84 GiB of which 662.81 MiB is free. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. Of the allocated memory 25.03 GiB is allocated by PyTorch, and 3.82 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+
+02:46:10 [INFO] musicvision.video.hunyuan_avatar_engine: Running HVA wrapper: scene_020.png → scene_020_a.mp4
+03:00:07 [ERROR] musicvision.api.app: Video generation failed for scene_020: HVA generation failed: HVA exited with code 1: module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 663, in forward
+    x = block(*single_block_args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 343, in forward
+    output = self.linear2(torch.cat((attn, self.mlp_act(mlp)), 2))
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 3.28 GiB. GPU 0 has a total capacity of 31.84 GiB of which 662.81 MiB is free. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. Of the allocated memory 25.03 GiB is allocated by PyTorch, and 3.82 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+
+03:00:07 [INFO] musicvision.video.hunyuan_avatar_engine: Running HVA wrapper: scene_021.png → scene_021_a.mp4
+03:14:42 [ERROR] musicvision.api.app: Video generation failed for scene_021: HVA generation failed: HVA exited with code 1: module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 663, in forward
+    x = block(*single_block_args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 343, in forward
+    output = self.linear2(torch.cat((attn, self.mlp_act(mlp)), 2))
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 3.28 GiB. GPU 0 has a total capacity of 31.84 GiB of which 662.81 MiB is free. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. Of the allocated memory 25.03 GiB is allocated by PyTorch, and 3.82 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+
+03:14:42 [INFO] musicvision.video.hunyuan_avatar_engine: Running HVA wrapper: scene_022.png → scene_022_a.mp4
+03:27:48 [ERROR] musicvision.api.app: Video generation failed for scene_022: HVA generation failed: HVA exited with code 1: module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 663, in forward
+    x = block(*single_block_args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/.venv/lib/python3.11/site-packages/diffusers/hooks/hooks.py", line 148, in new_forward
+    output = function_reference.forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/tsondo/HunyuanVideoAvatar/hymm_sp/modules/models_audio.py", line 343, in forward
+    output = self.linear2(torch.cat((attn, self.mlp_act(mlp)), 2))
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 3.28 GiB. GPU 0 has a total capacity of 31.84 GiB of which 548.93 MiB is free. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. Of the allocated memory 25.03 GiB is allocated by PyTorch, and 3.82 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+
+INFO:     127.0.0.1:53600 - "POST /api/pipeline/generate-videos HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53606

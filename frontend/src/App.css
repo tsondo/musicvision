@@ -265,6 +265,37 @@ body {
   border-color: var(--border-focus);
 }
 
+.render-mode-toggle {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.btn-toggle {
+  padding: 3px 10px;
+  font-size: 11px;
+  font-family: var(--font);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  border: none;
+  cursor: pointer;
+}
+
+.btn-toggle + .btn-toggle {
+  border-left: 1px solid var(--border);
+}
+
+.btn-toggle.active {
+  background: var(--accent, #4a9eff);
+  color: #fff;
+}
+
+.btn-toggle:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .checkbox-label {
   display: flex;
   align-items: center;
@@ -346,10 +377,32 @@ button:disabled {
   z-index: 10;
 }
 
+.header-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
 .header-info h1 {
   font-size: 18px;
   font-weight: 600;
-  margin-bottom: 4px;
+}
+
+.close-project-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 18px;
+  line-height: 1;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.close-project-btn:hover {
+  color: var(--text);
+  border-color: var(--text-secondary);
 }
 
 .header-stats {
@@ -518,6 +571,24 @@ button:disabled {
   opacity: 1;
 }
 
+.video-stop-overlay {
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  font-size: 14px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: 4px;
+  padding: 2px 6px;
+  opacity: 0;
+  transition: opacity 0.15s;
+  pointer-events: none;
+}
+
+.cell-image:hover .video-stop-overlay {
+  opacity: 1;
+}
+
 .image-placeholder {
   width: 100%;
   height: 100%;
@@ -629,6 +700,23 @@ button:disabled {
 .seed-row input:focus {
   outline: none;
   border-color: var(--border-focus);
+}
+
+.seed-locked {
+  font-size: 10px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 80px;
+}
+
+.approved-toggle {
+  margin-top: 4px;
+}
+
+.approved-toggle input:checked + * {
+  color: var(--accent, #4a9eff);
 }
 
 .btn-regen {

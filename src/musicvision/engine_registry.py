@@ -116,6 +116,96 @@ def compute_subclip_frames(
     return counts
 
 
+def compute_subclip_frames_at_silences(
+    total_frames: int,
+    max_frames: int,
+    min_frames: int,
+    fps: int,
+    silences: list[tuple[float, float]],
+) -> list[int]:
+    """
+    Divide total_frames into sub-clips, splitting at silence midpoints.
+
+    Greedy walk: accumulate frames toward max_frames, split at the last
+    valid silence midpoint before exceeding max. If no silence is available
+    in the valid range, hard-cut at max_frames (same as equal distribution).
+
+    Falls back to compute_subclip_frames() if the result violates constraints.
+
+    Args:
+        total_frames: Total frames in the scene.
+        max_frames: Engine max frames per sub-clip.
+        min_frames: Engine min frames per sub-clip.
+        fps: Frames per second.
+        silences: List of (start, end) silence intervals in seconds.
+
+    Returns:
+        List of frame counts summing to total_frames.
+    """
+    if total_frames <= 0:
+        return []
+
+    if total_frames <= max_frames:
+        return [total_frames]
+
+    # Convert silence midpoints to frame indices
+    silence_frames = sorted(
+        round(((s + e) / 2) * fps)
+        for s, e in silences
+    )
+
+    counts: list[int] = []
+    cursor = 0  # frames consumed so far
+
+    while cursor < total_frames:
+        remaining = total_frames - cursor
+
+        # Last chunk — take everything
+        if remaining <= max_frames:
+            counts.append(remaining)
+            break
+
+        # Find the last silence midpoint frame within [cursor + min_frames, cursor + max_frames]
+        window_lo = cursor + min_frames
+        window_hi = cursor + max_frames
+
+        # Also ensure the remainder after this split is >= min_frames
+        # (unless the remainder would be the very last chunk, i.e. <= max_frames)
+        best_split = None
+        for sf in reversed(silence_frames):
+            if sf < window_lo:
+                break  # sorted, so no point continuing
+            if sf > window_hi:
+                continue
+            chunk = sf - cursor
+            leftover = total_frames - sf
+            # Accept if leftover fits in one clip, or leftover is large enough to split further
+            if leftover <= max_frames or leftover >= min_frames:
+                best_split = chunk
+                break
+
+        if best_split is not None:
+            counts.append(best_split)
+            cursor += best_split
+        else:
+            # No silence in range — hard cut at max_frames
+            counts.append(max_frames)
+            cursor += max_frames
+
+    # Validate
+    valid = (
+        sum(counts) == total_frames
+        and all(c >= min_frames for c in counts)
+        and all(c <= max_frames for c in counts)
+    )
+
+    if not valid:
+        # Fall back to equal distribution
+        return compute_subclip_frames(total_frames, max_frames, min_frames)
+
+    return counts
+
+
 def sub_clip_suffixes(n: int) -> list[str]:
     """Generate sub-clip suffixes: a, b, c, ... z, aa, ab, ..."""
     result: list[str] = []
@@ -150,7 +240,7 @@ def plan_subclips(
     import logging
     from pathlib import Path
 
-    from musicvision.utils.audio import slice_subclip_audio
+    from musicvision.utils.audio import detect_silences, slice_subclip_audio
 
     log = logging.getLogger(__name__)
     fps = constraints.fps
@@ -165,17 +255,33 @@ def plan_subclips(
         scene.frame_end = frame_start + total
         scene.total_frames = total
 
-        counts = compute_subclip_frames(total, constraints.max_frames, constraints.min_frames)
+        # Try silence-aware splitting if scene needs sub-clips
+        seg_path = segments_dir / f"{scene.id}.wav"
+        if total > constraints.max_frames and seg_path.exists():
+            try:
+                silences = detect_silences(seg_path)
+                counts = compute_subclip_frames_at_silences(
+                    total, constraints.max_frames, constraints.min_frames, fps, silences,
+                )
+                if silences:
+                    log.debug(
+                        "Scene %s: silence-aware split (%d silences detected)",
+                        scene.id, len(silences),
+                    )
+            except Exception:
+                log.warning("Silence detection failed for scene %s, using equal split", scene.id, exc_info=True)
+                counts = compute_subclip_frames(total, constraints.max_frames, constraints.min_frames)
+        else:
+            counts = compute_subclip_frames(total, constraints.max_frames, constraints.min_frames)
+
         scene.subclip_frame_counts = counts
 
         if len(counts) <= 1:
             # Single clip — use the scene's existing audio segment
-            seg_path = segments_dir / f"{scene.id}.wav"
             scene.generation_audio_segments = [str(seg_path)]
             continue
 
         # Multiple sub-clips — slice audio
-        seg_path = segments_dir / f"{scene.id}.wav"
         if not seg_path.exists():
             log.warning("Scene audio not found for sub-clip slicing: %s", seg_path)
             continue

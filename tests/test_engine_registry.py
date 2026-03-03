@@ -8,6 +8,7 @@ from musicvision.engine_registry import (
     ENGINES,
     EngineConstraints,
     compute_subclip_frames,
+    compute_subclip_frames_at_silences,
     frames_to_seconds,
     get_constraints,
     scene_frames,
@@ -167,3 +168,102 @@ class TestSubClipSuffixes:
 
     def test_empty(self):
         assert sub_clip_suffixes(0) == []
+
+
+# ---------------------------------------------------------------------------
+# compute_subclip_frames_at_silences
+# ---------------------------------------------------------------------------
+
+
+class TestSilenceSplit:
+    """Tests for silence-aware sub-clip splitting."""
+
+    # HVA constraints: max=129, min=33, fps=25
+    MAX = 129
+    MIN = 33
+    FPS = 25
+
+    def test_single_clip_no_split(self):
+        """Scene fits in one clip — no split regardless of silences."""
+        silences = [(1.0, 1.2), (3.0, 3.3)]
+        result = compute_subclip_frames_at_silences(100, self.MAX, self.MIN, self.FPS, silences)
+        assert result == [100]
+
+    def test_basic_silence_split(self):
+        """300 frames (~12s) with silences — splits at silence midpoints."""
+        # Silences at ~5s and ~9s
+        silences = [(4.8, 5.2), (8.8, 9.2)]
+        result = compute_subclip_frames_at_silences(300, self.MAX, self.MIN, self.FPS, silences)
+
+        assert sum(result) == 300
+        assert all(c >= self.MIN for c in result)
+        assert all(c <= self.MAX for c in result)
+        # Should split near silence midpoints (frame 125 for 5.0s, frame 225 for 9.0s)
+        assert len(result) == 3
+
+    def test_no_silences_hard_cuts(self):
+        """No silences at all → hard cuts at max_frames."""
+        result = compute_subclip_frames_at_silences(300, self.MAX, self.MIN, self.FPS, silences=[])
+        assert sum(result) == 300
+        assert all(c >= self.MIN for c in result)
+        assert all(c <= self.MAX for c in result)
+        # Greedy walk: 129 + 129 + 42 (hard cut at max, last chunk gets remainder)
+        assert result == [129, 129, 42]
+
+    def test_respects_min_frames(self):
+        """Silence too close to start is skipped (would create chunk < min_frames)."""
+        # 260 frames, silence at 0.5s (frame 12-13) — too close to start
+        # Should skip this silence and use a later one or hard cut
+        silences = [(0.4, 0.6), (5.0, 5.2)]
+        result = compute_subclip_frames_at_silences(260, self.MAX, self.MIN, self.FPS, silences)
+
+        assert sum(result) == 260
+        assert all(c >= self.MIN for c in result)
+        assert all(c <= self.MAX for c in result)
+        # First chunk should NOT be ~13 frames (that's < min)
+        assert result[0] >= self.MIN
+
+    def test_respects_max_frames(self):
+        """Long stretch with no silence in range → hard cut at max_frames."""
+        # 300 frames, only silence at 11s (frame 275) — way beyond first clip's max window
+        silences = [(10.9, 11.1)]
+        result = compute_subclip_frames_at_silences(300, self.MAX, self.MIN, self.FPS, silences)
+
+        assert sum(result) == 300
+        assert all(c >= self.MIN for c in result)
+        assert all(c <= self.MAX for c in result)
+        # First clip should be hard-cut at 129 since no silence before it
+        assert result[0] == self.MAX
+
+    def test_sum_invariant(self):
+        """sum(result) == total_frames for various inputs."""
+        test_cases = [
+            (200, [(3.5, 3.7)]),
+            (300, [(2.0, 2.2), (5.0, 5.3), (8.0, 8.1)]),
+            (500, [(4.0, 4.5), (9.0, 9.3), (14.0, 14.2), (18.0, 18.5)]),
+        ]
+        for total, silences in test_cases:
+            result = compute_subclip_frames_at_silences(total, self.MAX, self.MIN, self.FPS, silences)
+            assert sum(result) == total, f"Failed for total={total}: {result}"
+
+    def test_empty_total(self):
+        assert compute_subclip_frames_at_silences(0, self.MAX, self.MIN, self.FPS, []) == []
+
+    def test_humo_constraints(self):
+        """Works with HuMo's tighter constraints (max=97, min=25)."""
+        silences = [(1.5, 1.7), (3.5, 3.7), (5.5, 5.7), (7.5, 7.7)]
+        result = compute_subclip_frames_at_silences(250, 97, 25, 25, silences)
+
+        assert sum(result) == 250
+        assert all(c >= 25 for c in result)
+        assert all(c <= 97 for c in result)
+
+    def test_splits_at_silence_midpoint(self):
+        """Verify the split happens at the silence midpoint, not start/end."""
+        # Silence from 4.0-5.0s → midpoint = 4.5s → frame 112
+        silences = [(4.0, 5.0)]
+        result = compute_subclip_frames_at_silences(200, self.MAX, self.MIN, self.FPS, silences)
+
+        assert sum(result) == 200
+        # First chunk should be ~112 frames (midpoint of 4.0–5.0s silence)
+        assert result[0] == round(4.5 * self.FPS)  # 112 or 113

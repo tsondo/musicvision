@@ -8,7 +8,7 @@ import Storyboard from "./components/Storyboard";
 import PreviewPanel from "./components/PreviewPanel";
 
 export default function App() {
-  const { state, open, create, reload: reloadConfig, lastProjectPath } = useProject();
+  const { state, open, create, close, reload: reloadConfig, lastProjectPath } = useProject();
   const projectLoaded = state.status === "loaded";
   const {
     scenes,
@@ -46,7 +46,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <ProjectHeader config={state.config} scenes={scenes} stage={pipeline.stage} />
+      <ProjectHeader config={state.config} scenes={scenes} stage={pipeline.stage} onClose={close} />
       <PipelineBar
         stage={pipeline.stage}
         hasAudio={pipeline.hasAudio}
