@@ -47,6 +47,12 @@ ENGINES: dict[str, EngineConstraints] = {
         min_frames=33,
         fps=25,
     ),
+    "ltx_video": EngineConstraints(
+        name="LTX-Video 2",
+        max_frames=257,
+        min_frames=9,
+        fps=24,
+    ),
 }
 
 
@@ -114,6 +120,30 @@ def compute_subclip_frames(
     assert all(c <= max_frames for c in counts), f"Sub-clip above maximum: {max(counts)} > {max_frames}"
 
     return counts
+
+
+def snap_subclip_frames_ltx(counts: list[int], total_frames: int) -> list[int]:
+    """Snap each frame count to the nearest valid (N*8)+1 value for LTX-2.
+
+    Adjusts the last clip to preserve the total frame sum invariant.
+    """
+    if len(counts) <= 1:
+        return counts
+
+    snapped = []
+    for c in counts[:-1]:
+        n = round((c - 1) / 8)
+        snapped.append(max(n * 8 + 1, 9))
+
+    # Last clip absorbs rounding drift to preserve total
+    snapped.append(total_frames - sum(snapped))
+
+    # If last clip is too small, merge with previous
+    if snapped[-1] < 9 and len(snapped) > 1:
+        snapped[-2] += snapped[-1]
+        snapped.pop()
+
+    return snapped
 
 
 def compute_subclip_frames_at_silences(
@@ -273,6 +303,10 @@ def plan_subclips(
                 counts = compute_subclip_frames(total, constraints.max_frames, constraints.min_frames)
         else:
             counts = compute_subclip_frames(total, constraints.max_frames, constraints.min_frames)
+
+        # LTX-2 requires (N*8)+1 frame counts — snap after splitting
+        if constraints.name == "LTX-Video 2" and len(counts) > 1:
+            counts = snap_subclip_frames_ltx(counts, total)
 
         scene.subclip_frame_counts = counts
 

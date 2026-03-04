@@ -128,6 +128,7 @@ class VideoEngineType(str, Enum):
     """Selectable video generation backend."""
     HUMO            = "humo"
     HUNYUAN_AVATAR  = "hunyuan_avatar"
+    LTX_VIDEO       = "ltx_video"
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +260,42 @@ class HunyuanAvatarConfig(BaseModel):
         return self.sample_n_frames / self.fps
 
 
+class LtxVideoConfig(BaseModel):
+    """Configuration for LTX-Video 2 in-process engine (diffusers)."""
+
+    model_id: str = "Lightricks/LTX-2"
+    use_fp8: bool = True                    # FP8 transformer (27GB vs 43GB BF16)
+    width: int = 768                        # must be divisible by 32
+    height: int = 512                       # must be divisible by 32
+    num_frames: int = 121                   # must be (N*8)+1; max 257
+    fps: int = 24
+    num_inference_steps: int = 40
+    guidance_scale: float = 4.0
+    negative_prompt: str = (
+        "shaky, glitchy, low quality, worst quality, deformed, distorted, "
+        "disfigured, motion smear, motion artifacts, fused fingers, bad anatomy, "
+        "weird hand, ugly, transition, static"
+    )
+    seed: int | None = None
+    use_audio_conditioning: bool = True     # feed scene audio for synced motion
+    vae_tiling: bool = True                 # required to avoid OOM at higher res
+    cpu_offload: str = "sequential"         # "none" | "model" | "sequential"
+
+    @property
+    def max_frames(self) -> int:
+        return 257
+
+    @property
+    def max_duration(self) -> float:
+        return self.max_frames / self.fps
+
+    @staticmethod
+    def snap_frames(target: int) -> int:
+        """Snap a target frame count to nearest valid (N*8)+1 value."""
+        n = round((target - 1) / 8)
+        return max(n * 8 + 1, 9)
+
+
 # Backward-compat alias
 FluxConfig = ImageGenConfig
 
@@ -308,6 +345,7 @@ class ProjectConfig(BaseModel):
     video_engine: VideoEngineType = VideoEngineType.HUMO
     humo: HumoConfig = Field(default_factory=HumoConfig)
     hunyuan_avatar: HunyuanAvatarConfig = Field(default_factory=HunyuanAvatarConfig)
+    ltx_video: LtxVideoConfig = Field(default_factory=LtxVideoConfig)
     image_gen: ImageGenConfig = Field(default_factory=ImageGenConfig)
     vocal_separation: VocalSeparationConfig = Field(default_factory=VocalSeparationConfig)
 

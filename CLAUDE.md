@@ -96,6 +96,7 @@ PyTorch: 2.10.0+cu128 (upgraded for RTX 5090 sm_120 support). Do not downgrade.
 - Line length: 120 chars
 - Logging via `logging.getLogger(__name__)`, not print()
 - All pipeline logic in core modules (intake/, imaging/, video/, assembly/). UI and API are thin layers that call into these — never put generation logic in api.py or UI code.
+- GPU-heavy and long-running API endpoints must run their sync work in a background thread via `asyncio.to_thread()` so the FastAPI event loop stays responsive for polling and other requests. Any endpoint that calls into GPU inference (intake, image generation, video generation) is a candidate for this pattern.
 
 ## Testing
 

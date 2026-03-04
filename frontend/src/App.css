@@ -712,11 +712,20 @@ button:disabled {
 }
 
 .approved-toggle {
-  margin-top: 4px;
+  margin-top: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input);
 }
 
-.approved-toggle input:checked + * {
-  color: var(--accent, #4a9eff);
+.approved-toggle input:checked ~ * {
+  color: #4caf50;
+}
+
+.approved-toggle:has(input:checked) {
+  border-color: #4caf50;
+  background: rgba(76, 175, 80, 0.1);
 }
 
 .btn-regen {

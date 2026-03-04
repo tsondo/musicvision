@@ -235,6 +235,7 @@ export default function PipelineBar({
             disabled={isRunning}
           >
             <option value="hunyuan_avatar">HunyuanVideo Avatar</option>
+            <option value="ltx_video">LTX-Video 2</option>
             <option value="humo">HuMo</option>
           </select>
           <div className="render-mode-toggle">

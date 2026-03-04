@@ -439,6 +439,11 @@ def cmd_generate_video(args: argparse.Namespace) -> None:
     if engine_type == VideoEngineType.HUNYUAN_AVATAR:
         engine = create_video_engine(svc.config.hunyuan_avatar, engine_type=engine_type)
         print("Loading HunyuanVideo-Avatar engine…")
+    elif engine_type == VideoEngineType.LTX_VIDEO:
+        from musicvision.utils.gpu import detect_devices
+        device_map = detect_devices()
+        engine = create_video_engine(svc.config.ltx_video, device_map=device_map, engine_type=engine_type)
+        print(f"Loading LTX-Video 2 engine ({svc.config.ltx_video.model_id})…")
     else:
         from musicvision.utils.gpu import detect_devices
         device_map = detect_devices()
@@ -451,7 +456,12 @@ def cmd_generate_video(args: argparse.Namespace) -> None:
     from musicvision.utils.gpu import _oom_suggestion, estimate_vram_gb, is_oom_error
 
     # --- Pre-flight VRAM check (advisory) ---
-    engine_config = svc.config.hunyuan_avatar if engine_type == VideoEngineType.HUNYUAN_AVATAR else svc.config.humo
+    if engine_type == VideoEngineType.HUNYUAN_AVATAR:
+        engine_config = svc.config.hunyuan_avatar
+    elif engine_type == VideoEngineType.LTX_VIDEO:
+        engine_config = svc.config.ltx_video
+    else:
+        engine_config = svc.config.humo
     estimated = estimate_vram_gb(
         engine_type.value,
         image_size=getattr(engine_config, "image_size", 0),
@@ -640,7 +650,7 @@ def main() -> None:
     p_gv.add_argument("--project", required=True, help="Project directory path")
     p_gv.add_argument(
         "--engine", default=None,
-        choices=["humo", "hunyuan_avatar"],
+        choices=["humo", "hunyuan_avatar", "ltx_video"],
         help="Video engine (default: project config)",
     )
     p_gv.add_argument(

@@ -274,6 +274,14 @@ def estimate_vram_gb(
     Currently supports:
       - ``"hunyuan_avatar"`` — linear interpolation by pixel count
     """
+    if engine == "ltx_video":
+        # LTX-2: ~20-25GB with sequential offload at 768x512
+        pixels = image_size * (image_size * 2 // 3)  # approximate W*H
+        ref_pixels = 768 * 512
+        base = 22.0 if cpu_offload else 45.0
+        estimated = base * (pixels / ref_pixels)
+        return round(max(estimated, 0.0), 1)
+
     if engine != "hunyuan_avatar":
         return 0.0
 
@@ -309,6 +317,14 @@ def _oom_suggestion(engine_type: str, config: object | None = None) -> str:
                 parts = ["Already at minimum resolution (256p). Need a GPU with more VRAM."]
             elif cpu_offload is False:
                 parts = ["Enable cpu_offload (currently disabled)"]
+        return ". ".join(parts)
+
+    if engine_type == "ltx_video":
+        parts = [
+            "Reduce resolution (e.g. 768x512 → 480x320)",
+            "Use FP8 quantization (use_fp8=True)",
+            "Enable sequential CPU offload (cpu_offload='sequential')",
+        ]
         return ". ".join(parts)
 
     return "Reduce resolution or enable model offloading"

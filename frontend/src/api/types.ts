@@ -2,7 +2,7 @@
 
 export type SceneType = "vocal" | "instrumental";
 export type ApprovalStatus = "pending" | "approved" | "rejected";
-export type VideoEngineType = "humo" | "hunyuan_avatar";
+export type VideoEngineType = "humo" | "hunyuan_avatar" | "ltx_video";
 
 export interface SubClip {
   id: string;

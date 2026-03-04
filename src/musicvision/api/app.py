@@ -450,29 +450,32 @@ async def regenerate_image(scene_id: str, req: RegenerateImageRequest) -> Scene:
             lora_path, lora_weight = char_loras[cid]
             break
 
-    device_map = detect_devices()
-    engine = create_engine(config, device_map)
-    engine.load()
+    import asyncio
 
-    try:
-        output_path = proj.paths.image_path(scene.id)
-        seed = req.seed if req.seed >= 0 else None
-        engine.generate(
-            prompt=prompt,
-            width=width,
-            height=height,
-            lora_path=lora_path,
-            lora_weight=lora_weight,
-            output_path=output_path,
-            seed=seed,
-        )
-        scene.reference_image = f"images/{scene.id}.png"
-        scene.image_status = ApprovalStatus.PENDING
-    finally:
-        engine.unload()
+    def _run() -> Scene:
+        device_map = detect_devices()
+        engine = create_engine(config, device_map)
+        engine.load()
+        try:
+            output_path = proj.paths.image_path(scene.id)
+            seed = req.seed if req.seed >= 0 else None
+            engine.generate(
+                prompt=prompt,
+                width=width,
+                height=height,
+                lora_path=lora_path,
+                lora_weight=lora_weight,
+                output_path=output_path,
+                seed=seed,
+            )
+            scene.reference_image = f"images/{scene.id}.png"
+            scene.image_status = ApprovalStatus.PENDING
+        finally:
+            engine.unload()
+        proj.save_scenes()
+        return scene
 
-    proj.save_scenes()
-    return scene
+    return await asyncio.to_thread(_run)
 
 
 @app.post("/api/scenes/{scene_id}/regenerate-video")
@@ -527,6 +530,20 @@ async def regenerate_video(scene_id: str, req: RegenerateVideoRequest) -> Scene:
             config.image_size = 512
             config.infer_steps = 30
         engine = create_video_engine(config, engine_type=engine_type)
+    elif engine_type == VideoEngineType.LTX_VIDEO:
+        from musicvision.utils.gpu import detect_devices
+
+        config = proj.config.ltx_video.model_copy()
+        if req.render_mode == "preview":
+            config.width = 480
+            config.height = 320
+            config.num_inference_steps = 20
+        else:
+            config.width = 768
+            config.height = 512
+            config.num_inference_steps = 40
+        device_map = detect_devices()
+        engine = create_video_engine(config, device_map=device_map, engine_type=engine_type)
     else:
         from musicvision.utils.gpu import detect_devices
 
@@ -553,55 +570,59 @@ async def regenerate_video(scene_id: str, req: RegenerateVideoRequest) -> Scene:
             for p in scene.generation_audio_segments
         ]
 
-    engine.load()
-    try:
-        ref_image = proj.resolve_path(scene.reference_image)
-        results = engine.generate_scene(
-            text_prompt=prompt,
-            reference_image=ref_image,
-            audio_segment=segment,
-            output_dir=proj.paths.clips_dir,
-            scene_id=scene.id,
-            duration=scene.duration,
-            subclip_frame_counts=scene.subclip_frame_counts,
-            subclip_audio_paths=subclip_audio,
-        )
+    import asyncio
 
-        if len(results) > 1:
-            scene.sub_clips = []
-            suffixes = sub_clip_suffixes(len(results))
-            frame_counts = scene.subclip_frame_counts or []
-            cursor = 0
-            for j, (r, suffix) in enumerate(zip(results, suffixes)):
-                fc = frame_counts[j] if j < len(frame_counts) else None
-                sub_start = scene.time_start + frames_to_seconds(cursor, constraints.fps)
-                cursor += fc or 0
-                sub_end = scene.time_start + frames_to_seconds(cursor, constraints.fps)
-                scene.sub_clips.append(SubClip(
-                    id=f"{scene.id}_{suffix}",
-                    time_start=sub_start,
-                    time_end=min(sub_end, scene.time_end),
-                    video_prompt=prompt,
-                    video_clip=str(r.video_path.relative_to(proj.paths.root)),
-                    frame_count=fc,
-                ))
-            # Join sub-clips into a single preview clip
-            from musicvision.utils.audio import concat_videos
+    def _run() -> Scene:
+        engine.load()
+        try:
+            ref_image = proj.resolve_path(scene.reference_image)
+            results = engine.generate_scene(
+                text_prompt=prompt,
+                reference_image=ref_image,
+                audio_segment=segment,
+                output_dir=proj.paths.clips_dir,
+                scene_id=scene.id,
+                duration=scene.duration,
+                subclip_frame_counts=scene.subclip_frame_counts,
+                subclip_audio_paths=subclip_audio,
+            )
 
-            sub_paths = [r.video_path for r in results]
-            joined = proj.paths.clips_dir / f"{scene.id}_joined.mp4"
-            concat_videos(sub_paths, joined)
-            scene.video_clip = str(joined.relative_to(proj.paths.root))
-        else:
-            scene.video_clip = f"clips/{scene.id}.mp4"
-            scene.sub_clips = []
+            if len(results) > 1:
+                scene.sub_clips = []
+                suffixes = sub_clip_suffixes(len(results))
+                frame_counts = scene.subclip_frame_counts or []
+                cursor = 0
+                for j, (r, suffix) in enumerate(zip(results, suffixes)):
+                    fc = frame_counts[j] if j < len(frame_counts) else None
+                    sub_start = scene.time_start + frames_to_seconds(cursor, constraints.fps)
+                    cursor += fc or 0
+                    sub_end = scene.time_start + frames_to_seconds(cursor, constraints.fps)
+                    scene.sub_clips.append(SubClip(
+                        id=f"{scene.id}_{suffix}",
+                        time_start=sub_start,
+                        time_end=min(sub_end, scene.time_end),
+                        video_prompt=prompt,
+                        video_clip=str(r.video_path.relative_to(proj.paths.root)),
+                        frame_count=fc,
+                    ))
+                from musicvision.utils.audio import concat_videos
 
-        scene.video_status = ApprovalStatus.PENDING
-    finally:
-        engine.unload()
+                sub_paths = [r.video_path for r in results]
+                joined = proj.paths.clips_dir / f"{scene.id}_joined.mp4"
+                concat_videos(sub_paths, joined)
+                scene.video_clip = str(joined.relative_to(proj.paths.root))
+            else:
+                scene.video_clip = f"clips/{scene.id}.mp4"
+                scene.sub_clips = []
 
-    proj.save_scenes()
-    return scene
+            scene.video_status = ApprovalStatus.PENDING
+        finally:
+            engine.unload()
+
+        proj.save_scenes()
+        return scene
+
+    return await asyncio.to_thread(_run)
 
 
 # ---------------------------------------------------------------------------
@@ -618,16 +639,22 @@ async def run_intake(
     from musicvision.intake.pipeline import run_intake as _run_intake
     from musicvision.utils.gpu import detect_devices
 
+    import asyncio
+
     proj = get_project()
-    device_map = detect_devices()
-    scene_list = _run_intake(
-        project=proj,
-        use_llm_segmentation=use_llm,
-        device_map=device_map,
-        skip_transcription=skip_transcription,
-        use_vocal_separation=use_vocal_separation,
-    )
-    return {"status": "complete", "scene_count": len(scene_list.scenes)}
+
+    def _run() -> dict:
+        device_map = detect_devices()
+        scene_list = _run_intake(
+            project=proj,
+            use_llm_segmentation=use_llm,
+            device_map=device_map,
+            skip_transcription=skip_transcription,
+            use_vocal_separation=use_vocal_separation,
+        )
+        return {"status": "complete", "scene_count": len(scene_list.scenes)}
+
+    return await asyncio.to_thread(_run)
 
 
 @app.post("/api/pipeline/generate-images")
@@ -674,58 +701,61 @@ async def generate_images(req: GenerateImagesRequest):
         if char_def.lora_path:
             char_loras[char_def.id] = (char_def.lora_path, char_def.lora_weight)
 
-    # Create engine and generate
-    device_map = detect_devices()
-    engine = create_engine(proj.config.image_gen, device_map)
-    engine.load()
+    # Run generation in a thread so the event loop stays responsive
+    import asyncio
 
-    generated: list[str] = []
-    failed: list[dict] = []
+    def _run_generation() -> dict:
+        device_map = detect_devices()
+        engine = create_engine(proj.config.image_gen, device_map)
+        engine.load()
 
-    try:
-        # Sort by LoRA to minimize swaps
-        def _lora_key(s):
-            for cid in s.characters:
-                if cid in char_loras:
-                    return char_loras[cid][0]
-            return ""
+        generated: list[str] = []
+        failed: list[dict] = []
 
-        sorted_scenes = sorted(scenes, key=_lora_key)
-
-        for scene in sorted_scenes:
-            try:
-                # Find LoRA from first character that has one
-                lora_path = None
-                lora_weight = 0.8
-                for cid in scene.characters:
+        try:
+            def _lora_key(s):
+                for cid in s.characters:
                     if cid in char_loras:
-                        lora_path, lora_weight = char_loras[cid]
-                        break
+                        return char_loras[cid][0]
+                return ""
 
-                output_path = proj.paths.image_path(scene.id)
-                engine.generate(
-                    prompt=scene.effective_image_prompt,
-                    width=width,
-                    height=height,
-                    lora_path=lora_path,
-                    lora_weight=lora_weight,
-                    output_path=output_path,
-                )
-                scene.reference_image = f"images/{scene.id}.png"
-                generated.append(scene.id)
-                proj.save_scenes()  # save after each so frontend can poll progress
-            except Exception as exc:
-                log.error("Image generation failed for %s: %s", scene.id, exc)
-                failed.append({"scene_id": scene.id, "error": str(exc)})
-    finally:
-        engine.unload()
+            sorted_scenes = sorted(scenes, key=_lora_key)
 
-    return {
-        "status": "complete",
-        "generated": generated,
-        "failed": failed,
-        "total": len(scenes),
-    }
+            for scene in sorted_scenes:
+                try:
+                    lora_path = None
+                    lora_weight = 0.8
+                    for cid in scene.characters:
+                        if cid in char_loras:
+                            lora_path, lora_weight = char_loras[cid]
+                            break
+
+                    output_path = proj.paths.image_path(scene.id)
+                    engine.generate(
+                        prompt=scene.effective_image_prompt,
+                        width=width,
+                        height=height,
+                        lora_path=lora_path,
+                        lora_weight=lora_weight,
+                        output_path=output_path,
+                    )
+                    scene.reference_image = f"images/{scene.id}.png"
+                    generated.append(scene.id)
+                    proj.save_scenes()
+                except Exception as exc:
+                    log.error("Image generation failed for %s: %s", scene.id, exc)
+                    failed.append({"scene_id": scene.id, "error": str(exc)})
+        finally:
+            engine.unload()
+
+        return {
+            "status": "complete",
+            "generated": generated,
+            "failed": failed,
+            "total": len(scenes),
+        }
+
+    return await asyncio.to_thread(_run_generation)
 
 
 @app.post("/api/pipeline/generate-videos")
@@ -847,162 +877,173 @@ async def generate_videos(req: GenerateVideosRequest):
     if render_mode == "preview":
         proj.config.hunyuan_avatar.image_size = 256
         proj.config.hunyuan_avatar.infer_steps = 10
+        proj.config.ltx_video.width = 480
+        proj.config.ltx_video.height = 320
+        proj.config.ltx_video.num_inference_steps = 20
     else:  # "final"
         proj.config.hunyuan_avatar.image_size = 512
         proj.config.hunyuan_avatar.infer_steps = 30
-    log.info("Render mode: %s (HVA: %dp / %d steps)", render_mode,
-             proj.config.hunyuan_avatar.image_size, proj.config.hunyuan_avatar.infer_steps)
+        proj.config.ltx_video.width = 768
+        proj.config.ltx_video.height = 512
+        proj.config.ltx_video.num_inference_steps = 40
+    log.info("Render mode: %s", render_mode)
 
-    # --- Generation loop with OOM detection + early abort ---
-    for engine_type, group_scenes in engine_groups.items():
-        # Pre-compute sub-clip frame plans for this engine group
-        constraints = get_constraints(engine_type.value)
-        plan_subclips(group_scenes, constraints, proj.paths.segments_dir, proj.paths.sub_segments_dir)
+    # --- Run generation in a thread so the event loop stays responsive ---
+    import asyncio
 
-        # Create engine for this group
-        if engine_type == VideoEngineType.HUNYUAN_AVATAR:
-            engine = create_video_engine(proj.config.hunyuan_avatar, engine_type=engine_type)
-        else:
-            from musicvision.utils.gpu import detect_devices
-            device_map = detect_devices()
-            engine = create_video_engine(proj.config.humo, device_map=device_map, engine_type=engine_type)
+    def _run_generation() -> dict:
+        generated: list[str] = []
+        failed: list[dict] = []
 
-        engine.load()
-        consecutive_ooms = 0
+        for engine_type, group_scenes in engine_groups.items():
+            constraints = get_constraints(engine_type.value)
+            plan_subclips(group_scenes, constraints, proj.paths.segments_dir, proj.paths.sub_segments_dir)
 
-        try:
-            for scene in group_scenes:
-                # Early abort: skip remaining scenes after 2 consecutive OOMs
-                if consecutive_ooms >= 2:
-                    engine_config = (
-                        proj.config.hunyuan_avatar
-                        if engine_type == VideoEngineType.HUNYUAN_AVATAR
-                        else proj.config.humo
-                    )
-                    log.warning(
-                        "Skipping %s — %d consecutive OOMs, remaining scenes in "
-                        "%s group will also fail",
-                        scene.id, consecutive_ooms, engine_type.value,
-                    )
-                    failed.append({
-                        "scene_id": scene.id,
-                        "error": f"Skipped after {consecutive_ooms} consecutive OOMs",
-                        "error_type": "oom_skipped",
-                        "oom_context": {
-                            "engine": engine_type.value,
-                            "image_size": getattr(engine_config, "image_size", 0),
-                            "suggestion": _oom_suggestion(engine_type.value, engine_config),
-                        },
-                    })
-                    continue
+            if engine_type == VideoEngineType.HUNYUAN_AVATAR:
+                engine = create_video_engine(proj.config.hunyuan_avatar, engine_type=engine_type)
+            elif engine_type == VideoEngineType.LTX_VIDEO:
+                from musicvision.utils.gpu import detect_devices
+                device_map = detect_devices()
+                engine = create_video_engine(proj.config.ltx_video, device_map=device_map, engine_type=engine_type)
+            else:
+                from musicvision.utils.gpu import detect_devices
+                device_map = detect_devices()
+                engine = create_video_engine(proj.config.humo, device_map=device_map, engine_type=engine_type)
 
-                try:
-                    # Resolve seed: use locked seed if approved, else generate random
-                    import random
-                    if scene.video_status.value == "approved" and scene.video_seed is not None:
-                        scene_seed = scene.video_seed
-                    else:
-                        scene_seed = random.randint(0, 2**31 - 1)
-                        scene.video_seed = scene_seed
+            engine.load()
+            consecutive_ooms = 0
 
-                    # Set seed on engine config for this clip
-                    if engine_type == VideoEngineType.HUNYUAN_AVATAR:
-                        proj.config.hunyuan_avatar.seed = scene_seed
-                    else:
-                        proj.config.humo.seed = scene_seed
-
-                    ref_image = proj.resolve_path(scene.reference_image)
-                    segment = _resolve_scene_audio(proj, scene, audio_path)
-
-                    # Resolve pre-computed sub-clip audio paths
-                    # TODO: when lip_sync is off, sub-clip audio should also be silent
-                    subclip_audio = None
-                    if scene.generation_audio_segments and len(scene.generation_audio_segments) > 1:
-                        subclip_audio = [
-                            proj.resolve_path(p) if not Path(p).is_absolute() else Path(p)
-                            for p in scene.generation_audio_segments
-                        ]
-
-                    results = engine.generate_scene(
-                        text_prompt=scene.effective_video_prompt,
-                        reference_image=ref_image,
-                        audio_segment=segment,
-                        output_dir=proj.paths.clips_dir,
-                        scene_id=scene.id,
-                        duration=scene.duration,
-                        subclip_frame_counts=scene.subclip_frame_counts,
-                        subclip_audio_paths=subclip_audio,
-                    )
-
-                    if len(results) > 1:
-                        scene.sub_clips = []
-                        suffixes = sub_clip_suffixes(len(results))
-                        frame_counts = scene.subclip_frame_counts or []
-                        cursor = 0
-                        for j, (r, suffix) in enumerate(zip(results, suffixes)):
-                            fc = frame_counts[j] if j < len(frame_counts) else None
-                            sub_start = scene.time_start + frames_to_seconds(cursor, constraints.fps)
-                            cursor += fc or 0
-                            sub_end = scene.time_start + frames_to_seconds(cursor, constraints.fps)
-                            scene.sub_clips.append(SubClip(
-                                id=f"{scene.id}_{suffix}",
-                                time_start=sub_start,
-                                time_end=min(sub_end, scene.time_end),
-                                video_prompt=scene.effective_video_prompt,
-                                video_clip=str(r.video_path.relative_to(proj.paths.root)),
-                                frame_count=fc,
-                            ))
-                        # Join sub-clips into a single preview clip
-                        from musicvision.utils.audio import concat_videos
-
-                        sub_paths = [r.video_path for r in results]
-                        joined = proj.paths.clips_dir / f"{scene.id}_joined.mp4"
-                        concat_videos(sub_paths, joined)
-                        scene.video_clip = str(joined.relative_to(proj.paths.root))
-                    else:
-                        scene.video_clip = f"clips/{scene.id}.mp4"
-
-                    generated.append(scene.id)
-                    consecutive_ooms = 0  # reset on success
-                    proj.save_scenes()  # save after each so frontend can poll progress
-
-                except Exception as exc:
-                    if is_oom_error(exc):
-                        consecutive_ooms += 1
+            try:
+                for scene in group_scenes:
+                    if consecutive_ooms >= 2:
                         engine_config = (
                             proj.config.hunyuan_avatar
                             if engine_type == VideoEngineType.HUNYUAN_AVATAR
                             else proj.config.humo
                         )
-                        log.error(
-                            "OOM on %s (%d consecutive): %s", scene.id, consecutive_ooms, exc,
+                        log.warning(
+                            "Skipping %s — %d consecutive OOMs, remaining scenes in "
+                            "%s group will also fail",
+                            scene.id, consecutive_ooms, engine_type.value,
                         )
                         failed.append({
                             "scene_id": scene.id,
-                            "error": str(exc),
-                            "error_type": "oom",
+                            "error": f"Skipped after {consecutive_ooms} consecutive OOMs",
+                            "error_type": "oom_skipped",
                             "oom_context": {
                                 "engine": engine_type.value,
                                 "image_size": getattr(engine_config, "image_size", 0),
                                 "suggestion": _oom_suggestion(engine_type.value, engine_config),
                             },
                         })
-                    else:
-                        consecutive_ooms = 0  # non-OOM error resets counter
-                        log.error("Video generation failed for %s: %s", scene.id, exc)
-                        failed.append({"scene_id": scene.id, "error": str(exc)})
-        finally:
-            engine.unload()
+                        continue
 
-    result: dict = {
-        "status": "complete",
-        "generated": generated,
-        "failed": failed,
-        "total": len(scenes),
-    }
-    if vram_warnings:
-        result["vram_warnings"] = vram_warnings
-    return result
+                    try:
+                        import random
+                        if scene.video_status.value == "approved" and scene.video_seed is not None:
+                            scene_seed = scene.video_seed
+                        else:
+                            scene_seed = random.randint(0, 2**31 - 1)
+                            scene.video_seed = scene_seed
+
+                        if engine_type == VideoEngineType.HUNYUAN_AVATAR:
+                            proj.config.hunyuan_avatar.seed = scene_seed
+                        elif engine_type == VideoEngineType.LTX_VIDEO:
+                            proj.config.ltx_video.seed = scene_seed
+                        else:
+                            proj.config.humo.seed = scene_seed
+
+                        ref_image = proj.resolve_path(scene.reference_image)
+                        segment = _resolve_scene_audio(proj, scene, audio_path)
+
+                        subclip_audio = None
+                        if scene.generation_audio_segments and len(scene.generation_audio_segments) > 1:
+                            subclip_audio = [
+                                proj.resolve_path(p) if not Path(p).is_absolute() else Path(p)
+                                for p in scene.generation_audio_segments
+                            ]
+
+                        results = engine.generate_scene(
+                            text_prompt=scene.effective_video_prompt,
+                            reference_image=ref_image,
+                            audio_segment=segment,
+                            output_dir=proj.paths.clips_dir,
+                            scene_id=scene.id,
+                            duration=scene.duration,
+                            subclip_frame_counts=scene.subclip_frame_counts,
+                            subclip_audio_paths=subclip_audio,
+                        )
+
+                        if len(results) > 1:
+                            scene.sub_clips = []
+                            suffixes = sub_clip_suffixes(len(results))
+                            frame_counts = scene.subclip_frame_counts or []
+                            cursor = 0
+                            for j, (r, suffix) in enumerate(zip(results, suffixes)):
+                                fc = frame_counts[j] if j < len(frame_counts) else None
+                                sub_start = scene.time_start + frames_to_seconds(cursor, constraints.fps)
+                                cursor += fc or 0
+                                sub_end = scene.time_start + frames_to_seconds(cursor, constraints.fps)
+                                scene.sub_clips.append(SubClip(
+                                    id=f"{scene.id}_{suffix}",
+                                    time_start=sub_start,
+                                    time_end=min(sub_end, scene.time_end),
+                                    video_prompt=scene.effective_video_prompt,
+                                    video_clip=str(r.video_path.relative_to(proj.paths.root)),
+                                    frame_count=fc,
+                                ))
+                            from musicvision.utils.audio import concat_videos
+
+                            sub_paths = [r.video_path for r in results]
+                            joined = proj.paths.clips_dir / f"{scene.id}_joined.mp4"
+                            concat_videos(sub_paths, joined)
+                            scene.video_clip = str(joined.relative_to(proj.paths.root))
+                        else:
+                            scene.video_clip = f"clips/{scene.id}.mp4"
+
+                        generated.append(scene.id)
+                        consecutive_ooms = 0
+                        proj.save_scenes()
+
+                    except Exception as exc:
+                        if is_oom_error(exc):
+                            consecutive_ooms += 1
+                            engine_config = (
+                                proj.config.hunyuan_avatar
+                                if engine_type == VideoEngineType.HUNYUAN_AVATAR
+                                else proj.config.humo
+                            )
+                            log.error(
+                                "OOM on %s (%d consecutive): %s", scene.id, consecutive_ooms, exc,
+                            )
+                            failed.append({
+                                "scene_id": scene.id,
+                                "error": str(exc),
+                                "error_type": "oom",
+                                "oom_context": {
+                                    "engine": engine_type.value,
+                                    "image_size": getattr(engine_config, "image_size", 0),
+                                    "suggestion": _oom_suggestion(engine_type.value, engine_config),
+                                },
+                            })
+                        else:
+                            consecutive_ooms = 0
+                            log.error("Video generation failed for %s: %s", scene.id, exc)
+                            failed.append({"scene_id": scene.id, "error": str(exc)})
+            finally:
+                engine.unload()
+
+        result: dict = {
+            "status": "complete",
+            "generated": generated,
+            "failed": failed,
+            "total": len(scenes),
+        }
+        if vram_warnings:
+            result["vram_warnings"] = vram_warnings
+        return result
+
+    return await asyncio.to_thread(_run_generation)
 
 
 class AssembleRequest(BaseModel):
