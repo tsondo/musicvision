@@ -34,11 +34,16 @@ function stepState(
   stepStage: PipelineStage,
   currentStage: PipelineStage,
   status: StepStatus,
+  upscaleRemaining?: number,
 ): StepState {
+  if (status === "done") return "done";
+  // Allow upscale to be active when there are clips to upscale,
+  // even if the current stage is still "videos" (not all scenes done).
+  if (stepStage === "upscale" && upscaleRemaining && upscaleRemaining > 0) return "active";
   const order: PipelineStage[] = ["upload", "intake", "images", "videos", "upscale"];
   const stepIdx = order.indexOf(stepStage);
   const currentIdx = order.indexOf(currentStage);
-  if (status === "done" || stepIdx < currentIdx) return "done";
+  if (stepIdx < currentIdx) return "done";
   if (stepIdx === currentIdx) return "active";
   return "disabled";
 }
@@ -280,7 +285,7 @@ export default function PipelineBar({
       <div className="step-arrow" />
 
       {/* Step 5: Upscale */}
-      <div className={`pipeline-step ${stepState("upscale", stage, upscaleStatus)}`}>
+      <div className={`pipeline-step ${stepState("upscale", stage, upscaleStatus, upscaleRemaining)}`}>
         <div className="step-label">
           <span className="step-num">5</span> Upscale
           {sceneCount - upscaleRemaining > 0 && (
@@ -303,7 +308,7 @@ export default function PipelineBar({
           </select>
           <button
             className="btn-sm"
-            disabled={sceneCount === 0 || isRunning || videosRemaining > 0 || upscaleRemaining === 0}
+            disabled={sceneCount === 0 || isRunning || upscaleRemaining === 0}
             onClick={() => onUpscaleVideos(undefined, targetResolution)}
           >
             {upscaleStatus === "running"

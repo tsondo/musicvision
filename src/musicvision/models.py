@@ -293,9 +293,9 @@ class LtxVideoConfig(BaseModel):
         "weird hand, ugly, transition, static"
     )
     seed: int | None = None
-    use_audio_conditioning: bool = True     # feed scene audio for synced motion
+    use_audio_conditioning: bool = False    # TODO: needs mel spectrogram encoding, not raw waveform
     vae_tiling: bool = True                 # required to avoid OOM at higher res
-    cpu_offload: str = "sequential"         # "none" | "model" | "sequential"
+    cpu_offload: str = "model"              # "none" | "model" | "sequential"
 
     @property
     def max_frames(self) -> int:

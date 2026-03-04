@@ -59,14 +59,19 @@ export function usePipeline(
       !s.upscaled_clip,
   ).length;
 
+  const hasVideos = scenes.some(
+    (s) => s.video_clip || s.sub_clips.some((sc) => sc.video_clip),
+  );
+
   const stage = useMemo<PipelineStage>(() => {
     if (!hasAudio) return "upload";
     if (sceneCount === 0) return "intake";
-    if (imagesRemaining > 0) return "images";
+    if (imagesRemaining > 0 && !hasVideos) return "images";
+    if (!hasVideos) return "videos";
     if (videosRemaining > 0) return "videos";
     if (upscaleRemaining > 0) return "upscale";
     return "upscale";
-  }, [hasAudio, sceneCount, imagesRemaining, videosRemaining, upscaleRemaining]);
+  }, [hasAudio, sceneCount, imagesRemaining, videosRemaining, upscaleRemaining, hasVideos]);
 
   const isRunning =
     uploadStatus === "running" ||

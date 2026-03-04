@@ -108,6 +108,9 @@ class LtxVideoEngine(VideoEngine):
                 "Install from git main: uv pip install git+https://github.com/huggingface/diffusers.git"
             )
 
+        primary = str(self.device_map.dit_device)
+        secondary = str(self.device_map.encoder_device)
+
         log.info("Loading LTX-Video 2 from %s ...", self.config.model_id)
 
         pipe = LTX2ImageToVideoPipeline.from_pretrained(
@@ -115,16 +118,18 @@ class LtxVideoEngine(VideoEngine):
             torch_dtype=torch.bfloat16,
         )
 
-        # Apply CPU offloading strategy
-        primary = str(self.device_map.dit_device)
-        if self.config.cpu_offload == "sequential":
-            pipe.enable_sequential_cpu_offload(device=primary)
-        elif self.config.cpu_offload == "model":
-            pipe.enable_model_cpu_offload(device=primary)
-        else:
-            pipe = pipe.to(primary)
+        if self.config.use_fp8:
+            from torchao.quantization import quantize_, Float8WeightOnlyConfig
+            quantize_(pipe.transformer, Float8WeightOnlyConfig())
+            log.info("Transformer quantized to FP8 weight-only")
 
-        # VAE tiling to avoid OOM during decode
+        # Model CPU offload on primary GPU — components load one at a time,
+        # run, then return to CPU. VAE decode handled separately on secondary GPU.
+        pipe.enable_model_cpu_offload(device=primary)
+
+        log.info("Transformer on %s, text encoder + connectors on %s", primary, secondary)
+
+        # VAE tiling + slicing for decode (VAE moved to secondary GPU at decode time)
         if self.config.vae_tiling:
             pipe.vae.enable_tiling()
 
@@ -171,7 +176,8 @@ class LtxVideoEngine(VideoEngine):
             except Exception:
                 log.warning("Audio conditioning failed, generating without audio sync", exc_info=True)
 
-        # Run pipeline
+        # Run pipeline — use output_type="latent" to skip audio VAE decode
+        # (we discard generated audio anyway; assembly muxes the original song)
         result = self._pipe(
             image=image,
             prompt=input.text_prompt,
@@ -184,20 +190,46 @@ class LtxVideoEngine(VideoEngine):
             guidance_scale=self.config.guidance_scale,
             audio_latents=audio_latents,
             generator=generator,
-            output_type="np",
+            output_type="latent",
             return_dict=False,
         )
 
-        # Pipeline returns (video, audio) tuple
-        video = result[0] if isinstance(result, (tuple, list)) else result
+        # Pipeline returns (video_latents, audio_latents) — decode video only
+        video_latents = result[0] if isinstance(result, (tuple, list)) else result
+
+        # Decode video on secondary GPU to avoid OOM on primary
+        # Remove offload hooks so they don't pull VAE back to cuda:0
+        vae_device = self.device_map.encoder_device
+        log.debug("Decoding video latents on %s", vae_device)
+        from accelerate.hooks import remove_hook_from_module
+        remove_hook_from_module(self._pipe.vae, recurse=True)
+        self._pipe.vae.to(vae_device)
+        self._pipe.vae.enable_slicing()
+        torch.cuda.empty_cache()
+
+        video_latents = video_latents.to(device=vae_device, dtype=self._pipe.vae.dtype)
+        if self._pipe.vae.config.timestep_conditioning:
+            timestep = torch.zeros(video_latents.shape[0], device=vae_device, dtype=video_latents.dtype)
+        else:
+            timestep = None
+        with torch.no_grad():
+            video = self._pipe.vae.decode(video_latents, timestep, return_dict=False)[0]
+        del video_latents
+        self._pipe.vae.to("cpu")
+        torch.cuda.empty_cache()
+        video = self._pipe.video_processor.postprocess_video(video, output_type="np")
+
         # video shape: (batch, T, H, W, C) or (T, H, W, C)
         if isinstance(video, np.ndarray):
             if video.ndim == 5:
-                video = video[0]  # remove batch dim
+                video = video[0]
         elif hasattr(video, "numpy"):
             video = video.cpu().numpy()
             if video.ndim == 5:
                 video = video[0]
+
+        # Free hooks after manual decode
+        self._pipe.maybe_free_model_hooks()
 
         # Save as silent MP4
         _save_video_ffmpeg(video, input.output_path, fps=self.config.fps)
@@ -224,9 +256,11 @@ class LtxVideoEngine(VideoEngine):
             resampler = torchaudio.transforms.Resample(sr, 16000)
             waveform = resampler(waveform)
 
-        # Convert to mono if stereo
-        if waveform.shape[0] > 1:
-            waveform = waveform.mean(dim=0, keepdim=True)
+        # Audio VAE expects stereo (2 channels)
+        if waveform.shape[0] == 1:
+            waveform = waveform.repeat(2, 1)
+        elif waveform.shape[0] > 2:
+            waveform = waveform[:2]
 
         # Compute mel spectrogram for audio VAE
         # The audio_vae expects mel-spectrogram input
