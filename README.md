@@ -1,85 +1,130 @@
-<p align="center"><img src="MusicVision.png" alt="MusicVision" width="480"></p>
+<p align="center"><img src="MusicVision.png" alt="MusicVision — AI Music Video Generator" width="480"></p>
 
-AI-powered music video production pipeline with **lip-synced video generation**. Feed it a song and a character reference image — get back video clips where the character sings along to the music, fully timed and ready for editing in DaVinci Resolve.
+<h3 align="center">Open-Source AI Music Video Generator for Consumer GPUs</h3>
+
+<p align="center">
+  Turn any song into a lip-synced music video using AI — fully local, no cloud APIs required.
+</p>
+
+<p align="center">
+  <a href="#how-it-works">How It Works</a> · <a href="#quick-start">Quick Start</a> · <a href="#installation">Installation</a> · <a href="#hardware-requirements">Hardware</a> · <a href="docs/PIPELINE_SPEC.md">Pipeline Spec</a> · <a href="docs/STATUS.md">Status</a>
+</p>
+
+---
+
+## What Is MusicVision?
+
+MusicVision is an open-source Python pipeline that generates AI music videos from a song file and a character reference image. It segments your song into scenes, generates a storyboard, renders lip-synced video clips, upscales them, and assembles a rough cut ready for editing in DaVinci Resolve.
 
 ```
-audio + lyrics + reference image  →  scene segmentation  →  storyboard  →  lip-synced video clips  →  rough cut MP4 + EDL/FCPXML
+song.wav + lyrics.txt + reference.png
+  → scene segmentation → storyboard → lip-synced video clips → upscaled → rough cut MP4 + FCPXML
 ```
 
-**Status:** All five pipeline stages are code-complete and GPU-tested. Full CLI pipeline + React scene review GUI. Three video engines: [HunyuanVideo-Avatar](https://github.com/tencent/HunyuanVideo) (primary, lip sync), [LTX-Video 2](https://github.com/Lightricks/LTX-Video) (cinematic), and [HuMo](https://github.com/Phantom-video/HuMo) (experimental). Three upscalers: SeedVR2 (faces), LTX Spatial (latent), Real-ESRGAN (fast). Two image engines: [Z-Image](https://huggingface.co/Tongyi-MAI/Z-Image-Turbo) (ungated) and [FLUX](https://github.com/black-forest-labs/flux).
+Everything runs locally on consumer NVIDIA GPUs. No cloud services, no per-minute billing, no data leaving your machine.
+
+### Key Features
+
+- **Lip-synced video generation** — characters sing along to the music with accurate mouth movements, facial expressions, and body motion driven by the audio
+- **Multiple AI video engines** — HunyuanVideo-Avatar (lip sync), LTX-Video 2 (cinematic), HuMo (experimental audio-reactive)
+- **Multiple image engines** — Z-Image (ungated, fast) and FLUX (LoRA support for character consistency)
+- **Three upscalers** — SeedVR2 (faces), LTX Spatial (latent-space), Real-ESRGAN (fast preview)
+- **Frame-accurate audio sync** — integer frame math eliminates drift; original uncut audio in final assembly
+- **Sub-clip chaining** — scenes longer than the engine's max clip length are automatically split with visual continuity (last frame → next reference image)
+- **Professional export** — rough cut MP4, EDL, and FCPXML 1.9 for DaVinci Resolve
+- **Iterative workflow** — review and regenerate individual scenes via React GUI or CLI; approve only what you like
+- **Per-scene engine selection** — use different video engines for different scenes in the same project
+- **Fully local LLM option** — vLLM with Qwen2.5-32B on a LAN server for scene segmentation and prompt generation, or use Claude API, or skip LLM entirely with auto-templates
+- **Config-driven projects** — every project is a YAML + JSON directory; reproducible, version-controllable, shareable
+
+### Current Status
+
+All five pipeline stages are code-complete and GPU-tested. The React storyboard GUI is functional. End-to-end pipeline test passed (2026-03-01). See [STATUS.md](docs/STATUS.md) for full details.
 
 ---
 
 ## How It Works
 
-MusicVision wraps multiple AI video and image generation models into an iterative, user-controlled workflow.
+MusicVision wraps multiple AI models into a five-stage pipeline with user review at each step:
 
-The primary video engine is [HunyuanVideo-Avatar](https://github.com/tencent/HunyuanVideo) (Tencent), which generates audio-driven video with lip sync, facial expressions, and body motion from a single reference image. [HuMo](https://github.com/Phantom-video/HuMo) (ByteDance) is available as an experimental alternative. For reference images, [Z-Image](https://huggingface.co/Tongyi-MAI/Z-Image-Turbo) (ungated, fast) and [FLUX](https://github.com/black-forest-labs/flux) are both supported.
+1. **Intake & Segmentation** — Whisper transcription + LLM-assisted segmentation splits the song into 2–10 second scenes aligned to musical phrasing and section boundaries. AceStep JSON metadata (BPM, section markers) is auto-imported if available.
 
-### Pipeline Stages
+2. **Image Generation & Storyboard** — Z-Image or FLUX generates a reference image for each scene. Users review the storyboard grid and regenerate individual scenes until satisfied.
 
-1. **Intake & Segmentation** — Song audio + lyrics are split into 2–10 second scenes using Whisper transcription and LLM-assisted segmentation that respects musical phrasing and section boundaries.
-2. **Image Generation & Storyboard** — Z-Image or FLUX generates reference images for each scene. Users review and iterate on individual scenes until satisfied.
-3. **Video Generation** — HunyuanVideo-Avatar, LTX-Video 2, or HuMo renders each scene as a video clip. Long scenes are automatically split into sub-clips with visual continuity (last frame of clip N becomes the reference image for clip N+1).
-4. **Upscaling** — Per-engine upscaler selection: LTX Spatial for LTX-2 output (latent-space), SeedVR2 for HVA/HuMo (pixel-space faces), Real-ESRGAN for fast preview. Target resolution configurable (720p–4K, default 1080p).
-5. **Assembly & Export** — Clips are concatenated (preferring upscaled versions) with the original audio, exported as a rough cut MP4 plus EDL and FCPXML project files for DaVinci Resolve.
+3. **Video Generation** — HunyuanVideo-Avatar, LTX-Video 2, or HuMo renders each scene. Long scenes are split into sub-clips with visual continuity chaining. Each engine has draft and production presets.
+
+4. **Upscaling** — Per-engine upscaler selection: LTX Spatial for LTX-2 output (latent-space), SeedVR2 for HVA/HuMo (pixel-space face detail), Real-ESRGAN for fast preview. Configurable target resolution (720p–4K, default 1080p).
+
+5. **Assembly & Export** — Clips concatenated with the original uncut audio, exported as MP4 + EDL + FCPXML for DaVinci Resolve. Assembly enforces a duration assertion within one frame tolerance.
+
+### Video Engine Comparison
+
+| Engine | Lip Sync | Audio Input | Max Clip | Resolution | Best For |
+|--------|----------|-------------|----------|------------|----------|
+| **HunyuanVideo-Avatar** | Native | Full mix | 5.16s (129 frames @ 25fps) | 320p–704p | Singing scenes, character performance |
+| **LTX-Video 2** | Post-process | Audio+video unified | Configurable | Up to 720p | Cinematic scenes, non-vocal |
+| **HuMo** | Native | Full mix (TIA mode) | 3.88s (97 frames @ 25fps) | Up to 720p | Audio-reactive motion (experimental) |
 
 ---
 
-## Video Engine Presets
+## Quick Start
 
-### HunyuanVideo-Avatar (primary)
+```bash
+# 1. Clone and install
+git clone https://github.com/tsondo/musicvision.git
+cd musicvision
+bash setup_env.sh            # installs Python 3.11, PyTorch + CUDA, all deps
 
-| Setting | Resolution | Steps | ~Time/Clip (5.16s) | Notes |
-|---------|-----------|-------|---------------------|-------|
-| **Draft** | 320p | 10 | ~5 min | Fast iteration, good quality |
-| **Production** | 704p | 30 | ~2 hours | Full quality, lip sync |
+# 2. Configure
+cp .env.example .env         # edit: set HUGGINGFACE_TOKEN (for FLUX), optionally ANTHROPIC_API_KEY
 
-Audio-driven generation with lip sync from a single reference image. Fixed clip length of 5.16s (129 frames @ 25fps). Runs in a separate subprocess/venv. BF16 with block-level CPU offloading on ≤32GB VRAM.
+# 3. Create a project
+musicvision create ./my-video --name "My Music Video"
+musicvision import-audio --project ./my-video --audio song.wav --lyrics lyrics.txt
 
-### HuMo (experimental)
+# 4. Run the pipeline
+musicvision intake --project ./my-video --skip-transcription
+musicvision generate-images --project ./my-video --model z-image-turbo
+musicvision generate-video --project ./my-video --engine hunyuan_avatar
+musicvision upscale --project ./my-video --resolution 1080p
+musicvision assemble --project ./my-video
+# → my-video/output/rough_cut.mp4
 
-| Preset | Resolution | Steps | CFG | LoRA | ~Time/Clip |
-|--------|-----------|-------|-----|------|------------|
-| **FAST** | 688×384 | 6 | 1.0 | Lightx2V distill | ~1 min |
-| **FULL** | 1280×720 | 30 | dual | None | ~45 min |
-
-Currently produces noisy output — deprioritized in favor of HVA.
+# Or use the GUI instead:
+musicvision serve                                # API server (no project — create from frontend)
+cd frontend && npm install && npm run dev        # React UI at http://localhost:5173
+```
 
 ---
 
 ## Hardware Requirements
 
-### Linux / Windows (CUDA)
+### Linux / WSL2 / Windows (CUDA)
 
 | Component | Minimum | Recommended |
 |-----------|---------|-------------|
-| Primary GPU (GPU0) | 20 GB VRAM | RTX 5090 32 GB |
-| Secondary GPU (GPU1) | 12 GB VRAM | RTX 4080 16 GB |
-| RAM | 32 GB | 64 GB |
-| Storage | 100 GB SSD | 500 GB NVMe |
-| CUDA | 12.8+ | 12.8+ |
+| **Primary GPU (GPU0)** | 20 GB VRAM | RTX 5090 32 GB |
+| **Secondary GPU (GPU1)** | 12 GB VRAM | RTX 4080 16 GB |
+| **RAM** | 32 GB | 64 GB |
+| **Storage** | 100 GB SSD | 500 GB NVMe |
+| **CUDA** | 12.8+ | 12.8+ |
+| **PyTorch** | 2.6+ | 2.10.x |
 
-**GPU allocation:**
-- **GPU0** (primary): DiT compute for FLUX image generation and HuMo video generation
-- **GPU1** (secondary): T5 text encoder (~10 GB), VAE (~0.4 GB), Whisper (~1.5 GB), audio separator (~0.5 GB)
-- FLUX and HuMo run sequentially (different stages), never simultaneously. Weights fully unloaded between stages.
+GPU0 runs DiT/UNet inference (FLUX, video engines). GPU1 handles text encoders, VAE, Whisper, and audio separator. Models are fully unloaded between stages — FLUX and video engines never run simultaneously.
 
-**Optional LLM server:** A separate GPU (e.g. RTX 3090 Ti 24 GB) can run [vLLM](https://github.com/vllm-project/vllm) for local prompt generation, eliminating the Claude API dependency.
-
-### Apple Silicon (MPS)
-
-| Component | Minimum | Recommended |
-|-----------|---------|-------------|
-| Chip | M1 | M3 Max or M4 Max |
-| Unified RAM | 24 GB | 36 GB+ |
-| Storage | 100 GB SSD | 500 GB NVMe |
-
-HuMo is limited to the `preview` (1.7B) tier on MPS. See [PLATFORM_SUPPORT_PLAN.md](docs/PLATFORM_SUPPORT_PLAN.md) for details.
+A single-GPU setup works if the card has ≥32 GB VRAM. The two-GPU split is a consumer hardware optimization, not a requirement.
 
 ### Cloud (A100 / H100 / H200)
 
-Single-GPU A100 80 GB or H100 80 GB can run the full FP16 model without splitting. See [PLATFORM_SUPPORT_PLAN.md](docs/PLATFORM_SUPPORT_PLAN.md) for cloud-specific configuration.
+Single-GPU A100 80 GB or H100 80 GB runs the full FP16 model without splitting. No multi-GPU complexity needed. See [PLATFORM_SUPPORT_PLAN.md](docs/PLATFORM_SUPPORT_PLAN.md).
+
+### Apple Silicon (MPS) — Planned
+
+M-series Mac support is planned but not yet implemented. See [PLATFORM_SUPPORT_PLAN.md](docs/PLATFORM_SUPPORT_PLAN.md) for the roadmap.
+
+### Optional: Local LLM Server
+
+A separate GPU (e.g. RTX 3090 Ti 24 GB) can run [vLLM](https://github.com/vllm-project/vllm) with Qwen2.5-32B-AWQ for scene segmentation and prompt generation, eliminating the Claude API dependency entirely. This is optional — the pipeline works without it using auto-templates or the Claude API.
 
 ---
 
@@ -87,173 +132,72 @@ Single-GPU A100 80 GB or H100 80 GB can run the full FP16 model without splittin
 
 Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 
+### Automated Setup
+
 ```bash
-# Clone
-git clone git@github.com:tsondo/musicvision.git
+git clone https://github.com/tsondo/musicvision.git
 cd musicvision
-
-# Install (CPU-only deps + dev tools)
-uv sync --extra dev
-
-# Install ML deps with CUDA 12.8
-uv run pip install torch torchvision torchaudio \
-    --index-url https://download.pytorch.org/whl/cu128
-
-# Audio separator (separate due to onnxruntime conflict)
-pip install "audio-separator[gpu]"
-
-# Or use the full setup script
 bash setup_env.sh
 ```
 
-`flash_attn` is **optional**. The vendored DiT uses PyTorch's native SDPA as a fallback, which provides equivalent performance on modern GPUs. Install separately if desired:
+The script installs `uv` if missing, creates a Python 3.11 venv, installs PyTorch with CUDA, installs MusicVision in editable mode, and runs the test suite.
+
+### Manual Setup
+
+```bash
+git clone https://github.com/tsondo/musicvision.git
+cd musicvision
+
+# Create venv and install base deps
+uv sync --extra dev
+
+# Install PyTorch with CUDA 12.8
+uv run pip install torch torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/cu128
+
+# Audio separator (separate install due to onnxruntime conflict)
+pip install "audio-separator[gpu]"
+```
+
+`flash_attn` is **not required**. PyTorch's native SDPA provides equivalent performance on modern GPUs. Install it separately only if you want it:
 
 ```bash
 pip install flash-attn --no-build-isolation
 ```
 
+### Environment Variables
+
+Copy `.env.example` to `.env` and configure:
+
+| Variable | Required | Notes |
+|----------|----------|-------|
+| `HUGGINGFACE_TOKEN` | For FLUX.1-dev (gated) | Not needed for Z-Image (ungated) |
+| `ANTHROPIC_API_KEY` | For Claude LLM prompts | Not needed if using vLLM or auto-templates |
+| `LLM_BACKEND` | No (default: `anthropic`) | Set to `openai` for vLLM |
+| `OPENAI_BASE_URL` | If using vLLM | e.g. `http://192.168.1.100:8000/v1` |
+| `OPENAI_MODEL` | If using vLLM | e.g. `Qwen/Qwen2.5-32B-Instruct-AWQ` |
+| `MUSICVISION_WEIGHTS_DIR` | No | Override model cache dir (default: `~/.cache/musicvision/weights`) |
+| `HVA_REPO_DIR` | For HunyuanVideo-Avatar | Path to cloned HVA repo |
+
 ---
 
-## Quick Start
+## GUI
+
+The React frontend provides a storyboard-based workflow:
+
+- **Scene grid** — lyrics, reference images, video clips, prompts, and approval status per scene
+- **Preview panel** — full-size image and video playback with regeneration controls
+- **Per-scene engine selection** — choose a different video engine for each scene
+- **Per-scene regeneration** — re-render individual scenes without restarting the whole pipeline
+- **Model management** — select and switch between image/video models
+- **Dark theme**
 
 ```bash
-# Configure environment
-cp .env.example .env
-# Set HUGGINGFACE_TOKEN (for FLUX weights) and optionally ANTHROPIC_API_KEY (for LLM prompts)
-
-# Create project and import audio
-musicvision create ./my-video --name "My Music Video"
-musicvision import-audio --project ./my-video --audio song.wav --lyrics lyrics.txt
-
-# Run the pipeline
-musicvision intake --project ./my-video --skip-transcription    # segmentation (use --llm for LLM-assisted)
-musicvision generate-images --project ./my-video --model z-image-turbo  # reference images
-musicvision generate-video --project ./my-video --engine hunyuan_avatar # lip-synced video clips
-musicvision upscale --project ./my-video --resolution 1080p     # upscale to 1080p
-musicvision assemble --project ./my-video                       # rough cut + EDL/FCPXML
-# → output/rough_cut.mp4
-
-# Or use the GUI:
-musicvision serve                     # start with no project — create/open from the frontend
-cd frontend && npm install && npm run dev  # → http://localhost:5173
-
-# Or start the API server with an existing project:
-musicvision serve ./my-video          # → Swagger UI at http://localhost:8000/docs
+musicvision serve ./my-video          # start API server
+cd frontend && npm install && npm run dev   # React dev server at http://localhost:5173
 ```
 
-### Required Environment Variables
-
-| Variable | Required For | Notes |
-|----------|-------------|-------|
-| `HUGGINGFACE_TOKEN` | HuMo DiT weights, FLUX.1-dev | Not required for Z-Image (ungated) or shared weights (T5/VAE/Whisper) |
-| `ANTHROPIC_API_KEY` | LLM prompts | Not required — vLLM or auto-template fallback available |
-| `LLM_BACKEND` | Backend selection | Default: `anthropic`. Set to `openai` for vLLM. |
-| `OPENAI_BASE_URL` | Local vLLM | Required if `LLM_BACKEND=openai` |
-| `OPENAI_MODEL` | Local vLLM | Required if `LLM_BACKEND=openai` |
-
-### Model Weight Locations
-
-All weight paths have sensible defaults. Override them to point at a shared network drive so team members don't each download ~100 GB of weights.
-
-| Variable | Default | Controls |
-|----------|---------|----------|
-| `MUSICVISION_WEIGHTS_DIR` | `~/.cache/musicvision/weights` | HuMo DiT, T5, VAE, Whisper, LoRA |
-| `HF_HOME` | `~/.cache/huggingface` | FLUX, Z-Image, transformers models (standard HuggingFace env var) |
-| `HVA_REPO_DIR` | _(must be set)_ | HunyuanVideo-Avatar repo + weights |
-| `HVA_VENV_PYTHON` | `$HVA_REPO_DIR/.venv/bin/python` | HVA venv python (auto-derived if not set) |
-
-Example team setup with a shared NFS mount:
-```bash
-# .env — shared across the team
-MUSICVISION_WEIGHTS_DIR=/mnt/models/musicvision
-HF_HOME=/mnt/models/huggingface
-HVA_REPO_DIR=/mnt/models/HunyuanVideoAvatar
-```
-
----
-
-## Project Directory Structure
-
-```
-my-video/
-├── project.yaml          # Project config (style sheet, model settings, quality preset)
-├── scenes.json           # Scene list with all prompts and approval state
-├── input/
-│   ├── song.wav
-│   ├── lyrics.txt
-│   └── lyrics_whisper.txt
-├── segments/             # Per-scene audio slices (full mix — fed to HuMo for lip sync)
-├── segments_vocal/       # Per-scene vocal stems (Whisper transcription only)
-├── images/               # FLUX reference images (scene_001.png …)
-├── clips/                # Video clips (scene_001.mp4 …)
-│   └── sub/              # Sub-clips for long scenes + continuity frames
-├── clips_upscaled/       # Upscaled video clips (scene_001.mp4 …)
-│   └── sub/              # Upscaled sub-clips
-├── assets/
-│   ├── characters/       # Character reference images
-│   ├── loras/            # Character LoRA weights + Lightx2V distillation LoRA
-│   └── settings/
-└── output/
-    ├── rough_cut.mp4     # Full song, all scenes assembled with original audio
-    ├── timeline.edl      # CMX 3600 format
-    └── timeline.fcpxml   # FCPXML 1.10 for DaVinci Resolve 18+ / Final Cut Pro
-```
-
----
-
-## Style Sheet
-
-Each project has a persistent visual identity defined in `project.yaml`:
-
-```yaml
-style_sheet:
-  visual_style: "Cinematic 35mm film, desaturated tones, shallow depth of field"
-  color_palette: "Muted blues and amber, high contrast shadows"
-  characters:
-    - id: protagonist
-      description: "Young woman, mid-20s, dark curly hair, worn leather jacket"
-      reference_image: assets/characters/protagonist_ref.png
-      lora_path: assets/loras/protagonist.safetensors
-      lora_weight: 0.8
-  settings:
-    - id: rooftop
-      description: "City rooftop at dusk, neon signs in background, gravel surface"
-```
-
-Style sheet elements are automatically injected into every image and video prompt for consistency across scenes.
-
----
-
-## AceStep Integration
-
-If your song was generated with [AceStep](https://github.com/ace-step/ace-step), upload the companion `.json` file. MusicVision auto-imports BPM, key, section-marked lyrics, and genre/mood captions to inform segmentation and prompt generation.
-
----
-
-## Frontend (Scene Review GUI)
-
-The React frontend provides a full visual workflow for managing the pipeline. Start the backend and frontend:
-
-```bash
-musicvision serve               # starts API on :8000 (no project needed)
-cd frontend && npm run dev      # starts Vite dev server on :5173
-```
-
-Vite proxies `/api` and `/files` to `localhost:8000`.
-
-**Features:**
-
-- **Project creation/opening** — Create new projects or open existing ones from the UI (no need to pass a directory to `musicvision serve`)
-- **Filesystem browser** — Browse the server's local filesystem to import audio and lyrics by path
-- **Pipeline bar** — 5-step progress bar (Import → Intake → Images → Videos → Upscale) with model/engine selectors, resolution picker, and batch generation controls
-- **Storyboard** — Scene-by-scene view with editable prompts, image thumbnails, and inline video preview
-- **Per-scene generation** — Generate or regenerate individual scene images and videos with independent model/seed controls
-- **Lip sync toggle** — Per-scene checkbox; when off, a silent audio segment is generated for non-vocal scenes
-- **Auto-save** — Prompt edits are debounced and saved to the backend automatically
-- **Inline video preview** — Click a storyboard thumbnail to toggle between the reference image and the generated video clip
-- **Sub-clip auto-join** — Multi-segment scenes are automatically joined into a single preview clip
-
-**Stack:** React 19, TypeScript, Vite 6, plain CSS (no UI framework). Dark theme.
+The API server also provides Swagger UI at `http://localhost:8000/docs` for direct API access.
 
 ---
 
@@ -266,55 +210,114 @@ Vite proxies `/api` and `/files` to `localhost:8000`.
 | `musicvision intake --project DIR [--llm] [--skip-transcription] [--vocal-separation]` | Stage 1: audio analysis + segmentation |
 | `musicvision generate-images --project DIR [--model MODEL] [--scene-ids ID…]` | Stage 2: generate reference images |
 | `musicvision generate-video --project DIR [--engine ENGINE] [--tier TIER] [--scene-ids ID…]` | Stage 3: generate video clips |
-| `musicvision upscale --project DIR [--resolution RES] [--upscaler TYPE] [--scene-ids ID…]` | Stage 4: upscale video clips |
+| `musicvision upscale --project DIR [--resolution RES] [--upscaler TYPE] [--scene-ids ID…]` | Stage 4: upscale clips |
 | `musicvision assemble --project DIR [--approved-only] [--no-edl] [--no-fcpxml]` | Stage 5: assemble rough cut + export |
 | `musicvision info <dir>` | Show project status |
-| `musicvision serve [dir] [--port 8000]` | Start API server (directory optional) |
+| `musicvision serve [dir] [--port 8000]` | Start API + GUI server |
 | `musicvision detect-hardware` | Print GPU info and recommended tier |
-| `musicvision download-weights --tier TIER [--token TOKEN]` | Download HuMo weights |
+| `musicvision download-weights --tier TIER [--token TOKEN]` | Download model weights |
 
-Image models: `flux-dev`, `flux-schnell`, `z-image`, `z-image-turbo`. Video engines: `hunyuan_avatar`, `ltx_video`, `humo`. Upscalers: `ltx_spatial`, `seedvr2`, `real_esrgan`. Resolutions: `720p`, `1080p`, `1440p`, `4k`.
+**Image models:** `flux-dev`, `flux-schnell`, `z-image`, `z-image-turbo`
+**Video engines:** `hunyuan_avatar`, `ltx_video`, `humo`
+**Upscalers:** `ltx_spatial`, `seedvr2`, `real_esrgan`
+**Resolutions:** `720p`, `1080p`, `1440p`, `4k`
+
+---
+
+## Project Structure
+
+Each MusicVision project is a self-contained directory:
+
+```
+my-video/
+├── project.yaml          # Config: engines, style sheet, generation params
+├── scenes.json           # Scene list with timestamps, prompts, approval status
+├── input/                # Source audio + lyrics
+├── assets/               # Characters, props, settings, LoRAs
+├── segments/             # Per-scene audio (full mix → video engines)
+├── segments_vocal/       # Vocal stems (→ Whisper transcription)
+├── images/               # Reference images per scene
+├── clips/                # Generated video clips + sub-clips
+└── output/               # rough_cut.mp4, timeline.edl, timeline.fcpxml
+```
+
+All intermediate artifacts are saved. You can re-enter the pipeline at any stage, regenerate individual scenes, and the final assembly always uses the original uncut audio.
 
 ---
 
 ## Testing
 
 ```bash
-# CPU unit tests — 250 tests, no GPU needed, < 10 seconds
+# Unit tests — ~250 tests, no GPU, < 10 seconds
 uv run pytest tests/ -v
 
-# LLM prompt tests (requires vLLM server on LAN)
+# LLM prompt tests (requires vLLM server)
 python scripts/test_vllm_prompts.py
 
-# GPU image generation test (Z-Image + FLUX)
+# GPU image generation (Z-Image + FLUX)
 python scripts/test_image_gen.py
 
-# GPU video generation test (HuMo)
+# GPU video generation (HuMo)
 python scripts/test_gpu_pipeline.py --tier fp8_scaled --steps 6
 
-# HunyuanVideo-Avatar standalone test
+# HunyuanVideo-Avatar standalone
 python scripts/test_hva_standalone.py
 ```
 
-See [TESTING.md](docs/TESTING.md) for the full test strategy and [MUSICVISION_GPU_TEST.md](docs/MUSICVISION_GPU_TEST.md) for GPU test setup.
+See [TESTING.md](docs/TESTING.md) for the full test strategy.
 
 ---
 
 ## Documentation
 
-| Document | Contents |
-|----------|----------|
-| [PIPELINE_SPEC.md](docs/PIPELINE_SPEC.md) | Full pipeline specification, API endpoints, CLI commands |
-| [HUMO_REFERENCE.md](docs/HUMO_REFERENCE.md) | HuMo model details, TIA mode, prompt guidelines |
-| [TESTING.md](docs/TESTING.md) | Two-layer test strategy |
-| [MUSICVISION_GPU_TEST.md](docs/MUSICVISION_GPU_TEST.md) | GPU integration test guide |
-| [PLATFORM_SUPPORT_PLAN.md](docs/PLATFORM_SUPPORT_PLAN.md) | Apple Silicon + cloud GPU support plan |
-| [STATUS.md](docs/STATUS.md) | Current implementation status |
+| Document | Description |
+|----------|-------------|
+| [PIPELINE_SPEC.md](docs/PIPELINE_SPEC.md) | Full pipeline specification with API endpoints and frame math |
+| [STATUS.md](docs/STATUS.md) | Current implementation status and what's built |
+| [HUMO_REFERENCE.md](docs/HUMO_REFERENCE.md) | HuMo model internals, TIA mode, prompt guidelines |
+| [TESTING.md](docs/TESTING.md) | Two-layer test strategy (unit + integration) |
+| [MUSICVISION_GPU_TEST.md](docs/MUSICVISION_GPU_TEST.md) | GPU integration test setup guide |
+| [PLATFORM_SUPPORT_PLAN.md](docs/PLATFORM_SUPPORT_PLAN.md) | Apple Silicon MPS + cloud GPU support roadmap |
+| [LIP_SYNC_SPEC.md](docs/LIP_SYNC_SPEC.md) | LatentSync lip sync post-processing spec |
+| [future_plans.md](docs/future_plans.md) | Long-term vision: story bible → manga → animation |
 | [FIXLOG.md](docs/FIXLOG.md) | Checkpoint loading fix history |
+
+---
+
+## How MusicVision Compares
+
+MusicVision occupies a unique niche: end-to-end music video generation running fully local on consumer GPUs.
+
+| Capability | MusicVision | ViMax | LTX-2 (model) | Music2Video |
+|---|---|---|---|---|
+| Lip-synced video from audio | Yes (HVA) | No | Yes (built-in) | No (VQGAN) |
+| Scene segmentation from lyrics | Yes | Yes (from scripts) | No | Partial |
+| Runs fully local | Yes | No (cloud APIs) | Partial (28 GB+) | Yes |
+| Consumer dual-GPU support | Yes | N/A | No | No |
+| Sub-clip chaining for continuity | Yes | No | No | No |
+| DaVinci Resolve export (FCPXML) | Yes | No | No | No |
+| Multiple engine backends | Yes (3 engines) | Yes (cloud) | Single model | Single model |
+| Storyboard GUI with per-scene control | Yes (React) | Yes | No | No |
+
+---
+
+## Built With
+
+- [HunyuanVideo-Avatar](https://github.com/tencent/HunyuanVideo) (Tencent) — audio-driven video generation with lip sync
+- [LTX-Video 2](https://github.com/Lightricks/LTX-Video) (Lightricks) — unified audio+video generation
+- [HuMo](https://github.com/Phantom-video/HuMo) (ByteDance) — audio-conditioned video with TIA mode
+- [FLUX](https://github.com/black-forest-labs/flux) (Black Forest Labs) — text-to-image with LoRA support
+- [Z-Image](https://huggingface.co/Tongyi-MAI/Z-Image-Turbo) (Tongyi) — fast ungated image generation
+- [SeedVR2](https://github.com/ByteDance/SeedVR2) (ByteDance) — face-aware video upscaling
+- [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) — fast general-purpose upscaling
+- [Whisper](https://github.com/openai/whisper) (OpenAI) — speech transcription and alignment
+- [Kim_Vocal_2 / Demucs](https://github.com/facebookresearch/demucs) — vocal separation
+- [FastAPI](https://fastapi.tiangolo.com/) + [React](https://react.dev/) — API server and storyboard GUI
+- [ffmpeg](https://ffmpeg.org/) — audio slicing, video concatenation, muxing
+- [vLLM](https://github.com/vllm-project/vllm) — local LLM serving (optional)
 
 ---
 
 ## License
 
-PolyForm Noncommercial License 1.0.0
-
+[PolyForm Noncommercial License 1.0.0](LICENSE) — free for personal, academic, and research use. Commercial licenses available; see [LICENSE-COMMERCIAL](LICENSE-COMMERCIAL) for details.
