@@ -10,7 +10,10 @@ import type {
   RegenerateVideoRequest,
   RenderMode,
   Scene,
+  TargetResolution,
   UpdateSceneRequest,
+  UpscaleResult,
+  UpscalerType,
   VideoEngineType,
 } from "./types";
 
@@ -197,6 +200,38 @@ export async function generateAllVideos(
       scene_ids: sceneIds ?? [],
       engine: engine ?? null,
       render_mode: renderMode ?? "preview",
+    }),
+  });
+}
+
+export async function upscaleVideos(
+  sceneIds?: string[],
+  resolution?: TargetResolution,
+  upscaler?: UpscalerType,
+  renderMode?: RenderMode,
+): Promise<UpscaleResult> {
+  return request("/api/pipeline/upscale", {
+    method: "POST",
+    body: JSON.stringify({
+      scene_ids: sceneIds ?? [],
+      resolution: resolution ?? null,
+      upscaler: upscaler ?? null,
+      render_mode: renderMode ?? "final",
+    }),
+  });
+}
+
+export async function upscaleScene(
+  sceneId: string,
+  resolution?: TargetResolution,
+  upscaler?: UpscalerType,
+): Promise<UpscaleResult> {
+  return request(`/api/scenes/${sceneId}/upscale`, {
+    method: "POST",
+    body: JSON.stringify({
+      scene_ids: [sceneId],
+      resolution: resolution ?? null,
+      upscaler: upscaler ?? null,
     }),
   });
 }

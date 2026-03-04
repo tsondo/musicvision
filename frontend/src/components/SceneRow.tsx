@@ -62,6 +62,7 @@ export default function SceneRow({
 
   const hasImage = Boolean(scene.reference_image);
   const hasVideo = Boolean(scene.video_clip) || scene.sub_clips.some((sc) => sc.video_clip);
+  const hasUpscaled = Boolean(scene.upscaled_clip);
 
   // Resolve the first available video clip path for preview
   const videoClipPath = scene.video_clip || scene.sub_clips.find((sc) => sc.video_clip)?.video_clip || null;
@@ -216,6 +217,9 @@ export default function SceneRow({
           <span className="sub-clip-count">
             {scene.sub_clips.length} clips
           </span>
+        )}
+        {hasUpscaled && (
+          <span className="upscaled-badge" title="Upscaled">HD</span>
         )}
         {scene.audio_segment && (
           <button

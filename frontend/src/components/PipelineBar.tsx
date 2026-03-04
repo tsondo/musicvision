@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import type { StepStatus } from "../hooks/usePipeline";
-import type { ImageModelType, PipelineStage, RenderMode, VideoEngineType } from "../api/types";
+import type { ImageModelType, PipelineStage, RenderMode, TargetResolution, VideoEngineType } from "../api/types";
 import FileBrowser from "./FileBrowser";
 
 interface Props {
@@ -10,10 +10,12 @@ interface Props {
   sceneCount: number;
   imagesRemaining: number;
   videosRemaining: number;
+  upscaleRemaining: number;
   uploadStatus: StepStatus;
   intakeStatus: StepStatus;
   imagesStatus: StepStatus;
   videosStatus: StepStatus;
+  upscaleStatus: StepStatus;
   error: string | null;
   isRunning: boolean;
   onUploadAudio: (file: File) => void;
@@ -23,6 +25,7 @@ interface Props {
   onRunIntake: (opts?: { useLlm?: boolean; skipTranscription?: boolean }) => void;
   onGenerateImages: (sceneIds?: string[], model?: ImageModelType) => void;
   onGenerateVideos: (sceneIds?: string[], engine?: VideoEngineType, renderMode?: RenderMode) => void;
+  onUpscaleVideos: (sceneIds?: string[], resolution?: TargetResolution) => void;
 }
 
 type StepState = "disabled" | "active" | "done";
@@ -32,7 +35,7 @@ function stepState(
   currentStage: PipelineStage,
   status: StepStatus,
 ): StepState {
-  const order: PipelineStage[] = ["upload", "intake", "images", "videos"];
+  const order: PipelineStage[] = ["upload", "intake", "images", "videos", "upscale"];
   const stepIdx = order.indexOf(stepStage);
   const currentIdx = order.indexOf(currentStage);
   if (status === "done" || stepIdx < currentIdx) return "done";
@@ -47,10 +50,12 @@ export default function PipelineBar({
   sceneCount,
   imagesRemaining,
   videosRemaining,
+  upscaleRemaining,
   uploadStatus,
   intakeStatus,
   imagesStatus,
   videosStatus,
+  upscaleStatus,
   error,
   isRunning,
   onUploadAudio,
@@ -60,6 +65,7 @@ export default function PipelineBar({
   onRunIntake,
   onGenerateImages,
   onGenerateVideos,
+  onUpscaleVideos,
 }: Props) {
   const audioRef = useRef<HTMLInputElement>(null);
   const lyricsRef = useRef<HTMLInputElement>(null);
@@ -68,6 +74,7 @@ export default function PipelineBar({
   const [imageModel, setImageModel] = useState<ImageModelType>("z-image-turbo");
   const [videoEngine, setVideoEngine] = useState<VideoEngineType>("hunyuan_avatar");
   const [renderMode, setRenderMode] = useState<RenderMode>("preview");
+  const [targetResolution, setTargetResolution] = useState<TargetResolution>("1080p");
 
   const handleAudioChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -265,6 +272,44 @@ export default function PipelineBar({
               ? "Rendering..."
               : videosRemaining > 0
                 ? `Render ${videosRemaining} ${renderMode} video${videosRemaining > 1 ? "s" : ""}`
+                : "All Done"}
+          </button>
+        </div>
+      </div>
+
+      <div className="step-arrow" />
+
+      {/* Step 5: Upscale */}
+      <div className={`pipeline-step ${stepState("upscale", stage, upscaleStatus)}`}>
+        <div className="step-label">
+          <span className="step-num">5</span> Upscale
+          {sceneCount - upscaleRemaining > 0 && (
+            <span className="step-check" title={`${sceneCount - upscaleRemaining}/${sceneCount} upscaled`}>
+              {sceneCount - upscaleRemaining}/{sceneCount}
+            </span>
+          )}
+        </div>
+        <div className="step-controls">
+          <select
+            className="pipeline-select"
+            value={targetResolution}
+            onChange={(e) => setTargetResolution(e.target.value as TargetResolution)}
+            disabled={isRunning}
+          >
+            <option value="720p">720p</option>
+            <option value="1080p">1080p</option>
+            <option value="1440p">1440p</option>
+            <option value="4k">4K</option>
+          </select>
+          <button
+            className="btn-sm"
+            disabled={sceneCount === 0 || isRunning || videosRemaining > 0 || upscaleRemaining === 0}
+            onClick={() => onUpscaleVideos(undefined, targetResolution)}
+          >
+            {upscaleStatus === "running"
+              ? "Upscaling..."
+              : upscaleRemaining > 0
+                ? `Upscale ${upscaleRemaining} clip${upscaleRemaining > 1 ? "s" : ""}`
                 : "All Done"}
           </button>
         </div>

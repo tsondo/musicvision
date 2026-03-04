@@ -7,9 +7,10 @@ import {
   runIntake as apiRunIntake,
   generateAllImages as apiGenerateImages,
   generateAllVideos as apiGenerateVideos,
+  upscaleVideos as apiUpscaleVideos,
   ApiError,
 } from "../api/client";
-import type { BatchGenResult, ImageModelType, PipelineStage, ProjectConfig, RenderMode, Scene, VideoEngineType } from "../api/types";
+import type { BatchGenResult, ImageModelType, PipelineStage, ProjectConfig, RenderMode, Scene, TargetResolution, UpscalerType, VideoEngineType } from "../api/types";
 
 export type StepStatus = "idle" | "running" | "done" | "error";
 
@@ -19,6 +20,7 @@ export interface PipelineState {
   intakeStatus: StepStatus;
   imagesStatus: StepStatus;
   videosStatus: StepStatus;
+  upscaleStatus: StepStatus;
   error: string | null;
   lastResult: BatchGenResult | null;
   hasAudio: boolean;
@@ -26,6 +28,7 @@ export interface PipelineState {
   sceneCount: number;
   imagesRemaining: number;
   videosRemaining: number;
+  upscaleRemaining: number;
   isRunning: boolean;
 }
 
@@ -39,6 +42,7 @@ export function usePipeline(
   const [intakeStatus, setIntakeStatus] = useState<StepStatus>("idle");
   const [imagesStatus, setImagesStatus] = useState<StepStatus>("idle");
   const [videosStatus, setVideosStatus] = useState<StepStatus>("idle");
+  const [upscaleStatus, setUpscaleStatus] = useState<StepStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<BatchGenResult | null>(null);
 
@@ -49,19 +53,27 @@ export function usePipeline(
   const videosRemaining = scenes.filter(
     (s) => !s.video_clip && !s.sub_clips.some((sc) => sc.video_clip),
   ).length;
+  const upscaleRemaining = scenes.filter(
+    (s) =>
+      (s.video_clip || s.sub_clips.some((sc) => sc.video_clip)) &&
+      !s.upscaled_clip,
+  ).length;
 
   const stage = useMemo<PipelineStage>(() => {
     if (!hasAudio) return "upload";
     if (sceneCount === 0) return "intake";
     if (imagesRemaining > 0) return "images";
-    return "videos";
-  }, [hasAudio, sceneCount, imagesRemaining]);
+    if (videosRemaining > 0) return "videos";
+    if (upscaleRemaining > 0) return "upscale";
+    return "upscale";
+  }, [hasAudio, sceneCount, imagesRemaining, videosRemaining, upscaleRemaining]);
 
   const isRunning =
     uploadStatus === "running" ||
     intakeStatus === "running" ||
     imagesStatus === "running" ||
-    videosStatus === "running";
+    videosStatus === "running" ||
+    upscaleStatus === "running";
 
   const uploadAudio = useCallback(
     async (file: File) => {
@@ -194,10 +206,30 @@ export function usePipeline(
     [reloadScenes],
   );
 
+  const upscaleAll = useCallback(
+    async (sceneIds?: string[], resolution?: TargetResolution, upscaler?: UpscalerType, renderMode?: RenderMode) => {
+      setUpscaleStatus("running");
+      setError(null);
+      try {
+        const result = await apiUpscaleVideos(sceneIds, resolution, upscaler, renderMode);
+        await reloadScenes();
+        setUpscaleStatus(result.failed.length > 0 ? "error" : "done");
+        if (result.failed.length > 0) {
+          setError(`${result.failed.length} upscale(s) failed`);
+        }
+      } catch (err) {
+        const msg = err instanceof ApiError ? err.detail : String(err);
+        setError(msg);
+        setUpscaleStatus("error");
+      }
+    },
+    [reloadScenes],
+  );
+
   // Poll scenes while generation is running so new images/videos appear incrementally
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
-    const generating = imagesStatus === "running" || videosStatus === "running";
+    const generating = imagesStatus === "running" || videosStatus === "running" || upscaleStatus === "running";
     if (generating && !pollRef.current) {
       pollRef.current = setInterval(() => {
         reloadScenes();
@@ -213,7 +245,7 @@ export function usePipeline(
         pollRef.current = null;
       }
     };
-  }, [imagesStatus, videosStatus, reloadScenes]);
+  }, [imagesStatus, videosStatus, upscaleStatus, reloadScenes]);
 
   const pipelineState: PipelineState = {
     stage,
@@ -221,6 +253,7 @@ export function usePipeline(
     intakeStatus,
     imagesStatus,
     videosStatus,
+    upscaleStatus,
     error,
     lastResult,
     hasAudio,
@@ -228,6 +261,7 @@ export function usePipeline(
     sceneCount,
     imagesRemaining,
     videosRemaining,
+    upscaleRemaining,
     isRunning,
   };
 
@@ -240,5 +274,6 @@ export function usePipeline(
     runIntake,
     generateImages,
     generateVideos,
+    upscaleAll,
   };
 }

@@ -124,11 +124,18 @@ def _resolve_scene_clip(scene: Scene, paths: ProjectPaths) -> Path | None:
     """
     Return the final single-file clip path for a scene.
 
-    For scenes with sub-clips (duration > 3.88s), joins them first.
-    For simple scenes, returns the video_clip path directly.
+    Prefers upscaled clips over raw clips. For scenes with sub-clips,
+    joins them first (preferring upscaled sub-clips).
     """
     if scene.sub_clips:
         return _join_sub_clips(scene, paths)
+
+    # Prefer upscaled clip if available
+    if scene.upscaled_clip:
+        p = _abs(scene.upscaled_clip, paths)
+        if p.exists():
+            return p
+        log.warning("Upscaled clip file missing for %s: %s — falling back to raw clip", scene.id, p)
 
     if scene.video_clip:
         p = _abs(scene.video_clip, paths)
@@ -140,12 +147,17 @@ def _resolve_scene_clip(scene: Scene, paths: ProjectPaths) -> Path | None:
 
 
 def _join_sub_clips(scene: Scene, paths: ProjectPaths) -> Path | None:
-    """Join a scene's sub-clips into a single clip, returning its path."""
+    """Join a scene's sub-clips into a single clip, returning its path.
+
+    Prefers upscaled sub-clips over raw sub-clips.
+    """
     sub_paths: list[Path] = []
 
     for sc in scene.sub_clips:
-        if sc.video_clip:
-            p = _abs(sc.video_clip, paths)
+        # Prefer upscaled clip
+        clip_path = sc.upscaled_clip or sc.video_clip
+        if clip_path:
+            p = _abs(clip_path, paths)
             if p.exists():
                 sub_paths.append(p)
             else:

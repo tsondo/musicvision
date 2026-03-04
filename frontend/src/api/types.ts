@@ -3,6 +3,8 @@
 export type SceneType = "vocal" | "instrumental";
 export type ApprovalStatus = "pending" | "approved" | "rejected";
 export type VideoEngineType = "humo" | "hunyuan_avatar" | "ltx_video";
+export type UpscalerType = "ltx_spatial" | "seedvr2" | "real_esrgan" | "none";
+export type TargetResolution = "720p" | "1080p" | "1440p" | "4k";
 
 export interface SubClip {
   id: string;
@@ -11,6 +13,7 @@ export interface SubClip {
   audio_segment: string | null;
   video_prompt: string | null;
   video_clip: string | null;
+  upscaled_clip: string | null;
   status: ApprovalStatus;
   frame_count: number | null;
 }
@@ -42,6 +45,7 @@ export interface Scene {
   video_prompt: string | null;
   video_prompt_user_override: string | null;
   video_clip: string | null;
+  upscaled_clip: string | null;
   video_status: ApprovalStatus;
   video_engine: VideoEngineType | null;
   video_seed: number | null;
@@ -170,4 +174,18 @@ export interface ImportLyricsResult {
   path: string;
 }
 
-export type PipelineStage = "upload" | "intake" | "images" | "videos";
+export interface UpscaleRequest {
+  scene_ids?: string[];
+  resolution?: TargetResolution;
+  upscaler?: UpscalerType;
+  render_mode?: RenderMode;
+}
+
+export interface UpscaleResult {
+  status: string;
+  upscaled: string[];
+  failed: string[];
+  total?: number;
+}
+
+export type PipelineStage = "upload" | "intake" | "images" | "videos" | "upscale";

@@ -1046,10 +1046,110 @@ async def generate_videos(req: GenerateVideosRequest):
     return await asyncio.to_thread(_run_generation)
 
 
+class UpscaleRequest(BaseModel):
+    scene_ids: list[str] = []
+    resolution: str | None = None       # "720p" | "1080p" | "1440p" | "4k"
+    upscaler: str | None = None         # override: "ltx_spatial" | "seedvr2" | "real_esrgan"
+    render_mode: str = "final"          # "preview" | "final"
+
+
 class AssembleRequest(BaseModel):
     approved_only: bool = False
     export_edl: bool = True
     export_fcpxml: bool = True
+
+
+@app.post("/api/pipeline/upscale")
+async def upscale_videos(req: UpscaleRequest):
+    """Stage 4b: Upscale video clips to target resolution."""
+    from musicvision.models import TargetResolution, UpscalerType
+    from musicvision.upscaling.pipeline import upscale_clips
+
+    import asyncio
+
+    proj = get_project()
+
+    # Apply overrides (ephemeral, not saved to disk)
+    if req.resolution:
+        proj.config.upscaler.target_resolution = TargetResolution(req.resolution)
+    if req.upscaler:
+        proj.config.upscaler.upscaler_override = UpscalerType(req.upscaler)
+
+    scene_ids = req.scene_ids or None
+
+    def _run() -> dict:
+        device_map = None
+        try:
+            from musicvision.utils.gpu import detect_devices
+            device_map = detect_devices()
+        except Exception:
+            pass
+
+        result = upscale_clips(
+            scenes=proj.scenes,
+            paths=proj.paths,
+            upscaler_config=proj.config.upscaler,
+            default_engine=proj.config.video_engine,
+            render_mode=req.render_mode,
+            scene_ids=scene_ids,
+            device_map=device_map,
+        )
+        proj.save_scenes()
+        return {
+            "status": "complete",
+            "upscaled": result["upscaled"],
+            "failed": result["failed"],
+            "total": len(result["upscaled"]) + len(result["failed"]),
+        }
+
+    return await asyncio.to_thread(_run)
+
+
+@app.post("/api/scenes/{scene_id}/upscale")
+async def upscale_scene(scene_id: str, req: UpscaleRequest):
+    """Upscale a single scene's video clip."""
+    from musicvision.models import TargetResolution, UpscalerType
+    from musicvision.upscaling.pipeline import upscale_clips
+
+    import asyncio
+
+    proj = get_project()
+    scene = proj.scenes.get_scene(scene_id)
+    if not scene:
+        raise HTTPException(status_code=404, detail=f"Scene {scene_id} not found")
+    if not scene.video_clip and not scene.sub_clips:
+        raise HTTPException(status_code=400, detail="Scene has no video clip to upscale")
+
+    if req.resolution:
+        proj.config.upscaler.target_resolution = TargetResolution(req.resolution)
+    if req.upscaler:
+        proj.config.upscaler.upscaler_override = UpscalerType(req.upscaler)
+
+    def _run() -> dict:
+        device_map = None
+        try:
+            from musicvision.utils.gpu import detect_devices
+            device_map = detect_devices()
+        except Exception:
+            pass
+
+        result = upscale_clips(
+            scenes=proj.scenes,
+            paths=proj.paths,
+            upscaler_config=proj.config.upscaler,
+            default_engine=proj.config.video_engine,
+            render_mode=req.render_mode,
+            scene_ids=[scene_id],
+            device_map=device_map,
+        )
+        proj.save_scenes()
+        return {
+            "status": "complete",
+            "upscaled": result["upscaled"],
+            "failed": result["failed"],
+        }
+
+    return await asyncio.to_thread(_run)
 
 
 @app.post("/api/pipeline/assemble")

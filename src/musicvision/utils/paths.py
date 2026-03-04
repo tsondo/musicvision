@@ -84,6 +84,16 @@ class ProjectPaths:
     def sub_clips_dir(self) -> Path:
         return self.clips_dir / "sub"
 
+    # --- Upscaled clips ---
+
+    @property
+    def clips_upscaled_dir(self) -> Path:
+        return self.root / "clips_upscaled"
+
+    @property
+    def sub_clips_upscaled_dir(self) -> Path:
+        return self.clips_upscaled_dir / "sub"
+
     # --- Output ---
 
     @property
@@ -111,6 +121,12 @@ class ProjectPaths:
     def sub_clip_path(self, scene_id: str, suffix: str) -> Path:
         return self.sub_clips_dir / f"{scene_id}_{suffix}.mp4"
 
+    def upscaled_clip_path(self, scene_id: str) -> Path:
+        return self.clips_upscaled_dir / f"{scene_id}.mp4"
+
+    def upscaled_sub_clip_path(self, scene_id: str, suffix: str) -> Path:
+        return self.sub_clips_upscaled_dir / f"{scene_id}_{suffix}.mp4"
+
     def scaffold(self) -> None:
         """Create the full directory tree. Safe to call multiple times."""
         for d in [
@@ -125,6 +141,8 @@ class ProjectPaths:
             self.images_dir,
             self.clips_dir,
             self.sub_clips_dir,
+            self.clips_upscaled_dir,
+            self.sub_clips_upscaled_dir,
             self.output_dir,
             self.output_scenes_dir,
         ]:

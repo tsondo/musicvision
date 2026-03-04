@@ -27,14 +27,22 @@ src/musicvision/
 │   ├── prompt_generator.py  # LLM-assisted HuMo video prompts
 │   ├── humo_engine.py       # HuMo TIA inference wrapper
 │   └── scene_manager.py     # Scene review/regeneration
+├── upscaling/
+│   ├── base.py              # UpscaleEngine ABC + dataclasses
+│   ├── factory.py           # Dispatch on UpscalerType → engine
+│   ├── pipeline.py          # Orchestrator: group by engine, upscale, update scenes
+│   ├── realesrgan_engine.py # Real-ESRGAN frame-by-frame upscaler
+│   ├── seedvr2_engine.py    # SeedVR2 subprocess bridge (like HVA)
+│   └── ltx_spatial_engine.py # LTX Spatial Upsampler (diffusers in-process)
 ├── assembly/
-│   ├── concatenator.py      # ffmpeg clip joining + audio sync
+│   ├── concatenator.py      # ffmpeg clip joining + audio sync (prefers upscaled clips)
 │   ├── exporter.py          # FCPXML/EDL generation
 │   └── timecode.py          # Timecode utilities
 ├── vendor/                  # Vendored/patched model code (Wan2.1 DiT, VAE, T5, etc.)
 └── utils/
     ├── gpu.py               # Multi-GPU device maps, VRAM tiers, recommend_tier()
     ├── audio.py             # ffmpeg wrappers
+    ├── video.py             # ffprobe resolution, ffmpeg scale
     └── paths.py             # Project directory management
 
 frontend/                    # React + Vite scene review GUI
@@ -43,7 +51,7 @@ frontend/                    # React + Vite scene review GUI
 │   ├── api/client.ts        # Fetch wrapper for backend API
 │   ├── api/types.ts         # TS interfaces matching Pydantic models
 │   ├── components/          # ProjectOpener, ProjectHeader, Storyboard, SceneRow, PreviewPanel, AudioPlayer
-│   └── hooks/               # useProject, useScenes
+│   └── hooks/               # useProject, useScenes, usePipeline
 ├── vite.config.ts           # Proxies /api and /files to localhost:8000
 └── package.json
 ```
@@ -106,7 +114,7 @@ Two-layer strategy. See docs/TESTING.md for full details.
 ```bash
 python -m pytest tests/ -v --tb=short
 ```
-No GPU, no network, fast (<10s). Run after every code change. Currently ~107 tests.
+No GPU, no network, fast (<10s). Run after every code change. Currently ~250 tests.
 
 Test files:
 - `test_core.py` — project config, scene models, style sheet, ProjectService lifecycle
@@ -115,6 +123,7 @@ Test files:
 - `test_video_engine.py` — HuMo engine config, video prompt construction, sub-clip splitting
 - `test_engine_registry.py` — engine constraints, frame math, sub-clip computation
 - `test_hunyuan_avatar_engine.py` — HVA config, factory dispatch, engine lifecycle, scene splitting
+- `test_upscaler.py` — upscaler enums, config auto-selection, factory, pipeline orchestrator, Scene/SubClip fields
 
 ### Integration tests (scripts/)
 ```bash
@@ -147,6 +156,7 @@ System prompts are defined as module-level constants (`SEGMENTATION_SYSTEM_PROMP
 - FLUX and HuMo run sequentially (different stages), never simultaneously. Models fully unloaded between stages.
 - GPU0 (5090) runs DiT/UNet. GPU1 (4080) runs encoders/VAE. This split is managed by `utils/gpu.py`.
 - VRAM tier system: fp16, fp8_scaled, gguf_q8, gguf_q6, gguf_q4, preview. `recommend_tier()` auto-selects based on available VRAM.
+- Upscaling: per-engine strategy — LTX-2 → LTX Spatial (latent-space), HVA/HuMo → SeedVR2 (pixel-space), preview → Real-ESRGAN or NONE. Assembly prefers upscaled clips.
 
 ## Project Data Flow
 
@@ -154,8 +164,9 @@ System prompts are defined as module-level constants (`SEGMENTATION_SYSTEM_PROMP
 Song audio + lyrics
   → Stage 1: Intake (BPM, vocal sep, Whisper, LLM segmentation) → scenes.json
   → Stage 2: Imaging (LLM prompts, FLUX generation) → images/
-  → Stage 3: Video (LLM prompts, HuMo TIA generation) → clips/
-  → Stage 4: Assembly (ffmpeg concat, audio sync) → output/rough_cut.mp4 + FCPXML/EDL
+  → Stage 3: Video (LLM prompts, HuMo/HVA/LTX generation) → clips/
+  → Stage 4: Upscale (per-engine upscaler selection) → clips_upscaled/
+  → Stage 5: Assembly (ffmpeg concat, audio sync) → output/rough_cut.mp4 + FCPXML/EDL
 ```
 
 Each stage produces artifacts on disk. Any stage can be re-run independently. User reviews and approves at each stage.
@@ -181,6 +192,7 @@ musicvision import-audio --project ./test_output/2026-03-01_1400_my_test --audio
 musicvision intake --project ./test_output/2026-03-01_1400_my_test --skip-transcription
 musicvision generate-images --project ./test_output/2026-03-01_1400_my_test --model z-image-turbo
 musicvision generate-video --project ./test_output/2026-03-01_1400_my_test --engine hunyuan_avatar
+musicvision upscale --project ./test_output/2026-03-01_1400_my_test --resolution 1080p
 musicvision assemble --project ./test_output/2026-03-01_1400_my_test
 ```
 

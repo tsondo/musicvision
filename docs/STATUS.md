@@ -1,6 +1,6 @@
 # MusicVision — Project Status
 
-**Last updated:** 2026-03-01
+**Last updated:** 2026-03-04
 **Branch:** `main`
 
 ---
@@ -29,18 +29,20 @@ The pipeline is designed around AI-generated music from **AceStep** (a text-cond
 | Reference image generation (FLUX + Z-Image) | ✅ Complete — **GPU tested** |
 | Video generation — HuMo TIA | ✅ Complete — GPU tested, noisy output (back burner) |
 | Video generation — HunyuanVideo-Avatar | ✅ Complete — **GPU tested, excellent quality** |
-| Assembly (rough cut, EDL, FCPXML) | ✅ Complete |
+| Video generation — LTX-Video 2 | ✅ Complete — audio-conditioned |
+| Video upscaling (Real-ESRGAN, SeedVR2, LTX Spatial) | ✅ Complete — per-engine auto-selection |
+| Assembly (rough cut, EDL, FCPXML) | ✅ Complete — prefers upscaled clips |
 
 | Infrastructure | Status |
 |----------------|--------|
-| API (all 4 stages) | ✅ Complete |
-| CLI (all 4 stages) | ✅ Complete (2026-03-01) |
+| API (all 5 stages) | ✅ Complete |
+| CLI (all 5 stages) | ✅ Complete |
 | End-to-end storyboard test | ✅ Passed (2026-03-01) — 5 scenes, 320p preview |
 | Frontend (React or Gradio) | ✅ React storyboard (scene review, approval, regeneration) |
 | Frame-accurate alignment system | ✅ Complete |
 | Progress/status feedback (SSE/WebSocket) | ❌ Not started |
 
-**All four pipeline stages are code-complete, GPU-tested, and CLI-accessible.** Full end-to-end workflow from terminal: `create` → `import-audio` → `intake` → `generate-images` → `generate-video` → `assemble`. Two video engines available: HunyuanVideo-Avatar (primary, excellent lip sync) and HuMo (back burner). Two image engines GPU-validated: Z-Image-Turbo (ungated, 12.5 GB peak) and FLUX.1-schnell (gated, 4-step fast).
+**All five pipeline stages are code-complete and CLI-accessible.** Full end-to-end workflow: `create` → `import-audio` → `intake` → `generate-images` → `generate-video` → `upscale` → `assemble`. Three video engines: HunyuanVideo-Avatar (primary), LTX-Video 2 (cinematic), HuMo (back burner). Three upscalers: SeedVR2 (faces/HVA), LTX Spatial (LTX-2 latent), Real-ESRGAN (fast preview). Assembly auto-prefers upscaled clips.
 
 ---
 

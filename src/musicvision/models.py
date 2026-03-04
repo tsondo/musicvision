@@ -131,6 +131,22 @@ class VideoEngineType(str, Enum):
     LTX_VIDEO       = "ltx_video"
 
 
+class UpscalerType(str, Enum):
+    """Selectable video upscaler backend."""
+    LTX_SPATIAL  = "ltx_spatial"     # Latent-space upsampler, LTX-2 output only
+    SEEDVR2      = "seedvr2"         # Pixel-space one-step diffusion (ByteDance)
+    REAL_ESRGAN  = "real_esrgan"     # Frame-by-frame super-resolution
+    NONE         = "none"            # Skip upscaling
+
+
+class TargetResolution(str, Enum):
+    """Output resolution target for upscaling."""
+    HD_720P   = "720p"     # 1280×720
+    FHD_1080P = "1080p"    # 1920×1080
+    QHD_1440P = "1440p"    # 2560×1440
+    UHD_4K    = "4k"       # 3840×2160
+
+
 # ---------------------------------------------------------------------------
 # Style Sheet — persistent visual identity for the project
 # ---------------------------------------------------------------------------
@@ -337,6 +353,68 @@ class VocalSeparationConfig(BaseModel):
     roformer_model: str = "MelBandRoformer.ckpt"
 
 
+# Resolution lookup: enum value → (width, height)
+_RESOLUTION_WH: dict[str, tuple[int, int]] = {
+    "720p":  (1280, 720),
+    "1080p": (1920, 1080),
+    "1440p": (2560, 1440),
+    "4k":    (3840, 2160),
+}
+
+# Default upscaler per video engine (pixel-space engines use SeedVR2, LTX uses latent upsampler)
+_ENGINE_UPSCALER: dict[str, UpscalerType] = {
+    "humo":            UpscalerType.SEEDVR2,
+    "hunyuan_avatar":  UpscalerType.SEEDVR2,
+    "ltx_video":       UpscalerType.LTX_SPATIAL,
+}
+
+
+class UpscalerConfig(BaseModel):
+    """Configuration for the video upscaling stage."""
+
+    enabled: bool = True
+    target_resolution: TargetResolution = TargetResolution.FHD_1080P
+    upscaler_override: UpscalerType | None = None  # force specific upscaler for all engines
+
+    # LTX Spatial Upsampler
+    ltx_spatial_model_id: str = "Lightricks/ltxv-spatial-upscaler-0.9.7"
+    ltx_spatial_steps: int = 10
+
+    # SeedVR2
+    seedvr2_repo_dir: str = ""          # env: SEEDVR2_REPO_DIR
+    seedvr2_venv_python: str = ""       # env: SEEDVR2_VENV_PYTHON
+    seedvr2_use_fp8: bool = True
+    seedvr2_model_id: str = "ByteDance-Seed/SeedVR2-3B"
+
+    # Real-ESRGAN
+    realesrgan_model: str = "realesrgan-x4plus-anime"
+
+    # Preview mode skips upscaling
+    preview_upscaler: UpscalerType = UpscalerType.NONE
+
+    def get_upscaler_for_engine(
+        self,
+        engine: str | VideoEngineType,
+        render_mode: str = "final",
+    ) -> UpscalerType:
+        """Select the appropriate upscaler for a video engine.
+
+        Returns NONE if upscaling is disabled or in preview mode.
+        """
+        if not self.enabled:
+            return UpscalerType.NONE
+        if render_mode == "preview":
+            return self.preview_upscaler
+        if self.upscaler_override is not None:
+            return self.upscaler_override
+        key = engine.value if isinstance(engine, VideoEngineType) else engine
+        return _ENGINE_UPSCALER.get(key, UpscalerType.SEEDVR2)
+
+    def target_width_height(self) -> tuple[int, int]:
+        """Return (width, height) for the target resolution."""
+        return _RESOLUTION_WH[self.target_resolution.value]
+
+
 class ProjectConfig(BaseModel):
     name: str = "Untitled Project"
     created: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -348,6 +426,7 @@ class ProjectConfig(BaseModel):
     ltx_video: LtxVideoConfig = Field(default_factory=LtxVideoConfig)
     image_gen: ImageGenConfig = Field(default_factory=ImageGenConfig)
     vocal_separation: VocalSeparationConfig = Field(default_factory=VocalSeparationConfig)
+    upscaler: UpscalerConfig = Field(default_factory=UpscalerConfig)
 
     @model_validator(mode="before")
     @classmethod
@@ -386,6 +465,7 @@ class SubClip(BaseModel):
     audio_segment: Optional[str] = None
     video_prompt: Optional[str] = None
     video_clip: Optional[str] = None    # path to generated clip
+    upscaled_clip: Optional[str] = None # path to upscaled clip
     status: ApprovalStatus = ApprovalStatus.PENDING
     frame_count: Optional[int] = None   # authoritative duration in frames
 
@@ -424,6 +504,7 @@ class Scene(BaseModel):
     video_prompt: Optional[str] = None
     video_prompt_user_override: Optional[str] = None
     video_clip: Optional[str] = None            # path: clips/scene_001.mp4
+    upscaled_clip: Optional[str] = None          # path: clips_upscaled/scene_001.mp4
     video_status: ApprovalStatus = ApprovalStatus.PENDING
     video_engine: Optional[VideoEngineType] = None  # None → use project default
     video_seed: Optional[int] = None                # seed used for last generation (locked when approved)

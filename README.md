@@ -6,7 +6,7 @@ AI-powered music video production pipeline with **lip-synced video generation**.
 audio + lyrics + reference image  →  scene segmentation  →  storyboard  →  lip-synced video clips  →  rough cut MP4 + EDL/FCPXML
 ```
 
-**Status:** All four pipeline stages are code-complete and GPU-tested. Full CLI pipeline + React scene review GUI. Two video engines: [HunyuanVideo-Avatar](https://github.com/tencent/HunyuanVideo) (primary, excellent lip sync) and [HuMo](https://github.com/Phantom-video/HuMo) (experimental). Two image engines: [Z-Image](https://huggingface.co/Tongyi-MAI/Z-Image-Turbo) (ungated) and [FLUX](https://github.com/black-forest-labs/flux).
+**Status:** All five pipeline stages are code-complete and GPU-tested. Full CLI pipeline + React scene review GUI. Three video engines: [HunyuanVideo-Avatar](https://github.com/tencent/HunyuanVideo) (primary, lip sync), [LTX-Video 2](https://github.com/Lightricks/LTX-Video) (cinematic), and [HuMo](https://github.com/Phantom-video/HuMo) (experimental). Three upscalers: SeedVR2 (faces), LTX Spatial (latent), Real-ESRGAN (fast). Two image engines: [Z-Image](https://huggingface.co/Tongyi-MAI/Z-Image-Turbo) (ungated) and [FLUX](https://github.com/black-forest-labs/flux).
 
 ---
 
@@ -20,8 +20,9 @@ The primary video engine is [HunyuanVideo-Avatar](https://github.com/tencent/Hun
 
 1. **Intake & Segmentation** — Song audio + lyrics are split into 2–10 second scenes using Whisper transcription and LLM-assisted segmentation that respects musical phrasing and section boundaries.
 2. **Image Generation & Storyboard** — Z-Image or FLUX generates reference images for each scene. Users review and iterate on individual scenes until satisfied.
-3. **Video Generation** — HunyuanVideo-Avatar (or HuMo) renders each scene as a lip-synced video clip. Long scenes are automatically split into sub-clips with visual continuity (last frame of clip N becomes the reference image for clip N+1).
-4. **Assembly & Export** — Clips are concatenated with the original audio, exported as a rough cut MP4 plus EDL and FCPXML project files for DaVinci Resolve.
+3. **Video Generation** — HunyuanVideo-Avatar, LTX-Video 2, or HuMo renders each scene as a video clip. Long scenes are automatically split into sub-clips with visual continuity (last frame of clip N becomes the reference image for clip N+1).
+4. **Upscaling** — Per-engine upscaler selection: LTX Spatial for LTX-2 output (latent-space), SeedVR2 for HVA/HuMo (pixel-space faces), Real-ESRGAN for fast preview. Target resolution configurable (720p–4K, default 1080p).
+5. **Assembly & Export** — Clips are concatenated (preferring upscaled versions) with the original audio, exported as a rough cut MP4 plus EDL and FCPXML project files for DaVinci Resolve.
 
 ---
 
@@ -128,6 +129,7 @@ musicvision import-audio --project ./my-video --audio song.wav --lyrics lyrics.t
 musicvision intake --project ./my-video --skip-transcription    # segmentation (use --llm for LLM-assisted)
 musicvision generate-images --project ./my-video --model z-image-turbo  # reference images
 musicvision generate-video --project ./my-video --engine hunyuan_avatar # lip-synced video clips
+musicvision upscale --project ./my-video --resolution 1080p     # upscale to 1080p
 musicvision assemble --project ./my-video                       # rough cut + EDL/FCPXML
 # → output/rough_cut.mp4
 
@@ -183,8 +185,10 @@ my-video/
 ├── segments/             # Per-scene audio slices (full mix — fed to HuMo for lip sync)
 ├── segments_vocal/       # Per-scene vocal stems (Whisper transcription only)
 ├── images/               # FLUX reference images (scene_001.png …)
-├── clips/                # HuMo video clips with audio (scene_001.mp4 …)
-│   └── sub/              # Sub-clips for scenes > 3.88s + continuity frames
+├── clips/                # Video clips (scene_001.mp4 …)
+│   └── sub/              # Sub-clips for long scenes + continuity frames
+├── clips_upscaled/       # Upscaled video clips (scene_001.mp4 …)
+│   └── sub/              # Upscaled sub-clips
 ├── assets/
 │   ├── characters/       # Character reference images
 │   ├── loras/            # Character LoRA weights + Lightx2V distillation LoRA
@@ -241,7 +245,7 @@ Vite proxies `/api` and `/files` to `localhost:8000`.
 
 - **Project creation/opening** — Create new projects or open existing ones from the UI (no need to pass a directory to `musicvision serve`)
 - **Filesystem browser** — Browse the server's local filesystem to import audio and lyrics by path
-- **Pipeline bar** — 4-step progress bar (Import → Intake → Images → Videos) with model/engine selectors and batch generation controls
+- **Pipeline bar** — 5-step progress bar (Import → Intake → Images → Videos → Upscale) with model/engine selectors, resolution picker, and batch generation controls
 - **Storyboard** — Scene-by-scene view with editable prompts, image thumbnails, and inline video preview
 - **Per-scene generation** — Generate or regenerate individual scene images and videos with independent model/seed controls
 - **Lip sync toggle** — Per-scene checkbox; when off, a silent audio segment is generated for non-vocal scenes
@@ -262,20 +266,21 @@ Vite proxies `/api` and `/files` to `localhost:8000`.
 | `musicvision intake --project DIR [--llm] [--skip-transcription] [--vocal-separation]` | Stage 1: audio analysis + segmentation |
 | `musicvision generate-images --project DIR [--model MODEL] [--scene-ids ID…]` | Stage 2: generate reference images |
 | `musicvision generate-video --project DIR [--engine ENGINE] [--tier TIER] [--scene-ids ID…]` | Stage 3: generate video clips |
-| `musicvision assemble --project DIR [--approved-only] [--no-edl] [--no-fcpxml]` | Stage 4: assemble rough cut + export |
+| `musicvision upscale --project DIR [--resolution RES] [--upscaler TYPE] [--scene-ids ID…]` | Stage 4: upscale video clips |
+| `musicvision assemble --project DIR [--approved-only] [--no-edl] [--no-fcpxml]` | Stage 5: assemble rough cut + export |
 | `musicvision info <dir>` | Show project status |
 | `musicvision serve [dir] [--port 8000]` | Start API server (directory optional) |
 | `musicvision detect-hardware` | Print GPU info and recommended tier |
 | `musicvision download-weights --tier TIER [--token TOKEN]` | Download HuMo weights |
 
-Image models: `flux-dev`, `flux-schnell`, `z-image`, `z-image-turbo`. Video engines: `hunyuan_avatar`, `humo`.
+Image models: `flux-dev`, `flux-schnell`, `z-image`, `z-image-turbo`. Video engines: `hunyuan_avatar`, `ltx_video`, `humo`. Upscalers: `ltx_spatial`, `seedvr2`, `real_esrgan`. Resolutions: `720p`, `1080p`, `1440p`, `4k`.
 
 ---
 
 ## Testing
 
 ```bash
-# CPU unit tests — 160 tests, no GPU needed, < 10 seconds
+# CPU unit tests — 250 tests, no GPU needed, < 10 seconds
 uv run pytest tests/ -v
 
 # LLM prompt tests (requires vLLM server on LAN)

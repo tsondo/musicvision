@@ -21,6 +21,7 @@ MusicVision uses a two-layer test strategy: fast unit tests that run anywhere, a
 | `test_video_engine.py` | HuMo engine config, video prompt construction, sub-clip splitting logic |
 | `test_engine_registry.py` | Engine constraints, frame math, sub-clip computation |
 | `test_hunyuan_avatar_engine.py` | HVA config, VideoEngineType enum, factory dispatch, engine lifecycle, scene splitting |
+| `test_upscaler.py` | Upscaler enums, UpscalerConfig defaults + auto-selection, factory dispatch, pipeline orchestrator (mock engine), Scene/SubClip upscaled_clip fields, YAML roundtrip |
 
 ---
 
@@ -54,6 +55,7 @@ musicvision intake --project ./test_storyboard --skip-transcription
 musicvision info ./test_storyboard
 musicvision generate-images --project ./test_storyboard --model z-image-turbo
 musicvision generate-video --project ./test_storyboard --engine hunyuan_avatar
+musicvision upscale --project ./test_storyboard --resolution 1080p
 musicvision assemble --project ./test_storyboard
 # → test_storyboard/output/rough_cut.mp4
 ```
@@ -62,7 +64,7 @@ musicvision assemble --project ./test_storyboard
 
 ## Recommended Test Workflow
 
-1. **After code changes:** `python -m pytest tests/ -v --tb=short` (~107 tests, <10 seconds)
+1. **After code changes:** `python -m pytest tests/ -v --tb=short` (~250 tests, <10 seconds)
 2. **After LLM prompt changes:** run pytest, then `python scripts/test_vllm_prompts.py`
 3. **After image engine changes:** `python scripts/test_image_gen.py`
 4. **After HuMo/video changes:** `python scripts/test_gpu_pipeline.py`

@@ -37,15 +37,15 @@ The pipeline segments audio for **video generation only** — each scene's slice
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │                            MusicVision                               │
-├──────────────┬───────────────┬────────────────────┬──────────────────┤
-│  Stage 1     │  Stage 2      │  Stage 3           │  Stage 4         │
-│  INTAKE &    │  IMAGE GEN &  │  VIDEO GEN         │  ASSEMBLY &      │
-│  SEGMENTATION│  STORYBOARD   │  (selectable)      │  EXPORT          │
-├──────────────┼───────────────┼────────────────────┼──────────────────┤
-│ Whisper      │ FLUX          │ HunyuanVideo-Avatar│ ffmpeg           │
-│ ffmpeg       │ Z-Image       │ HuMo TIA (17B/1.7B)│ FCPXML/EDL gen   │
-│ LLM (Claude) │ (LoRA)        │                    │                  │
-└──────────────┴───────────────┴────────────────────┴──────────────────┘
+├──────────────┬───────────────┬────────────────────┬──────────────────┬──────────────────┤
+│  Stage 1     │  Stage 2      │  Stage 3           │  Stage 4         │  Stage 5         │
+│  INTAKE &    │  IMAGE GEN &  │  VIDEO GEN         │  UPSCALE         │  ASSEMBLY &      │
+│  SEGMENTATION│  STORYBOARD   │  (selectable)      │  (per-engine)    │  EXPORT          │
+├──────────────┼───────────────┼────────────────────┼──────────────────┼──────────────────┤
+│ Whisper      │ FLUX          │ HunyuanVideo-Avatar│ LTX Spatial      │ ffmpeg           │
+│ ffmpeg       │ Z-Image       │ HuMo TIA           │ SeedVR2          │ FCPXML/EDL gen   │
+│ LLM (Claude) │ (LoRA)        │ LTX-Video 2        │ Real-ESRGAN      │                  │
+└──────────────┴───────────────┴────────────────────┴──────────────────┴──────────────────┘
 ```
 
 ### Video Engine Registry
@@ -431,12 +431,52 @@ The active video engine is set in `project.yaml` → `video_engine`. All engines
 - `clips/sub/scene_003_a.mp4`, `clips/sub/scene_003_b.mp4` (sub-clips for long scenes)
 - `clips/sub/scene_003_a_lastframe.png` (continuity frames)
 
-## Stage 4: Assembly & Export
+## Stage 4: Video Upscaling
+
+### Purpose
+
+Video clips from different engines come out at different resolutions (HVA: 704×1024, LTX-2: 768×512, HuMo: 1280×720 — or lower in preview mode). The upscaling stage enhances quality and normalizes resolution before assembly.
+
+### Per-Engine Upscaler Strategy
+
+| Video Engine | Default Upscaler | Type | VRAM |
+|---|---|---|---|
+| LTX-Video 2 | LTX Spatial Upsampler | Latent-space, temporally aware | ~12 GB |
+| HunyuanVideo-Avatar | SeedVR2 | Pixel-space one-step diffusion | ~16 GB (FP8) |
+| HuMo | SeedVR2 | Pixel-space one-step diffusion | ~16 GB (FP8) |
+| (preview mode) | NONE or Real-ESRGAN | Frame-by-frame / skip | ~2-4 GB |
+
+### Process
+
+1. **Filter** to scenes with video clips (`video_clip` or `sub_clips`)
+2. **Group** scenes by video engine → select upscaler per group
+3. For each group: create upscaler → `load()` → process clips → `unload()`
+4. **Sub-clips**: upscale each sub-clip individually, then join
+5. Store results in `clips_upscaled/`, update `scene.upscaled_clip`
+
+### Output Artifacts
+
+- `clips_upscaled/scene_001.mp4` — upscaled scene clips
+- `clips_upscaled/sub/scene_003_a.mp4` — upscaled sub-clips
+- `clips_upscaled/scene_003_joined.mp4` — joined upscaled sub-clips
+
+### Configuration
+
+`UpscalerConfig` in `project.yaml`:
+- `target_resolution`: `720p` | `1080p` (default) | `1440p` | `4k`
+- `upscaler_override`: force specific upscaler for all engines
+- `preview_upscaler`: upscaler used in preview mode (default: `none`)
+- Engine-specific settings: model IDs, FP8 flags, inference steps
+
+---
+
+## Stage 5: Assembly & Export
 
 ### Process
 
 1. **Concatenation** (`assemble_rough_cut()`)
    - Sorts scenes by `order`, joins sub-clips within each scene first
+   - **Prefers upscaled clips** — falls back to raw clips if upscaled version missing
    - ffmpeg concat demuxer (no re-encode)
    - **Duration assertion**: verifies total video duration matches audio within 1 frame (see Frame-Accurate Alignment System)
    - Muxes original full-song audio (uncut) back over the assembled silent video

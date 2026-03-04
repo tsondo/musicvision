@@ -386,6 +386,55 @@ def cmd_download_weights(args: argparse.Namespace) -> None:
     print("Download complete.")
 
 
+def cmd_upscale(args: argparse.Namespace) -> None:
+    """Upscale video clips for a project."""
+    from musicvision.models import TargetResolution, UpscalerType, VideoEngineType
+    from musicvision.project import ProjectService
+    from musicvision.upscaling.pipeline import upscale_clips
+
+    project_dir = Path(args.project).resolve()
+    svc = ProjectService.open(project_dir)
+
+    # Override resolution if specified
+    if args.resolution:
+        svc.config.upscaler.target_resolution = TargetResolution(args.resolution)
+
+    # Override upscaler if specified
+    if args.upscaler:
+        svc.config.upscaler.upscaler_override = UpscalerType(args.upscaler)
+
+    render_mode = args.render_mode or "final"
+    scene_ids = args.scene_ids or None
+
+    device_map = None
+    try:
+        from musicvision.utils.gpu import detect_devices
+        device_map = detect_devices()
+    except Exception:
+        pass
+
+    target_w, target_h = svc.config.upscaler.target_width_height()
+    print(f"Upscaling to {target_w}x{target_h} ({svc.config.upscaler.target_resolution.value})…")
+
+    result = upscale_clips(
+        scenes=svc.scenes,
+        paths=svc.paths,
+        upscaler_config=svc.config.upscaler,
+        default_engine=svc.config.video_engine,
+        render_mode=render_mode,
+        scene_ids=scene_ids,
+        device_map=device_map,
+    )
+
+    svc.save_scenes()
+
+    upscaled = result["upscaled"]
+    failed = result["failed"]
+    print(f"\nUpscaled {len(upscaled)} clip(s).")
+    if failed:
+        print(f"Failed: {failed}")
+
+
 def cmd_generate_video(args: argparse.Namespace) -> None:
     """Generate video clips for a project."""
     from musicvision.models import HumoTier, VideoEngineType
@@ -645,6 +694,24 @@ def main() -> None:
     p_dl.add_argument("--token", default=None, help="HuggingFace token (overrides env var)")
     p_dl.add_argument("--dir", default=None, help="Override weights directory")
 
+    # upscale
+    p_up = sub.add_parser("upscale", help="Stage 4b: Upscale video clips")
+    p_up.add_argument("--project", required=True, help="Project directory path")
+    p_up.add_argument(
+        "--resolution", default=None,
+        choices=["720p", "1080p", "1440p", "4k"],
+        help="Target resolution (default: 1080p)",
+    )
+    p_up.add_argument(
+        "--upscaler", default=None,
+        choices=["ltx_spatial", "seedvr2", "real_esrgan"],
+        help="Override upscaler (default: auto per engine)",
+    )
+    p_up.add_argument("--render-mode", default="final", choices=["preview", "final"],
+                      dest="render_mode", help="Render mode (default: final)")
+    p_up.add_argument("--scene-ids", nargs="*", default=[], dest="scene_ids",
+                      help="Scene IDs to upscale (default: all with clips)")
+
     # generate-video
     p_gv = sub.add_parser("generate-video", help="Generate video clips for a project")
     p_gv.add_argument("--project", required=True, help="Project directory path")
@@ -683,6 +750,8 @@ def main() -> None:
         cmd_detect_hardware(args)
     elif args.command == "download-weights":
         cmd_download_weights(args)
+    elif args.command == "upscale":
+        cmd_upscale(args)
     elif args.command == "generate-video":
         cmd_generate_video(args)
     else:

@@ -54,10 +54,12 @@ export default function App() {
         sceneCount={pipeline.sceneCount}
         imagesRemaining={pipeline.imagesRemaining}
         videosRemaining={pipeline.videosRemaining}
+        upscaleRemaining={pipeline.upscaleRemaining}
         uploadStatus={pipeline.uploadStatus}
         intakeStatus={pipeline.intakeStatus}
         imagesStatus={pipeline.imagesStatus}
         videosStatus={pipeline.videosStatus}
+        upscaleStatus={pipeline.upscaleStatus}
         error={pipeline.error}
         isRunning={pipeline.isRunning}
         onUploadAudio={pipeline.uploadAudio}
@@ -67,6 +69,7 @@ export default function App() {
         onRunIntake={pipeline.runIntake}
         onGenerateImages={pipeline.generateImages}
         onGenerateVideos={pipeline.generateVideos}
+        onUpscaleVideos={pipeline.upscaleAll}
       />
       <main>
         <Storyboard
