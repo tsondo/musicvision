@@ -1,6 +1,6 @@
 # MusicVision — Future Plans
 
-**Last updated:** 2026-02-26
+**Last updated:** 2026-03-04
 
 ---
 
@@ -48,13 +48,78 @@ Users can enter at any panel with their own content — write lyrics by hand, br
 
 ---
 
+## Current Pipeline: What's Not Built Yet
+
+### Lip Sync Post-Processing (Stage 3.5)
+
+**Status:** Spec complete ([LIP_SYNC_SPEC.md](LIP_SYNC_SPEC.md)), needs ComfyUI validation then implementation.
+
+Per-scene `lip_sync_mode` field (`off | in_process | post`) enables singing in video engines that lack native audio conditioning (LTX-2, future engines). LatentSync 1.6 (ByteDance) is the primary post-processing engine — 512×512 face region, diffusion-based, ~18 GB VRAM inference. Runs as Stage 3.5 between video generation and upscaling.
+
+Pipeline flow: Video engine generates scene → isolated vocals via Kim_Vocal_2 or Demucs → LatentSync applies lip sync → upscaler processes the result.
+
+**Before implementation:**
+- Validate LatentSync 1.6 in ComfyUI on an LTX-2-generated clip with vocal audio
+- Test quality on AI-generated faces (all benchmarks are on real human video)
+- Assess singing vs speech quality (LatentSync trained primarily on speech)
+- Subprocess isolation matching the HVA pattern (avoid dependency conflicts)
+
+### Frontend Refinements
+
+React storyboard is implemented with scene grid, preview panel, per-scene approval/regeneration, and engine selection. Remaining work:
+
+- **Waveform display** with scene boundary visualization and editing
+- **Drag-to-reorder scenes** and renumber
+- **Assembly & export controls** in the UI
+- **Per-scene lip sync mode toggle** (off / in_process / post)
+- **Per-scene engine assignment** in the UI (backend supports it, UI doesn't expose it yet)
+
+### Progress & Reliability
+
+- **Progress/status tracking** — no WebSocket or SSE for long-running generation jobs; API endpoints are synchronous. A 50-scene video gen blocks for hours with no progress feedback.
+- **Partial failure recovery** — if video generation fails at scene 22 of 50, the exception propagates and scenes 23–50 are never attempted. Already-generated clips survive on disk. Workaround: `--scene-ids` CLI flag. Needs a proper job/resume model with per-scene status tracking.
+- **Render time estimation** — no upfront time estimate for users before committing to a full render.
+
+### Transitions & Effects
+
+- **Scene transitions** — hard cuts only today. Future: AI-generated transitions, crossfades, dissolves between scenes.
+- **Batch parallelism** — scenes generate sequentially. Future: concurrent generation across multiple GPUs or cloud workers.
+
+---
+
+## Platform Expansion
+
+### Cloud CUDA (A100 / H100 / H200)
+
+**Status:** Planned, ~2h effort. See [PLATFORM_SUPPORT_PLAN.md](PLATFORM_SUPPORT_PLAN.md).
+
+Mostly works today. Two gaps: `recommend_tier()` doesn't offer FP16 for single high-VRAM GPUs (≥48 GB), and FLUX applies unnecessary CPU offload on 80 GB+ cards. Single-GPU configs are simpler than the consumer two-GPU split — no model splitting needed.
+
+Future: Dockerfile + weight caching strategy for cold starts. FSDP multi-GPU sharding for FP16Loader (~8–12 hours, deferred).
+
+### Apple Silicon MPS (M-series Mac)
+
+**Status:** Planned, ~9–12h effort. See [PLATFORM_SUPPORT_PLAN.md](PLATFORM_SUPPORT_PLAN.md).
+
+Does not work today. Blocking issues: RoPE float64/complex128 ops not supported on MPS, FP8/quanto not available. Preview tier (1.7B model) is the initial target. GGUF tiers on ≥32 GB RAM deferred to Phase 2.
+
+MLX would offer 1.5–2× better throughput than MPS+PyTorch but requires a full inference stack rewrite (~3–5 weeks). Out of scope for now.
+
+### Dependency Simplification
+
+- **Drop `flash_attn`** — Native SDPA on PyTorch 2.6+ (currently 2.10.x) is equivalent on Ampere/Hopper/Blackwell. Eliminates build friction, simplifies containers, one fewer binary dependency. SDPA fallback already works in all vendored code.
+
+---
+
 ## What Transfers from MusicVision
 
 - **Style sheet system** — characters, props, settings with LoRA paths are the embryo of a full asset consistency system
-- **Four-stage pipeline pattern** — intake → asset generation → animation → assembly generalizes directly to other media types
+- **Five-stage pipeline pattern** — intake → image gen → video gen → upscale → assembly generalizes directly to other media types
 - **Pipeline/UI separation** — core modules are UI-agnostic, enabling future frontends without rewriting logic
 - **LLM integration with graceful degradation** — Claude API / local vLLM / manual fallback pattern works for any creative generation step
 - **Config-driven projects** — YAML/JSON project files, Pydantic models, ProjectService lifecycle
+- **Per-scene engine selection** — different engines per scene, extensible to different generation backends per panel/shot
+- **Frame-accurate alignment system** — integer frame counts as authoritative duration, frame-first math eliminates drift
 
 ---
 
@@ -132,7 +197,7 @@ Story Bible → Panel Layout → Panel Images → Animation → Assembled Video
 
 - **Composition constraints**: framing, character placement, speech bubbles, panel borders
 - **User review checkpoint**: cheap to generate, easy to iterate before expensive video rendering
-- **Animation input**: each panel is essentially a storyboard frame — "bring this panel to life" is exactly what HuMo TIA mode does
+- **Animation input**: each panel is essentially a storyboard frame — "bring this panel to life" is exactly what video engines do with reference images
 - **Standalone output**: manga / visual novel is a valid end product, not just an intermediate step
 
 ### Panel Generation Requirements
@@ -152,7 +217,7 @@ Story Bible → Panel Layout → Panel Images → Animation → Assembled Video
 | **Visual novel** | Static panels + dialogue + choices | Story model + panel generation |
 | **Manga / comic** | Laid-out pages with panels and speech bubbles | Story model + panel generation + layout |
 | **Animated slideshow** | Panels with Ken Burns / parallax motion + audio | + simple animation |
-| **Music video** | Full AI video generation synced to music | + HuMo video generation (current MusicVision) |
+| **Music video** | Full AI video generation synced to music | + video generation (current MusicVision) |
 | **Anime / cartoon** | Scene-by-scene animated video with dialogue | + video generation + TTS / voice acting |
 
 Each format is a progressively deeper pass through the pipeline. Users can stop at any stage and get a usable output.
@@ -161,11 +226,18 @@ Each format is a progressively deeper pass through the pipeline. Users can stop 
 
 ## Development Sequencing
 
-### Phase 1: Validate MusicVision (current)
-- Complete first GPU integration test
-- Generate real music videos end-to-end
-- Build the frontend (storyboard UI)
-- Observe pain points around consistency and narrative flow
+### Phase 1: Validate MusicVision ✅ (mostly complete)
+- ✅ All five pipeline stages code-complete and GPU-tested
+- ✅ Three video engines: HunyuanVideo-Avatar (primary), LTX-Video 2 (cinematic), HuMo (back burner)
+- ✅ Three upscalers: SeedVR2 (faces), LTX Spatial (latent), Real-ESRGAN (fast)
+- ✅ Two image engines: Z-Image (ungated, fast) and FLUX (LoRA support)
+- ✅ React storyboard with scene review, approval, regeneration
+- ✅ CLI and REST API for all stages
+- ✅ Frame-accurate alignment system, per-scene engine selection
+- ✅ End-to-end storyboard test passed (2026-03-01)
+- 🔲 Lip sync post-processing (Stage 3.5) — spec complete, needs implementation
+- 🔲 Progress feedback (SSE/WebSocket)
+- 🔲 Platform expansion (cloud + MPS)
 
 ### Phase 1.5: Integrated Creation App
 - Wrap lyric generation (vLLM) + AceStep + MusicVision into a single multi-panel app
@@ -183,12 +255,12 @@ Each format is a progressively deeper pass through the pipeline. Users can stop 
 ### Phase 3: Panel / Manga Generator
 - Panel layout engine (grid templates + AI-assisted composition)
 - Speech bubble and text overlay system
-- Share image generation modules with MusicVision (FLUX + LoRA)
+- Share image generation modules with MusicVision (FLUX/Z-Image + LoRA)
 - Visual novel export (static panels + dialogue trees)
 - Manga page export (PDF / image sequence)
 
 ### Phase 4: Animation from Panels
-- Panel → video using HuMo TIA (or successor models)
+- Panel → video using current video engines (or successors)
 - Camera motion inference from panel composition
 - Transition generation between scenes (not just hard cuts)
 - TTS integration for dialogue (optional)
@@ -202,6 +274,15 @@ Each format is a progressively deeper pass through the pipeline. Users can stop 
 
 ---
 
+## Models to Watch
+
+- **Wan 2.2** — MoE architecture splits denoising across timesteps into specialized experts. No audio conditioning, but the efficiency approach is relevant for consumer hardware.
+- **LTX-2 evolution** — Already integrated. Native audio+video generation in a single pass is unique. Quality and controllability will improve with newer checkpoints.
+- **LatentSync** — Lip sync post-processing. v1.6 is current (512×512, diffusion-based). Watch for singing-specific improvements and higher resolution support.
+- **MuseTalk** — Real-time lip sync (single-step, 256×256). Useful as a fast preview engine if quality gap with LatentSync closes.
+
+---
+
 ## Key Design Principles
 
 1. **Modular pipeline stages** — every stage produces a usable intermediate artifact
@@ -210,6 +291,7 @@ Each format is a progressively deeper pass through the pipeline. Users can stop 
 4. **Config-driven projects** — everything reproducible from project files; no hidden state
 5. **Progressive depth** — users can stop at script, panels, or full video; each level adds value
 6. **Fully local option** — every stage can run without external APIs using vLLM + local models
+7. **Frame-first math** — integer frame counts as the authoritative duration unit; derive seconds from frames, never the reverse
 
 ---
 
@@ -221,3 +303,5 @@ Each format is a progressively deeper pass through the pipeline. Users can stop 
 - **Style transfer at scale**: One style LoRA per project, or dynamic style conditioning that adapts per scene?
 - **Interactive narratives**: How does branching (visual novel choices) interact with the linear video pipeline?
 - **Lyric-melody alignment**: Can the LLM learn to write lyrics with syllable counts and stress patterns that work well with AceStep's melody generation?
+- **Lip sync on AI faces**: LatentSync is benchmarked on real human video. Quality on FLUX/Z-Image-generated characters is unknown and needs testing.
+- **Singing vs speech**: Lip sync models are trained primarily on speech. Singing involves wider mouth openings, sustained vowels, and different temporal patterns. The `lips_expression` parameter helps but may not fully cover this.
