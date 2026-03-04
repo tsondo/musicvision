@@ -92,6 +92,8 @@ Weight location env vars (for team setups with shared storage):
 - `HF_HOME` — HuggingFace hub cache for FLUX/Z-Image (default: `~/.cache/huggingface`)
 - `HVA_REPO_DIR` — HunyuanVideo-Avatar repo path (no default, must be set)
 - `HVA_VENV_PYTHON` — HVA venv python (auto-derived from `HVA_REPO_DIR/.venv/bin/python`)
+- `SEEDVR2_REPO_DIR` — SeedVR2 repo path (no default, must be set for SeedVR2 upscaler)
+- `SEEDVR2_VENV_PYTHON` — SeedVR2 venv python (auto-derived from `SEEDVR2_REPO_DIR/.venv/bin/python`)
 
 PyTorch: 2.10.0+cu128 (upgraded for RTX 5090 sm_120 support). Do not downgrade.
 

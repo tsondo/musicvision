@@ -79,11 +79,17 @@ class SeedVR2Engine(UpscaleEngine):
         cmd = [self._venv_python, str(wrapper)]
         log.info("Running SeedVR2: %s → %s", input.video_path.name, input.output_path.name)
 
+        env = os.environ.copy()
+        env["SEEDVR2_REPO_DIR"] = str(self._repo_dir)
+        env["PYTHONUNBUFFERED"] = "1"
+        env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:512")
+
         result = subprocess.run(
             cmd,
             input=json.dumps(request),
             capture_output=True, text=True,
             cwd=str(self._repo_dir),
+            env=env,
             timeout=1800,  # 30 min timeout
         )
 

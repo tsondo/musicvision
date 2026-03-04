@@ -3,7 +3,7 @@
 #
 # Prerequisites:
 #   - WSL2 with Ubuntu 22.04+ (or native Linux)
-#   - NVIDIA driver + CUDA toolkit 12.4+ installed
+#   - NVIDIA driver + CUDA toolkit 12.8+ installed
 #   - uv installed: curl -LsSf https://astral.sh/uv/install.sh | sh
 #
 # Usage:
@@ -13,7 +13,10 @@
 set -euo pipefail
 
 PYTHON_VERSION="3.11"
-CUDA_VERSION="cu124"
+CUDA_VERSION="cu128"
+TORCH_VERSION="2.10.0"
+TORCHVISION_VERSION="0.25.0"
+TORCHAUDIO_VERSION="2.10.0"
 
 echo "╔══════════════════════════════════════╗"
 echo "║   MusicVision Environment Setup      ║"
@@ -60,17 +63,43 @@ echo "Creating Python ${PYTHON_VERSION} environment..."
 uv venv --python ${PYTHON_VERSION}
 
 echo ""
-echo "Installing PyTorch (CUDA ${CUDA_VERSION})..."
-uv pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
+echo "Installing PyTorch ${TORCH_VERSION} (CUDA ${CUDA_VERSION})..."
+uv pip install \
+    torch==${TORCH_VERSION} \
+    torchvision==${TORCHVISION_VERSION} \
+    torchaudio==${TORCHAUDIO_VERSION} \
     --index-url https://download.pytorch.org/whl/${CUDA_VERSION}
-
-echo ""
-echo "Installing flash_attn..."
-uv pip install flash_attn==2.6.3
 
 echo ""
 echo "Installing MusicVision (editable + all extras)..."
 uv pip install -e ".[ml,dev]"
+
+echo ""
+echo "Installing Real-ESRGAN (video upscaler)..."
+uv pip install realesrgan
+
+echo ""
+echo "Installing audio separator..."
+pip install "audio-separator[gpu]" 2>/dev/null || echo "⚠ audio-separator install failed (onnxruntime conflict — install separately)"
+
+echo ""
+echo "flash_attn is optional (SDPA fallback available). Install if nvcc is present:"
+if command -v nvcc &>/dev/null; then
+    echo "  Installing flash_attn..."
+    uv pip install flash-attn --no-build-isolation || echo "⚠ flash_attn build failed — SDPA will be used as fallback"
+else
+    echo "  Skipping (no nvcc). Install manually: pip install flash-attn --no-build-isolation"
+fi
+
+# --- .env ---
+
+echo ""
+if [ ! -f .env ]; then
+    cp .env.example .env
+    echo "✓ Created .env from .env.example — edit it to set your tokens and paths"
+else
+    echo "✓ .env already exists"
+fi
 
 # --- Verify ---
 
@@ -89,7 +118,12 @@ try:
     import flash_attn
     print(f'  flash_attn: {flash_attn.__version__}')
 except ImportError:
-    print('  flash_attn: not installed')
+    print('  flash_attn: not installed (using PyTorch SDPA fallback)')
+try:
+    import realesrgan
+    print(f'  realesrgan: {realesrgan.__version__}')
+except ImportError:
+    print('  realesrgan: not installed')
 "
 
 echo ""
@@ -97,13 +131,17 @@ echo "Running tests..."
 uv run pytest tests/ -v --tb=short
 
 echo ""
-echo "╔══════════════════════════════════════════╗"
-echo "║  Setup complete!                         ║"
-echo "║                                          ║"
-echo "║  Activate:  source .venv/bin/activate    ║"
-echo "║  Or prefix: uv run <command>             ║"
-echo "║                                          ║"
-echo "║  CLI:       uv run musicvision --help    ║"
-echo "║  Server:    uv run musicvision serve DIR ║"
-echo "║  API docs:  http://localhost:8000/docs   ║"
-echo "╚══════════════════════════════════════════╝"
+echo "╔══════════════════════════════════════════════════════════════════╗"
+echo "║  Setup complete!                                               ║"
+echo "║                                                                ║"
+echo "║  Activate:  source .venv/bin/activate                          ║"
+echo "║  Or prefix: uv run <command>                                   ║"
+echo "║                                                                ║"
+echo "║  CLI:       uv run musicvision --help                          ║"
+echo "║  Server:    uv run musicvision serve DIR                       ║"
+echo "║  API docs:  http://localhost:8000/docs                         ║"
+echo "║                                                                ║"
+echo "║  External engines (separate venvs — see README for setup):     ║"
+echo "║    HunyuanVideo-Avatar: set HVA_REPO_DIR in .env              ║"
+echo "║    SeedVR2 upscaler:    set SEEDVR2_REPO_DIR in .env          ║"
+echo "╚══════════════════════════════════════════════════════════════════╝"

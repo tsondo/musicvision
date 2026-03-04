@@ -178,6 +178,7 @@ Copy `.env.example` to `.env` and configure:
 | `OPENAI_MODEL` | If using vLLM | e.g. `Qwen/Qwen2.5-32B-Instruct-AWQ` |
 | `MUSICVISION_WEIGHTS_DIR` | No | Override model cache dir (default: `~/.cache/musicvision/weights`) |
 | `HVA_REPO_DIR` | For HunyuanVideo-Avatar | Path to cloned HVA repo |
+| `SEEDVR2_REPO_DIR` | For SeedVR2 upscaler | Path to cloned SeedVR repo |
 
 ---
 
