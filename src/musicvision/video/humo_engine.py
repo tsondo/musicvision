@@ -111,6 +111,7 @@ class HumoEngine:
         self.config = config
         self.device_map = device_map
         self._bundle: HumoModelBundle | None = None
+        self._zero_vae: "Any" = None  # cached VAE encoding of black frame, on CPU
 
     @property
     def _is_dual_gpu(self) -> bool:
@@ -193,6 +194,12 @@ class HumoEngine:
             tier.value, self.config.block_swap_count, self.config.resolution,
         )
         self._bundle = loader.load(self.config, self.device_map)
+
+        # Pre-compute zero_vae: VAE encoding of a black frame.
+        # The original HuMo uses pre-computed zero_vae_129frame.pt for this.
+        # We compute it once here and cache on CPU so _encode_image() can tile it.
+        self._compute_zero_vae()
+
         log.info("HuMo engine ready — tier: %s", tier.value)
 
     def unload(self) -> None:
@@ -236,18 +243,18 @@ class HumoEngine:
         )
 
         # Step 1-3: encode conditioning signals sequentially.
-        # On single-GPU setups, always offload T5/Whisper to CPU between uses
-        # to free ~9 GB for VAE / DiT activations.
-        # On dual-GPU setups, only offload if encoder GPU free VRAM < 2 GB
-        # (the VAE image encode + Whisper audio encode need working memory).
-        text_embeds  = self._encode_text(inp.text_prompt)
-        if self._should_offload():
-            self._offload("t5")
+        # Offload each encoder after use to maximize VRAM headroom on the
+        # encoder GPU (16 GB 4080). T5 ~9 GB, VAE ~1 GB, Whisper ~3 GB —
+        # keeping all three loaded simultaneously is tight. Sequential
+        # load/encode/offload matches ComfyUI's approach.
+        text_embeds = self._encode_text(inp.text_prompt)
+        self._offload("t5")
 
-        image_cond   = self._encode_image(inp.reference_image, n_frames)
+        image_cond = self._encode_image(inp.reference_image, n_frames)
+        self._offload("vae")
+
         audio_embeds = self._encode_audio(inp.audio_segment, n_frames)
-        if self._should_offload():
-            self._offload("whisper")
+        self._offload("whisper")
 
         # Resolve seed: use provided seed or generate a random one so the result
         # is always reproducible.  The used seed is recorded in HumoOutput.
@@ -263,12 +270,10 @@ class HumoEngine:
             seed=seed,
         )
 
-        # Free encoder GPU VRAM before VAE decode (T5 + Whisper no longer needed)
-        self._offload("t5")
-        self._offload("whisper")
-
-        # Step 6-7: decode and save
+        # Step 6-7: decode and save — reload VAE on encoder GPU for decode
+        self._reload("vae")
         frames = self._decode_latent(video_latent)
+        self._offload("vae")
         _save_mp4(frames, inp.output_path, fps=FPS)
 
         # Step 8: Mux source audio into clip for lip sync preview
@@ -434,7 +439,10 @@ class HumoEngine:
         # WanT5Encoder: ._model.model is the nn.Module (T5Encoder)
         if hasattr(model, '_model') and hasattr(model._model, 'model'):
             return model._model.model
-        # WanVideoVAE: .model is the nn.Module
+        # WanVideoVAE: ._vae is the nn.Module (WanVAE)
+        if hasattr(model, '_vae') and model._vae is not None:
+            return model._vae
+        # WanVideoVAE (alternate): .model is the nn.Module
         if hasattr(model, 'model'):
             return model.model
         # Whisper encoder: is directly an nn.Module
@@ -450,6 +458,9 @@ class HumoEngine:
         if nn_mod is None:
             return
         nn_mod.to("cpu")
+        # Update VAE wrapper's device so encode()/decode() route inputs correctly
+        if name == "vae" and self._bundle.vae is not None:
+            self._bundle.vae.device = torch.device("cpu")
         torch.cuda.empty_cache()
         gc.collect()
         log.debug("Offloaded %s to CPU", name)
@@ -472,7 +483,52 @@ class HumoEngine:
         except StopIteration:
             return
         nn_mod.to(device)
+        # Update VAE wrapper's device so encode()/decode() route inputs correctly
+        if name == "vae" and self._bundle.vae is not None:
+            self._bundle.vae.device = torch.device(device)
         log.debug("Reloaded %s to %s", name, device)
+
+    # ------------------------------------------------------------------
+    # Internal: zero_vae pre-computation
+    # ------------------------------------------------------------------
+
+    def _compute_zero_vae(self) -> None:
+        """
+        Compute VAE encoding of a single black frame and cache on CPU.
+
+        The original HuMo loads pre-computed zero_vae_129frame.pt / zero_vae_720p_161frame.pt
+        which are VAE-encoded black frames. The VAE has non-zero bias, so the encoding
+        of a black pixel frame is NOT torch.zeros — using literal zeros shifts the
+        conditioning baseline and corrupts denoising.
+
+        We compute one frame here and tile it as needed in _encode_image().
+        """
+        import torch
+
+        if self._bundle is None or self._bundle.vae is None:
+            log.warning("VAE not loaded — cannot compute zero_vae")
+            return
+
+        vae = self._bundle.vae
+        enc_device = self._bundle.encoder_device
+        H, W = self.config.height, self.config.width
+
+        log.info("Computing zero_vae (VAE-encoded black frame at %dx%d)...", W, H)
+        # Black frame: [1, 3, H, W] all zeros (0.0 = black in [0,1] range)
+        black_frame = torch.zeros(1, 3, H, W, device=enc_device)
+
+        with torch.no_grad():
+            # encode_image handles the [0,1] → [-1,1] normalization internally
+            zero_latent = vae.encode_image(black_frame)  # [1, 16, 1, lat_h, lat_w]
+
+        # Cache on CPU to avoid occupying GPU memory
+        self._zero_vae = zero_latent.cpu()
+        log.info(
+            "zero_vae cached: shape %s, mean=%.6f, std=%.6f",
+            list(self._zero_vae.shape),
+            self._zero_vae.float().mean().item(),
+            self._zero_vae.float().std().item(),
+        )
 
     # ------------------------------------------------------------------
     # Internal: conditioning encoders
@@ -528,14 +584,21 @@ class HumoEngine:
         img_t = img_t.to(enc_device)
 
         # VAE encode the reference image
+        self._reload("vae")
         with torch.no_grad():
             img_latent = vae.encode_image(img_t)  # [1, 16, 1, lat_h, lat_w]
 
-        # TODO: Bug 12 — Original HuMo uses pre-computed zero_vae_129frame.pt
-        # (VAE-encoded black frames) instead of torch.zeros for non-ref latent
-        # positions. Computing on-the-fly OOMs on the 4080 with Whisper loaded.
-        # For now, use torch.zeros which gives "recognizable but noisy" output.
-        # Fix: either pre-compute zero_vae once, or offload Whisper first.
+        # Get zero_vae (pre-computed VAE encoding of black frame).
+        # Tile to needed temporal length and place on encoder device.
+        if self._zero_vae is not None:
+            # zero_vae is [1, 16, 1, lat_h, lat_w] on CPU — tile to needed frames
+            zv = self._zero_vae.to(device=enc_device, dtype=img_latent.dtype)
+        else:
+            # Fallback: compute on-the-fly (shouldn't happen if load() succeeded)
+            log.warning("zero_vae not cached — computing on-the-fly")
+            black = torch.zeros(1, 3, H, W, device=enc_device)
+            with torch.no_grad():
+                zv = vae.encode_image(black)
 
         # Build positive image condition: [1, 20, total_lat_f, lat_h, lat_w]
         # Channel layout: [4 mask | 16 latent]
@@ -544,16 +607,18 @@ class HumoEngine:
         mask_pos = torch.zeros(1, 4, total_lat_f, lat_h, lat_w, device=enc_device)
         mask_pos[:, :, -1, :, :] = 1.0  # ref frame at last position
 
-        # Latent: reference image at last position, zeros for noise frames
-        latent_frames = torch.zeros(1, 16, total_lat_f, lat_h, lat_w, device=enc_device)
-        latent_frames[:, :, -1, :, :] = img_latent[:, :, 0, :, :]
+        # Latent: zero_vae for noise frames, ref image at last position
+        # Original HuMo: y_c = cat([zero_vae[:, :(total-1)], ref_latent], dim=1)
+        zero_tiled = zv.expand(-1, -1, total_lat_f - 1, -1, -1)  # [1, 16, total_lat_f-1, lat_h, lat_w]
+        latent_frames = torch.cat([zero_tiled, img_latent], dim=2)  # [1, 16, total_lat_f, lat_h, lat_w]
 
         image_cond_pos = torch.cat([mask_pos, latent_frames], dim=1)  # [1, 20, total_lat_f, lat_h, lat_w]
 
-        # Negative: same mask structure (slot exists) but zero latent content.
+        # Negative: same mask, ALL positions = zero_vae (including ref slot)
+        # Original HuMo: y_null = zero_vae[:, :total], then cat with mask
         mask_neg = torch.zeros(1, 4, total_lat_f, lat_h, lat_w, device=enc_device)
         mask_neg[:, :, -1, :, :] = 1.0  # same mask position as positive
-        latent_neg = torch.zeros(1, 16, total_lat_f, lat_h, lat_w, device=enc_device)
+        latent_neg = zv.expand(-1, -1, total_lat_f, -1, -1)  # [1, 16, total_lat_f, lat_h, lat_w]
         image_cond_neg = torch.cat([mask_neg, latent_neg], dim=1)
 
         return image_cond_pos, image_cond_neg
