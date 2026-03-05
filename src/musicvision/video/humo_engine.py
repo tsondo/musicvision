@@ -543,9 +543,11 @@ class HumoEngine:
         dit_device = self._bundle.dit_device
         enc_device = self._bundle.encoder_device
 
-        # 97 frames is the maximum clip length for HuMo (→ 25 latent frames).
-        n_black_frames = 97
-        log.info("Computing zero_vae (97-frame black video at %dx%d on %s)...", W, H, dit_device)
+        # We need total_lat_f = lat_f + 1 = 26 latent frames (25 noise + 1 ref slot).
+        # 129 frames → 33 latent frames (matching original's zero_vae_129frame.pt),
+        # giving plenty of headroom for any clip length.
+        n_black_frames = 129
+        log.info("Computing zero_vae (129-frame black video at %dx%d on %s)...", W, H, dit_device)
 
         # Temporarily move VAE to DiT GPU for this computation
         vae_nn = self._get_nn_module("vae")
