@@ -547,7 +547,7 @@ async def regenerate_video(scene_id: str, req: RegenerateVideoRequest) -> Scene:
     else:
         from musicvision.utils.gpu import detect_devices
 
-        config = HumoConfig.from_quality("preview")
+        config = proj.config.humo.model_copy()
         device_map = detect_devices()
         engine = create_video_engine(config, device_map=device_map, engine_type=engine_type)
 
