@@ -180,14 +180,15 @@ class HumoAudioEncoder:
 
     def _extract_whisper_features(self, wav: np.ndarray) -> "torch.Tensor":
         """
-        Run the Whisper encoder on raw audio and return all hidden states.
+        Run the Whisper encoder on raw audio and return all hidden states,
+        truncated to the actual audio length (excluding Whisper's 30-second padding).
 
         Args:
             wav: Mono float32 waveform @ 16 kHz.
 
         Returns:
-            Tensor [1, whisper_seq_len, 33, 1280]:
-              - dim 1: temporal sequence (~50 fps)
+            Tensor [1, actual_seq_len, 33, 1280]:
+              - dim 1: temporal sequence (~50 fps), truncated to real audio
               - dim 2: layer index (0 = embedding output, 1–32 = transformer layers)
               - dim 3: hidden dimension (1280 for whisper-large-v3)
         """
@@ -204,39 +205,61 @@ class HumoAudioEncoder:
             )
             fe = WhisperFeatureExtractor()
 
-        inputs = fe(
-            wav,
-            sampling_rate=_WHISPER_SR,
-            return_tensors="pt",
-        )
-        # Match Whisper model dtype (float16) to avoid conv1d input/bias mismatch
-        model_dtype = next(self.whisper_model.parameters()).dtype
-        input_features = inputs["input_features"].to(
-            device=self.device, dtype=model_dtype
-        )
-        # input_features: [1, n_mels=128, time_frames=3000]
+        # Compute actual audio length in Whisper encoder frames BEFORE padding.
+        # Whisper has 2 conv layers (stride 2 each) → 640 samples per frame at 16kHz.
+        # The encoder output is at 50 fps but the original HuMo uses audio_len * 2
+        # because there are 2 Whisper frames per 640-sample window.
+        audio_len = len(wav) // 640  # number of 640-sample windows
+        actual_seq_len = audio_len * 2  # Whisper encoder frames for real audio
 
+        # Process audio in 30-second chunks (matching original HuMo).
+        # WhisperFeatureExtractor pads to 30s (480,000 samples = 3000 mel frames).
+        # For clips <30s this is a single chunk; for longer audio we'd need multiple.
+        chunk_size = 750 * 640  # 480,000 samples = 30 seconds
+        mel_chunks = []
+        for i in range(0, len(wav), chunk_size):
+            chunk = wav[i:i + chunk_size]
+            mel = fe(chunk, sampling_rate=_WHISPER_SR, return_tensors="pt").input_features
+            mel_chunks.append(mel)
+        input_features = torch.cat(mel_chunks, dim=-1)
+
+        # Run Whisper encoder in float32 (matching original HuMo)
+        input_features = input_features.to(device=self.device, dtype=torch.float32)
+
+        # Process encoder in chunks of 3000 mel frames (matching original)
+        mel_window = 3000
+        all_prompts = []
         with torch.no_grad():
-            enc_out = self.whisper_model(
-                input_features,
-                output_hidden_states=True,
-            )
+            for i in range(0, input_features.shape[-1], mel_window):
+                chunk_mel = input_features[:, :, i:i + mel_window]
+                enc_out = self.whisper_model(
+                    chunk_mel,
+                    output_hidden_states=True,
+                )
+                # Stack all layers: each is [1, T, 1280] → [1, T, 33, 1280]
+                stacked = torch.stack(list(enc_out.hidden_states), dim=2)
+                all_prompts.append(stacked)
 
-        # enc_out.hidden_states is a tuple of (embedding_output, layer_1, …, layer_32)
-        # Length = 33 for whisper-large-v3
-        all_hidden = enc_out.hidden_states
-        if len(all_hidden) != _WHISPER_NUM_HIDDEN:
+        stacked = torch.cat(all_prompts, dim=1)
+
+        # Truncate to actual audio length — remove features from Whisper's
+        # 30-second zero-padding.  This is critical: without truncation, ~87%
+        # of features for a 3.88s clip are garbage from padding silence.
+        stacked = stacked[:, :actual_seq_len, :, :]
+
+        if len(stacked.shape) == 4 and stacked.shape[2] != _WHISPER_NUM_HIDDEN:
             log.warning(
                 "Expected %d Whisper hidden states, got %d — proceeding anyway.",
                 _WHISPER_NUM_HIDDEN,
-                len(all_hidden),
+                stacked.shape[2],
             )
 
-        # Stack: each element is [1, seq_len, 1280]
-        stacked = torch.stack(
-            [all_hidden[i] for i in range(len(all_hidden))], dim=2
+        log.debug(
+            "Whisper features: raw_seq=%d, truncated_seq=%d (audio_len=%d)",
+            all_prompts[0].shape[1] if all_prompts else 0,
+            stacked.shape[1],
+            audio_len,
         )
-        # stacked: [1, seq_len, num_layers, 1280]
         return stacked
 
     # ------------------------------------------------------------------
@@ -307,7 +330,7 @@ class HumoAudioEncoder:
             x.float(),
             size=target_frames,
             mode="linear",
-            align_corners=False,
+            align_corners=True,  # must match original HuMo's linear_interpolation_fps
         ).to(bands.dtype)
         # x: [1, 6400, target_frames]
 

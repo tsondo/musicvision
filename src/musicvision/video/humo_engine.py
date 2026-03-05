@@ -70,6 +70,15 @@ MAX_FRAMES   = _HUMO_CONSTRAINTS.max_frames   # 97
 FPS          = _HUMO_CONSTRAINTS.fps            # 25
 MAX_DURATION = _HUMO_CONSTRAINTS.max_seconds    # 3.88
 
+# Negative prompt from original HuMo inference config (Chinese).
+# Describes common generation artifacts to steer CFG away from.
+_NEGATIVE_PROMPT = (
+    "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，"
+    "整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，"
+    "画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，"
+    "静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
+)
+
 
 # ---------------------------------------------------------------------------
 # Input / Output types
@@ -507,14 +516,16 @@ class HumoEngine:
 
     def _compute_zero_vae(self) -> None:
         """
-        Compute VAE encoding of a single black frame and cache on CPU.
+        Compute VAE encoding of a multi-frame all-black video and cache on CPU.
 
-        The original HuMo loads pre-computed zero_vae_129frame.pt / zero_vae_720p_161frame.pt
-        which are VAE-encoded black frames. The VAE has non-zero bias, so the encoding
-        of a black pixel frame is NOT torch.zeros — using literal zeros shifts the
-        conditioning baseline and corrupts denoising.
+        The original HuMo loads pre-computed zero_vae_129frame.pt / zero_vae_720p_161frame.pt.
+        The causal 3D convolution in the VAE produces DIFFERENT latent values at each
+        temporal position (earlier frames have less temporal context), so encoding a
+        single frame and tiling is WRONG — it gives identical values at every position
+        whereas the model was trained with position-dependent zero_vae values.
 
-        We compute one frame here and tile it as needed in _encode_image().
+        We encode a 97-frame black video (max HuMo clip length) → 25 latent frames,
+        then slice to the needed length in _encode_image().
         """
         import torch
 
@@ -526,13 +537,18 @@ class HumoEngine:
         enc_device = self._bundle.encoder_device
         H, W = self.config.height, self.config.width
 
-        log.info("Computing zero_vae (VAE-encoded black frame at %dx%d)...", W, H)
-        # Black frame: [1, 3, H, W] all zeros (0.0 = black in [0,1] range)
-        black_frame = torch.zeros(1, 3, H, W, device=enc_device)
+        # 97 frames is the maximum clip length for HuMo (→ 25 latent frames).
+        # The original uses 129-frame or 161-frame pre-computed files — longer than
+        # needed, but the extra is simply sliced off.  97 frames covers our max.
+        n_black_frames = 97
+        log.info("Computing zero_vae (97-frame black video at %dx%d)...", W, H)
+
+        # [1, 3, 97, H, W] all-black video in [0,1] range
+        black_video = torch.zeros(1, 3, n_black_frames, H, W, device=enc_device)
 
         with torch.no_grad():
-            # encode_image handles the [0,1] → [-1,1] normalization internally
-            zero_latent = vae.encode_image(black_frame)  # [1, 16, 1, lat_h, lat_w]
+            # encode handles the [0,1] → [-1,1] normalization internally
+            zero_latent = vae.encode(black_video)  # [1, 16, 25, lat_h, lat_w]
 
         # Cache on CPU to avoid occupying GPU memory
         self._zero_vae = zero_latent.cpu()
@@ -555,7 +571,7 @@ class HumoEngine:
         if self._bundle is None or self._bundle.t5 is None:
             raise RuntimeError("T5 encoder not loaded — call load() first")
         self._reload("t5")  # no-op if already on GPU
-        pos_embeds, neg_embeds = self._bundle.t5.encode_pair(prompt, "")
+        pos_embeds, neg_embeds = self._bundle.t5.encode_pair(prompt, _NEGATIVE_PROMPT)
         return pos_embeds, neg_embeds
 
     def _encode_image(self, image_path: Path, n_frames: int) -> "Any":
@@ -590,8 +606,24 @@ class HumoEngine:
         total_lat_f = lat_f + 1            # +1 for reference frame
         lat_h, lat_w = H // 8, W // 8
 
-        # Load and resize reference image
-        img = Image.open(image_path).convert("RGB").resize((W, H), Image.LANCZOS)
+        # Load and resize reference image — aspect-ratio-preserving + white padding
+        # to match original HuMo's load_image_latent_ref_id().
+        from PIL import ImageOps
+        img = Image.open(image_path).convert("RGB")
+        img_ratio = img.width / img.height
+        target_ratio = W / H
+        if img_ratio > target_ratio:
+            new_w = W
+            new_h = max(1, int(new_w / img_ratio))
+        else:
+            new_h = H
+            new_w = max(1, int(new_h * img_ratio))
+        img = img.resize((new_w, new_h), Image.LANCZOS)
+        delta_w = W - img.size[0]
+        delta_h = H - img.size[1]
+        padding = (delta_w // 2, delta_h // 2, delta_w - delta_w // 2, delta_h - delta_h // 2)
+        img = ImageOps.expand(img, padding, fill=(255, 255, 255))  # white padding
+
         img_np = np.array(img, dtype=np.float32) / 255.0
         img_t = torch.from_numpy(img_np).permute(2, 0, 1).unsqueeze(0)  # [1, 3, H, W]
         img_t = img_t.to(enc_device)
@@ -601,17 +633,26 @@ class HumoEngine:
         with torch.no_grad():
             img_latent = vae.encode_image(img_t)  # [1, 16, 1, lat_h, lat_w]
 
-        # Get zero_vae (pre-computed VAE encoding of black frame).
-        # Tile to needed temporal length and place on encoder device.
+        # Get zero_vae: pre-computed VAE encoding of multi-frame black video.
+        # The causal 3D VAE produces position-dependent latent values — each temporal
+        # position has different statistics.  We slice to the needed length.
+        need_zero_frames = total_lat_f - 1  # non-reference positions
         if self._zero_vae is not None:
-            # zero_vae is [1, 16, 1, lat_h, lat_w] on CPU — tile to needed frames
-            zv = self._zero_vae.to(device=enc_device, dtype=img_latent.dtype)
+            # zero_vae is [1, 16, 25, lat_h, lat_w] on CPU — slice to needed frames
+            zv_pos = self._zero_vae[:, :, :need_zero_frames, :, :].to(
+                device=enc_device, dtype=img_latent.dtype
+            )
+            zv_neg = self._zero_vae[:, :, :total_lat_f, :, :].to(
+                device=enc_device, dtype=img_latent.dtype
+            )
         else:
-            # Fallback: compute on-the-fly (shouldn't happen if load() succeeded)
-            log.warning("zero_vae not cached — computing on-the-fly")
+            # Fallback: compute single-frame tiled (shouldn't happen if load() succeeded)
+            log.warning("zero_vae not cached — using single-frame fallback (suboptimal)")
             black = torch.zeros(1, 3, H, W, device=enc_device)
             with torch.no_grad():
-                zv = vae.encode_image(black)
+                zv_single = vae.encode_image(black)
+            zv_pos = zv_single.expand(-1, -1, need_zero_frames, -1, -1)
+            zv_neg = zv_single.expand(-1, -1, total_lat_f, -1, -1)
 
         # Build positive image condition: [1, 20, total_lat_f, lat_h, lat_w]
         # Channel layout: [4 mask | 16 latent]
@@ -622,8 +663,7 @@ class HumoEngine:
 
         # Latent: zero_vae for noise frames, ref image at last position
         # Original HuMo: y_c = cat([zero_vae[:, :(total-1)], ref_latent], dim=1)
-        zero_tiled = zv.expand(-1, -1, total_lat_f - 1, -1, -1)  # [1, 16, total_lat_f-1, lat_h, lat_w]
-        latent_frames = torch.cat([zero_tiled, img_latent], dim=2)  # [1, 16, total_lat_f, lat_h, lat_w]
+        latent_frames = torch.cat([zv_pos, img_latent], dim=2)  # [1, 16, total_lat_f, lat_h, lat_w]
 
         image_cond_pos = torch.cat([mask_pos, latent_frames], dim=1)  # [1, 20, total_lat_f, lat_h, lat_w]
 
@@ -631,8 +671,7 @@ class HumoEngine:
         # Original HuMo: y_null = zero_vae[:, :total], then cat with mask
         mask_neg = torch.zeros(1, 4, total_lat_f, lat_h, lat_w, device=enc_device)
         mask_neg[:, :, -1, :, :] = 1.0  # same mask position as positive
-        latent_neg = zv.expand(-1, -1, total_lat_f, -1, -1)  # [1, 16, total_lat_f, lat_h, lat_w]
-        image_cond_neg = torch.cat([mask_neg, latent_neg], dim=1)
+        image_cond_neg = torch.cat([mask_neg, zv_neg], dim=1)
 
         return image_cond_pos, image_cond_neg
 
@@ -938,12 +977,13 @@ class HumoEngine:
         noise_latent = noise_latent.to(enc_device).to(torch.float16)
 
         with torch.no_grad():
-            pixels = vae.decode(noise_latent)  # [1, 3, T, H, W] in [0,1]
+            pixels = vae.decode(noise_latent)  # [1, 3, T, H, W] in [-1, 1]
 
         # Convert to (T, H, W, 3) uint8 on CPU (ready for ffmpeg pipe or torchvision)
+        # VAE output is [-1, 1] — map to [0, 1] before scaling to [0, 255].
         pixels = pixels.squeeze(0)           # [3, T, H, W]
         pixels = pixels.permute(1, 2, 3, 0)  # [T, H, W, 3]
-        pixels = (pixels.clamp(0, 1) * 255).to(torch.uint8).cpu()
+        pixels = (pixels.clamp(-1, 1).mul(0.5).add(0.5).mul(255)).to(torch.uint8).cpu()
 
         return pixels  # (T, H, W, 3) uint8, CPU
 
