@@ -534,24 +534,51 @@ class HumoEngine:
             return
 
         vae = self._bundle.vae
-        enc_device = self._bundle.encoder_device
         H, W = self.config.height, self.config.width
 
+        # Use the primary (DiT) GPU for this heavy one-time computation.
+        # Encoding 97 frames through the causal 3D VAE accumulates a large
+        # feature cache that can OOM on the 16GB encoder GPU.  The 32GB DiT
+        # GPU has plenty of headroom, and the result is cached on CPU anyway.
+        dit_device = self._bundle.dit_device
+        enc_device = self._bundle.encoder_device
+
         # 97 frames is the maximum clip length for HuMo (→ 25 latent frames).
-        # The original uses 129-frame or 161-frame pre-computed files — longer than
-        # needed, but the extra is simply sliced off.  97 frames covers our max.
         n_black_frames = 97
-        log.info("Computing zero_vae (97-frame black video at %dx%d)...", W, H)
+        log.info("Computing zero_vae (97-frame black video at %dx%d on %s)...", W, H, dit_device)
+
+        # Temporarily move VAE to DiT GPU for this computation
+        vae_nn = self._get_nn_module("vae")
+        original_vae_device = vae.device
+        if vae_nn is not None:
+            vae_nn.to(dit_device)
+        vae.device = dit_device
+        # Also move the normalization tensors
+        if vae._vae is not None:
+            vae._vae.mean = vae._vae.mean.to(dit_device)
+            vae._vae.std = vae._vae.std.to(dit_device)
+            vae._vae.scale = [vae._vae.mean, 1.0 / vae._vae.std]
 
         # [1, 3, 97, H, W] all-black video in [0,1] range
-        black_video = torch.zeros(1, 3, n_black_frames, H, W, device=enc_device)
+        black_video = torch.zeros(1, 3, n_black_frames, H, W, device=dit_device)
 
         with torch.no_grad():
-            # encode handles the [0,1] → [-1,1] normalization internally
             zero_latent = vae.encode(black_video)  # [1, 16, 25, lat_h, lat_w]
 
-        # Cache on CPU to avoid occupying GPU memory
+        # Cache on CPU
         self._zero_vae = zero_latent.cpu()
+        del black_video, zero_latent
+        torch.cuda.empty_cache()
+
+        # Move VAE back to encoder device
+        if vae_nn is not None:
+            vae_nn.to(enc_device)
+        vae.device = enc_device
+        if vae._vae is not None:
+            vae._vae.mean = vae._vae.mean.to(enc_device)
+            vae._vae.std = vae._vae.std.to(enc_device)
+            vae._vae.scale = [vae._vae.mean, 1.0 / vae._vae.std]
+
         log.info(
             "zero_vae cached: shape %s, mean=%.6f, std=%.6f",
             list(self._zero_vae.shape),
