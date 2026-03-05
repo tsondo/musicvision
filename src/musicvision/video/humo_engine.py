@@ -1006,13 +1006,14 @@ class HumoEngine:
         noise_latent = noise_latent.to(enc_device).to(torch.float16)
 
         with torch.no_grad():
-            pixels = vae.decode(noise_latent)  # [1, 3, T, H, W] in [-1, 1]
+            pixels = vae.decode(noise_latent)  # [1, 3, T, H, W] in [0, 1]
+            # Note: WanVideoVAE.decode() already maps [-1,1] → [0,1] internally
+            # via (out + 1) / 2.  Do NOT re-apply that conversion here.
 
-        # Convert to (T, H, W, 3) uint8 on CPU (ready for ffmpeg pipe or torchvision)
-        # VAE output is [-1, 1] — map to [0, 1] before scaling to [0, 255].
+        # Convert to (T, H, W, 3) uint8 on CPU
         pixels = pixels.squeeze(0)           # [3, T, H, W]
         pixels = pixels.permute(1, 2, 3, 0)  # [T, H, W, 3]
-        pixels = (pixels.clamp(-1, 1).mul(0.5).add(0.5).mul(255)).to(torch.uint8).cpu()
+        pixels = (pixels.clamp(0, 1) * 255).to(torch.uint8).cpu()
 
         return pixels  # (T, H, W, 3) uint8, CPU
 
