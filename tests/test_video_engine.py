@@ -195,17 +195,22 @@ class TestHumoConfig:
         cfg = HumoConfig()
         assert cfg.tier == HumoTier.FP8_SCALED
         assert cfg.model_size == "17B"
-        assert cfg.resolution == "720p"
-        assert cfg.height == 720
-        assert cfg.width == 1280
+        assert cfg.resolution == "544p"
+        assert cfg.height == 544
+        assert cfg.width == 960
         assert cfg.scale_a == 2.0
         assert cfg.scale_t == 7.5
-        assert cfg.denoising_steps == 50
+        assert cfg.denoising_steps == 30
 
     def test_720p_resolution(self):
         cfg = HumoConfig(resolution="720p")
         assert cfg.width == 1280
         assert cfg.height == 720
+
+    def test_544p_resolution(self):
+        cfg = HumoConfig(resolution="544p")
+        assert cfg.width == 960
+        assert cfg.height == 544
 
     def test_480p_resolution(self):
         cfg = HumoConfig(resolution="480p")

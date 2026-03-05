@@ -91,10 +91,10 @@ class HumoQuality(str, Enum):
     """
     Quality presets for HuMo video generation.
 
-    PREVIEW — 1.7B model + 480p + 10 steps: seconds per clip, for layout checks.
-    DRAFT   — FP8 14B + 480p + 15 steps: quick iteration with real model quality.
-    FAST    — FP8 14B + Lightx2V LoRA + 480p + 6 steps + CFG=1: ~5 min/clip.
-    FINAL   — FP8 14B + 720p + 50 steps: full quality for final render.
+    PREVIEW — FP8 14B + LoRA + 384p + 6 steps + CFG=1: ~48s/clip, fast iteration.
+    DRAFT   — FP8 14B + 480p + 15 steps: quick iteration with dual CFG.
+    FAST    — FP8 14B + LoRA + 384p + 6 steps + CFG=1: alias for PREVIEW.
+    FINAL   — FP8 14B + 544p + 30 steps: best quality (2x upscale → 1080p).
     """
     PREVIEW = "preview"
     DRAFT   = "draft"
@@ -187,10 +187,10 @@ class StyleSheet(BaseModel):
 
 class HumoConfig(BaseModel):
     tier: HumoTier = HumoTier.FP8_SCALED
-    resolution: str = "720p"          # "720p", "480p", or "384p" (688×384, Lightx2V distilled)
+    resolution: str = "544p"          # "720p", "544p", "480p", or "384p"
     scale_a: float = 2.0              # audio guidance strength (1.0–3.0)
     scale_t: float = 7.5              # text guidance strength (5.0–10.0)
-    denoising_steps: int = 50         # 30–40 faster, 50 best quality
+    denoising_steps: int = 30         # 6 with LoRA, 15–30 standard, 50 max quality
     shift: float = 8.0                # sigma schedule shift (higher → more high-noise steps)
     block_swap_count: int = 0         # DiT blocks to keep on CPU (0 = all on GPU)
     sub_clip_continuity: bool = True  # pass last frame of sub-clip N as reference for sub-clip N+1
@@ -209,7 +209,8 @@ class HumoConfig(BaseModel):
             quality = HumoQuality(quality)
         presets: dict[HumoQuality, dict] = {
             HumoQuality.PREVIEW: dict(
-                tier=HumoTier.PREVIEW, resolution="480p", denoising_steps=10,
+                tier=HumoTier.FP8_SCALED, resolution="384p", denoising_steps=6,
+                shift=8.0, scale_t=1.0, scale_a=1.0, lora="lightx2v_i2v_480p",
             ),
             HumoQuality.DRAFT: dict(
                 tier=HumoTier.FP8_SCALED, resolution="480p", denoising_steps=15,
@@ -219,7 +220,7 @@ class HumoConfig(BaseModel):
                 shift=8.0, scale_t=1.0, scale_a=1.0, lora="lightx2v_i2v_480p",
             ),
             HumoQuality.FINAL: dict(
-                tier=HumoTier.FP8_SCALED, resolution="720p", denoising_steps=50,
+                tier=HumoTier.FP8_SCALED, resolution="544p", denoising_steps=30,
             ),
         }
         params = presets[quality]
@@ -232,11 +233,11 @@ class HumoConfig(BaseModel):
 
     @property
     def height(self) -> int:
-        return {"720p": 720, "480p": 480, "384p": 384}.get(self.resolution, 720)
+        return {"720p": 720, "544p": 544, "480p": 480, "384p": 384}.get(self.resolution, 544)
 
     @property
     def width(self) -> int:
-        return {"720p": 1280, "480p": 832, "384p": 688}.get(self.resolution, 1280)
+        return {"720p": 1280, "544p": 960, "480p": 832, "384p": 688}.get(self.resolution, 960)
 
 
 class ImageGenConfig(BaseModel):
