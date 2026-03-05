@@ -223,13 +223,17 @@ class HumoAudioEncoder:
             mel_chunks.append(mel)
         input_features = torch.cat(mel_chunks, dim=-1)
 
-        # Run Whisper encoder in float32 (matching original HuMo)
-        input_features = input_features.to(device=self.device, dtype=torch.float32)
+        # Run Whisper encoder in float32 for precision (matching original HuMo).
+        # If the model is in fp16, use autocast to get float32 compute while
+        # keeping model weights in their native dtype.
+        model_dtype = next(self.whisper_model.parameters()).dtype
+        input_features = input_features.to(device=self.device, dtype=model_dtype)
 
         # Process encoder in chunks of 3000 mel frames (matching original)
         mel_window = 3000
         all_prompts = []
-        with torch.no_grad():
+        _dev_type = self.device.type if hasattr(self.device, "type") else "cuda"
+        with torch.no_grad(), torch.amp.autocast(_dev_type, dtype=torch.float32):
             for i in range(0, input_features.shape[-1], mel_window):
                 chunk_mel = input_features[:, :, i:i + mel_window]
                 enc_out = self.whisper_model(
