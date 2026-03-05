@@ -45,6 +45,8 @@ export interface Scene {
   video_prompt: string | null;
   video_prompt_user_override: string | null;
   video_clip: string | null;
+  video_width: number | null;
+  video_height: number | null;
   upscaled_clip: string | null;
   video_status: ApprovalStatus;
   video_engine: VideoEngineType | null;
@@ -188,4 +190,17 @@ export interface UpscaleResult {
   total?: number;
 }
 
-export type PipelineStage = "upload" | "intake" | "images" | "videos" | "upscale";
+export interface AssembleResult {
+  status: string;
+  rough_cut: string;
+  clip_count: number;
+  total_scenes: number;
+  duration_seconds: number;
+  video_duration_seconds: number;
+  drift_seconds: number;
+  output_dir: string;
+  edl?: string;
+  fcpxml?: string;
+}
+
+export type PipelineStage = "upload" | "intake" | "images" | "videos" | "upscale" | "assembly";

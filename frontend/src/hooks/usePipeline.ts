@@ -8,9 +8,10 @@ import {
   generateAllImages as apiGenerateImages,
   generateAllVideos as apiGenerateVideos,
   upscaleVideos as apiUpscaleVideos,
+  assemblePreview as apiAssemble,
   ApiError,
 } from "../api/client";
-import type { BatchGenResult, ImageModelType, PipelineStage, ProjectConfig, RenderMode, Scene, TargetResolution, UpscalerType, VideoEngineType } from "../api/types";
+import type { AssembleResult, BatchGenResult, ImageModelType, PipelineStage, ProjectConfig, RenderMode, Scene, TargetResolution, UpscalerType, VideoEngineType } from "../api/types";
 
 export type StepStatus = "idle" | "running" | "done" | "error";
 
@@ -21,6 +22,8 @@ export interface PipelineState {
   imagesStatus: StepStatus;
   videosStatus: StepStatus;
   upscaleStatus: StepStatus;
+  assembleStatus: StepStatus;
+  assembleResult: AssembleResult | null;
   error: string | null;
   lastResult: BatchGenResult | null;
   hasAudio: boolean;
@@ -43,6 +46,8 @@ export function usePipeline(
   const [imagesStatus, setImagesStatus] = useState<StepStatus>("idle");
   const [videosStatus, setVideosStatus] = useState<StepStatus>("idle");
   const [upscaleStatus, setUpscaleStatus] = useState<StepStatus>("idle");
+  const [assembleStatus, setAssembleStatus] = useState<StepStatus>("idle");
+  const [assembleResult, setAssembleResult] = useState<AssembleResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<BatchGenResult | null>(null);
 
@@ -70,7 +75,7 @@ export function usePipeline(
     if (!hasVideos) return "videos";
     if (videosRemaining > 0) return "videos";
     if (upscaleRemaining > 0) return "upscale";
-    return "upscale";
+    return "assembly";
   }, [hasAudio, sceneCount, imagesRemaining, videosRemaining, upscaleRemaining, hasVideos]);
 
   const isRunning =
@@ -78,7 +83,8 @@ export function usePipeline(
     intakeStatus === "running" ||
     imagesStatus === "running" ||
     videosStatus === "running" ||
-    upscaleStatus === "running";
+    upscaleStatus === "running" ||
+    assembleStatus === "running";
 
   const uploadAudio = useCallback(
     async (file: File) => {
@@ -231,6 +237,23 @@ export function usePipeline(
     [reloadScenes],
   );
 
+  const assemble = useCallback(
+    async (approvedOnly?: boolean) => {
+      setAssembleStatus("running");
+      setError(null);
+      try {
+        const result = await apiAssemble(approvedOnly);
+        setAssembleResult(result);
+        setAssembleStatus("done");
+      } catch (err) {
+        const msg = err instanceof ApiError ? err.detail : String(err);
+        setError(msg);
+        setAssembleStatus("error");
+      }
+    },
+    [],
+  );
+
   // Poll scenes while generation is running so new images/videos appear incrementally
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
@@ -259,6 +282,8 @@ export function usePipeline(
     imagesStatus,
     videosStatus,
     upscaleStatus,
+    assembleStatus,
+    assembleResult,
     error,
     lastResult,
     hasAudio,
@@ -280,5 +305,6 @@ export function usePipeline(
     generateImages,
     generateVideos,
     upscaleAll,
+    assemble,
   };
 }

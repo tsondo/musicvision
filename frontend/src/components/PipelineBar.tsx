@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import type { StepStatus } from "../hooks/usePipeline";
-import type { ImageModelType, PipelineStage, RenderMode, TargetResolution, VideoEngineType } from "../api/types";
+import type { AssembleResult, ImageModelType, PipelineStage, RenderMode, TargetResolution, VideoEngineType } from "../api/types";
 import FileBrowser from "./FileBrowser";
 
 interface Props {
@@ -16,6 +16,8 @@ interface Props {
   imagesStatus: StepStatus;
   videosStatus: StepStatus;
   upscaleStatus: StepStatus;
+  assembleStatus: StepStatus;
+  assembleResult: AssembleResult | null;
   error: string | null;
   isRunning: boolean;
   onUploadAudio: (file: File) => void;
@@ -26,6 +28,7 @@ interface Props {
   onGenerateImages: (sceneIds?: string[], model?: ImageModelType) => void;
   onGenerateVideos: (sceneIds?: string[], engine?: VideoEngineType, renderMode?: RenderMode) => void;
   onUpscaleVideos: (sceneIds?: string[], resolution?: TargetResolution) => void;
+  onAssemble: (approvedOnly?: boolean) => void;
 }
 
 type StepState = "disabled" | "active" | "done";
@@ -40,7 +43,7 @@ function stepState(
   // Allow upscale to be active when there are clips to upscale,
   // even if the current stage is still "videos" (not all scenes done).
   if (stepStage === "upscale" && upscaleRemaining && upscaleRemaining > 0) return "active";
-  const order: PipelineStage[] = ["upload", "intake", "images", "videos", "upscale"];
+  const order: PipelineStage[] = ["upload", "intake", "images", "videos", "upscale", "assembly"];
   const stepIdx = order.indexOf(stepStage);
   const currentIdx = order.indexOf(currentStage);
   if (stepIdx < currentIdx) return "done";
@@ -61,6 +64,8 @@ export default function PipelineBar({
   imagesStatus,
   videosStatus,
   upscaleStatus,
+  assembleStatus,
+  assembleResult,
   error,
   isRunning,
   onUploadAudio,
@@ -71,6 +76,7 @@ export default function PipelineBar({
   onGenerateImages,
   onGenerateVideos,
   onUpscaleVideos,
+  onAssemble,
 }: Props) {
   const audioRef = useRef<HTMLInputElement>(null);
   const lyricsRef = useRef<HTMLInputElement>(null);
@@ -303,8 +309,8 @@ export default function PipelineBar({
           >
             <option value="720p">720p</option>
             <option value="1080p">1080p</option>
-            <option value="1440p">1440p</option>
-            <option value="4k">4K</option>
+            <option value="1440p" disabled>1440p (48GB+ VRAM)</option>
+            <option value="4k" disabled>4K (48GB+ VRAM)</option>
           </select>
           <button
             className="btn-sm"
@@ -316,6 +322,29 @@ export default function PipelineBar({
               : upscaleRemaining > 0
                 ? `Upscale ${upscaleRemaining} clip${upscaleRemaining > 1 ? "s" : ""}`
                 : "All Done"}
+          </button>
+        </div>
+      </div>
+
+      <div className="step-arrow" />
+
+      {/* Step 6: Assembly */}
+      <div className={`pipeline-step ${stepState("assembly", stage, assembleStatus)}`}>
+        <div className="step-label">
+          <span className="step-num">6</span> Assembly
+          {assembleResult && <span className="step-check" title="Assembled" />}
+        </div>
+        <div className="step-controls">
+          <button
+            className="btn-sm"
+            disabled={sceneCount === 0 || videosRemaining === sceneCount || isRunning}
+            onClick={() => onAssemble()}
+          >
+            {assembleStatus === "running"
+              ? "Assembling..."
+              : assembleResult
+                ? "Reassemble"
+                : "Assemble"}
           </button>
         </div>
       </div>

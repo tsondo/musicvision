@@ -38,7 +38,7 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
-  padding-bottom: 56px; /* room for preview panel */
+  padding-bottom: 56px; /* room for output viewer bar */
 }
 
 /* Loading */
@@ -509,6 +509,20 @@ button:disabled {
   border-radius: 3px;
 }
 
+.res-badge {
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--bg-input);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 600;
+}
+
+.res-badge.upscaled {
+  color: #4ade80;
+  background: rgba(74, 222, 128, 0.12);
+}
+
 .btn-audio {
   width: 28px;
   height: 28px;
@@ -744,40 +758,122 @@ button:disabled {
   border-radius: 4px;
 }
 
-/* Preview panel — fixed bottom bar */
-.preview-panel {
+/* Output Viewer — fixed bottom panel */
+.output-viewer {
   position: fixed;
   bottom: 0;
   left: 0;
   right: 0;
-  height: 48px;
   background: var(--bg-card);
   border-top: 1px solid var(--border);
+  z-index: 20;
+  transition: max-height 0.3s ease;
+  max-height: 48px;
+  overflow: hidden;
+}
+
+.output-viewer.expanded {
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.output-viewer-bar {
+  height: 48px;
   display: flex;
   align-items: center;
   gap: 16px;
   padding: 0 24px;
-  z-index: 20;
+  cursor: pointer;
+  user-select: none;
 }
 
-.btn-preview {
-  padding: 6px 20px;
+.output-viewer-bar:hover {
+  background: var(--bg-card-hover);
+}
+
+.ov-stat {
   font-size: 13px;
+  color: var(--text-dim);
 }
 
-.preview-link {
-  color: var(--accent);
-  font-size: 13px;
-  text-decoration: none;
-}
-
-.preview-link:hover {
-  text-decoration: underline;
-}
-
-.preview-error {
-  color: var(--red);
+.ov-drift {
   font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.drift-ok {
+  color: var(--green);
+  background: var(--green-dim);
+}
+
+.drift-warn {
+  color: var(--yellow);
+  background: rgba(245, 197, 66, 0.12);
+}
+
+.drift-bad {
+  color: var(--red);
+  background: var(--red-dim);
+}
+
+.ov-toggle {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.output-viewer-expanded {
+  padding: 16px 24px;
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+}
+
+.output-video {
+  max-width: 480px;
+  width: 100%;
+  border-radius: 6px;
+  background: #000;
+}
+
+.output-info {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.output-files {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.output-files-label {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.output-files code {
+  color: var(--text);
+  background: var(--bg-input);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.output-files-list {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.output-files-list span::before {
+  content: "\2022 ";
 }
 
 /* File Browser Modal */

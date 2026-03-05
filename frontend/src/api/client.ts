@@ -1,4 +1,5 @@
 import type {
+  AssembleResult,
   BatchGenResult,
   FilesystemListResult,
   ImageModelType,
@@ -99,13 +100,10 @@ export async function regenerateVideo(
   });
 }
 
-export async function assemblePreview(): Promise<{
-  status: string;
-  rough_cut: string;
-}> {
+export async function assemblePreview(approvedOnly?: boolean): Promise<AssembleResult> {
   return request("/api/pipeline/assemble", {
     method: "POST",
-    body: JSON.stringify({}),
+    body: JSON.stringify({ approved_only: approvedOnly ?? false }),
   });
 }
 

@@ -5,7 +5,7 @@ import ProjectOpener from "./components/ProjectOpener";
 import ProjectHeader from "./components/ProjectHeader";
 import PipelineBar from "./components/PipelineBar";
 import Storyboard from "./components/Storyboard";
-import PreviewPanel from "./components/PreviewPanel";
+import OutputViewer from "./components/OutputViewer";
 
 export default function App() {
   const { state, open, create, close, reload: reloadConfig, lastProjectPath } = useProject();
@@ -70,6 +70,9 @@ export default function App() {
         onGenerateImages={pipeline.generateImages}
         onGenerateVideos={pipeline.generateVideos}
         onUpscaleVideos={pipeline.upscaleAll}
+        assembleStatus={pipeline.assembleStatus}
+        assembleResult={pipeline.assembleResult}
+        onAssemble={pipeline.assemble}
       />
       <main>
         <Storyboard
@@ -81,7 +84,7 @@ export default function App() {
           onRegenVideo={regenerateVideo}
         />
       </main>
-      <PreviewPanel />
+      {pipeline.assembleResult && <OutputViewer result={pipeline.assembleResult} />}
     </div>
   );
 }

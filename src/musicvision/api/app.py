@@ -616,6 +616,8 @@ async def regenerate_video(scene_id: str, req: RegenerateVideoRequest) -> Scene:
                 scene.sub_clips = []
 
             scene.video_status = ApprovalStatus.PENDING
+            from musicvision.utils.video import update_scene_resolution
+            update_scene_resolution(scene, proj.paths.root)
         finally:
             engine.unload()
 
@@ -1001,6 +1003,8 @@ async def generate_videos(req: GenerateVideosRequest):
                         else:
                             scene.video_clip = f"clips/{scene.id}.mp4"
 
+                        from musicvision.utils.video import update_scene_resolution
+                        update_scene_resolution(scene, proj.paths.root)
                         generated.append(scene.id)
                         consecutive_ooms = 0
                         proj.save_scenes()
@@ -1157,6 +1161,7 @@ async def assemble(req: AssembleRequest = AssembleRequest()):
     """Stage 4: Concatenate clips, sync audio, export EDL/FCPXML."""
     from musicvision.assembly.concatenator import assemble_rough_cut
     from musicvision.assembly.exporter import export_edl, export_fcpxml
+    from musicvision.utils.audio import get_duration
 
     proj = get_project()
     audio_file = proj.config.song.audio_file
@@ -1167,37 +1172,48 @@ async def assemble(req: AssembleRequest = AssembleRequest()):
     if not audio_path.exists():
         raise HTTPException(status_code=404, detail=f"Audio file not found: {audio_path}")
 
-    try:
-        rough_cut = assemble_rough_cut(
-            scenes=proj.scenes,
-            paths=proj.paths,
-            original_audio=audio_path,
-            approved_only=req.approved_only,
-        )
-    except (RuntimeError, ValueError) as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    def _run() -> dict:
+        try:
+            rough_cut = assemble_rough_cut(
+                scenes=proj.scenes,
+                paths=proj.paths,
+                original_audio=audio_path,
+                approved_only=req.approved_only,
+            )
+        except (RuntimeError, ValueError) as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
-    result: dict = {
-        "status": "complete",
-        "rough_cut": str(rough_cut.relative_to(proj.paths.root)),
-        "clip_count": len([s for s in proj.scenes.scenes if s.video_clip]),
-    }
+        scene_dur = proj.scenes.total_duration
+        video_dur = get_duration(rough_cut)
 
-    if req.export_edl:
-        edl = export_edl(proj.scenes, proj.paths)
-        result["edl"] = str(edl.relative_to(proj.paths.root))
+        result: dict = {
+            "status": "complete",
+            "rough_cut": str(rough_cut.relative_to(proj.paths.root)),
+            "clip_count": len([s for s in proj.scenes.scenes if s.video_clip or s.sub_clips]),
+            "total_scenes": len(proj.scenes.scenes),
+            "duration_seconds": scene_dur,
+            "video_duration_seconds": video_dur,
+            "drift_seconds": round(video_dur - scene_dur, 3),
+            "output_dir": str(proj.paths.root / "output"),
+        }
 
-    if req.export_fcpxml:
-        humo = proj.config.humo
-        fcpxml = export_fcpxml(
-            proj.scenes,
-            proj.paths,
-            width=humo.width,
-            height=humo.height,
-        )
-        result["fcpxml"] = str(fcpxml.relative_to(proj.paths.root))
+        if req.export_edl:
+            edl = export_edl(proj.scenes, proj.paths)
+            result["edl"] = str(edl.relative_to(proj.paths.root))
 
-    return result
+        if req.export_fcpxml:
+            humo = proj.config.humo
+            fcpxml = export_fcpxml(
+                proj.scenes,
+                proj.paths,
+                width=humo.width,
+                height=humo.height,
+            )
+            result["fcpxml"] = str(fcpxml.relative_to(proj.paths.root))
+
+        return result
+
+    return await asyncio.to_thread(_run)
 
 
 # ---------------------------------------------------------------------------
