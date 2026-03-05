@@ -281,6 +281,8 @@ class LtxVideoConfig(BaseModel):
 
     model_id: str = "Lightricks/LTX-2"
     use_fp8: bool = True                    # FP8 transformer (27GB vs 43GB BF16)
+    gguf_repo: str = "gguf-org/ltx2-gguf"   # Pre-quantized GGUF transformer
+    gguf_file: str = "ltx2-19b-dev-iq4_nl.gguf"  # IQ4_NL: ~11GB, comfortable on 5090
     width: int = 768                        # must be divisible by 32
     height: int = 512                       # must be divisible by 32
     num_frames: int = 121                   # must be (N*8)+1; max 257
@@ -408,11 +410,27 @@ class UpscalerConfig(BaseModel):
         if self.upscaler_override is not None:
             return self.upscaler_override
         key = engine.value if isinstance(engine, VideoEngineType) else engine
-        return _ENGINE_UPSCALER.get(key, UpscalerType.SEEDVR2)
+        preferred = _ENGINE_UPSCALER.get(key, UpscalerType.SEEDVR2)
+        # Fall back to Real-ESRGAN if SeedVR2 isn't configured
+        if preferred == UpscalerType.SEEDVR2 and not self.seedvr2_repo_dir:
+            return UpscalerType.REAL_ESRGAN
+        return preferred
 
     def target_width_height(self) -> tuple[int, int]:
         """Return (width, height) for the target resolution."""
         return _RESOLUTION_WH[self.target_resolution.value]
+
+    @staticmethod
+    def max_resolution_for_vram(primary_vram_gb: float) -> TargetResolution:
+        """Highest upscale resolution supported by the primary GPU.
+
+        - 720p / 1080p: ≤32 GB (RTX 4080/5090 class)
+        - 1440p:        ≥48 GB (A6000 / dual-GPU offload)
+        - 4K:           ≥48 GB
+        """
+        if primary_vram_gb >= 48:
+            return TargetResolution.UHD_4K
+        return TargetResolution.FHD_1080P
 
 
 class ProjectConfig(BaseModel):
@@ -504,6 +522,8 @@ class Scene(BaseModel):
     video_prompt: Optional[str] = None
     video_prompt_user_override: Optional[str] = None
     video_clip: Optional[str] = None            # path: clips/scene_001.mp4
+    video_width: Optional[int] = None            # resolution of current best clip
+    video_height: Optional[int] = None
     upscaled_clip: Optional[str] = None          # path: clips_upscaled/scene_001.mp4
     video_status: ApprovalStatus = ApprovalStatus.PENDING
     video_engine: Optional[VideoEngineType] = None  # None → use project default

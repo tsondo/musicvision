@@ -89,7 +89,7 @@ def run_seedvr2(request: dict) -> dict:
         env = os.environ.copy()
         env["PYTHONPATH"] = str(seedvr_repo)
         env["PYTHONUNBUFFERED"] = "1"
-        env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:512")
+        env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
         print(f"Running SeedVR2: {video_path.name} → {target_w}x{target_h}", file=sys.stderr)
 
@@ -124,6 +124,24 @@ def run_seedvr2(request: dict) -> dict:
 
         src = outputs[0]
         output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # SeedVR2 outputs at its own latent-space resolution, not the exact target.
+        # Final ffmpeg scale to hit the requested target resolution.
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg:
+            scaled = tmpdir / "scaled.mp4"
+            scale_cmd = [
+                ffmpeg, "-y", "-i", str(src),
+                "-vf", f"scale={target_w}:{target_h}:flags=lanczos",
+                "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+                "-an", str(scaled),
+            ]
+            scale_result = subprocess.run(scale_cmd, capture_output=True, text=True, timeout=120)
+            if scale_result.returncode == 0 and scaled.exists():
+                src = scaled
+            else:
+                print(f"ffmpeg scale failed, using SeedVR2 output as-is", file=sys.stderr)
+
         shutil.move(str(src), str(output_path))
 
         return {"status": "success", "video_path": str(output_path), "error": None}

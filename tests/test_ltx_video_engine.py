@@ -41,9 +41,9 @@ class TestLtxVideoConfig:
         assert cfg.fps == 24
         assert cfg.num_inference_steps == 40
         assert cfg.guidance_scale == 4.0
-        assert cfg.use_audio_conditioning is True
+        assert cfg.use_audio_conditioning is False  # disabled until mel spectrogram encoding is implemented
         assert cfg.vae_tiling is True
-        assert cfg.cpu_offload == "sequential"
+        assert cfg.cpu_offload == "model"
         assert cfg.use_fp8 is True
         assert cfg.seed is None
 

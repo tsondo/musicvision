@@ -48,6 +48,23 @@ def upscale_clips(
     """
     target_w, target_h = upscaler_config.target_width_height()
 
+    # Gate high resolutions on hardware — 1440p+ needs ≥48GB VRAM
+    if target_h > 1080:
+        try:
+            import torch
+            if torch.cuda.is_available():
+                primary_vram = torch.cuda.get_device_properties(0).total_memory / 1024**3
+                max_res = UpscalerConfig.max_resolution_for_vram(primary_vram)
+                max_w, max_h = UpscalerConfig(target_resolution=max_res).target_width_height()
+                if target_h > max_h:
+                    log.warning(
+                        "Target %dp exceeds hardware capability (%.0fGB VRAM, max %dp). Clamping to %dp.",
+                        target_h, primary_vram, max_h, max_h,
+                    )
+                    target_w, target_h = max_w, max_h
+        except Exception:
+            pass
+
     # Filter to scenes with video clips
     targets = [s for s in scenes.scenes if _has_video(s)]
     if scene_ids:
@@ -83,6 +100,9 @@ def upscale_clips(
             for scene in group_scenes:
                 try:
                     _upscale_scene(scene, engine, paths, target_w, target_h)
+                    # Update resolution metadata from the upscaled clip
+                    from musicvision.utils.video import update_scene_resolution
+                    update_scene_resolution(scene, paths.root)
                     upscaled.append(scene.id)
                     log.info("Upscaled %s", scene.id)
                 except Exception:

@@ -73,14 +73,20 @@ class TestUpscalerConfig:
         assert cfg.target_width_height() == (3840, 2160)
 
     def test_auto_select_humo(self):
-        cfg = UpscalerConfig()
+        cfg = UpscalerConfig(seedvr2_repo_dir="/fake/seedvr2")
         result = cfg.get_upscaler_for_engine("humo", "final")
         assert result == UpscalerType.SEEDVR2
 
     def test_auto_select_hva(self):
-        cfg = UpscalerConfig()
+        cfg = UpscalerConfig(seedvr2_repo_dir="/fake/seedvr2")
         result = cfg.get_upscaler_for_engine(VideoEngineType.HUNYUAN_AVATAR, "final")
         assert result == UpscalerType.SEEDVR2
+
+    def test_seedvr2_fallback_to_realesrgan(self):
+        """When SeedVR2 is not configured, fall back to Real-ESRGAN."""
+        cfg = UpscalerConfig(seedvr2_repo_dir="")
+        result = cfg.get_upscaler_for_engine("humo", "final")
+        assert result == UpscalerType.REAL_ESRGAN
 
     def test_auto_select_ltx(self):
         cfg = UpscalerConfig()
@@ -268,8 +274,8 @@ class TestPipeline:
         s1 = self._make_scene("scene_001", video_clip="clips/scene_001.mp4", engine=VideoEngineType.HUMO)
         s2 = self._make_scene("scene_002", video_clip="clips/scene_002.mp4", engine=VideoEngineType.LTX_VIDEO)
 
-        cfg = UpscalerConfig()
-        # HuMo → SeedVR2
+        cfg = UpscalerConfig(seedvr2_repo_dir="/fake/seedvr2")
+        # HuMo → SeedVR2 (when configured)
         assert cfg.get_upscaler_for_engine(s1.video_engine, "final") == UpscalerType.SEEDVR2
         # LTX → LTX Spatial
         assert cfg.get_upscaler_for_engine(s2.video_engine, "final") == UpscalerType.LTX_SPATIAL

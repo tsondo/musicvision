@@ -10,6 +10,11 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from musicvision.models import Scene
+
 log = logging.getLogger(__name__)
 
 
@@ -81,3 +86,24 @@ def scale_video(
 
     log.debug("Scaled %s → %s (%dx%d)", input_path.name, output_path.name, target_width, target_height)
     return output_path
+
+
+def update_scene_resolution(scene: Scene, project_root: Path) -> None:
+    """Set scene.video_width/height from the best available clip (upscaled > original).
+
+    Silently skips if no clip exists or ffprobe fails.
+    """
+    clip = scene.upscaled_clip or scene.video_clip
+    if not clip:
+        return
+    clip_path = Path(clip)
+    if not clip_path.is_absolute():
+        clip_path = project_root / clip_path
+    if not clip_path.exists():
+        return
+    try:
+        w, h = get_video_resolution(clip_path)
+        scene.video_width = w
+        scene.video_height = h
+    except Exception:
+        log.debug("Could not read resolution for %s", clip, exc_info=True)

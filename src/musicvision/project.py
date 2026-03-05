@@ -72,8 +72,30 @@ class ProjectService:
         if not svc.paths.config_file.exists():
             raise FileNotFoundError(f"No project.yaml found in {project_dir}")
         _ = svc.config  # force load to validate
+        svc._backfill_resolution()
         log.info("Opened project '%s' from %s", svc.config.name, project_dir)
         return svc
+
+    def _backfill_resolution(self) -> None:
+        """Populate video_width/height for scenes that have clips but no resolution metadata."""
+        if not self.paths.scenes_file.exists():
+            return
+        dirty = False
+        for scene in self.scenes.scenes:
+            if scene.video_width is not None:
+                continue
+            clip = scene.upscaled_clip or scene.video_clip
+            if not clip:
+                continue
+            try:
+                from musicvision.utils.video import update_scene_resolution
+                update_scene_resolution(scene, self.paths.root)
+                if scene.video_width is not None:
+                    dirty = True
+            except Exception:
+                pass
+        if dirty:
+            self.save_scenes()
 
     # --- Persistence ---
 

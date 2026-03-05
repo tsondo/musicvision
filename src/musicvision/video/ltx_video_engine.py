@@ -111,23 +111,48 @@ class LtxVideoEngine(VideoEngine):
         primary = str(self.device_map.dit_device)
         secondary = str(self.device_map.encoder_device)
 
-        log.info("Loading LTX-Video 2 from %s ...", self.config.model_id)
+        if self.config.use_fp8 and self.config.gguf_file:
+            # Load transformer from pre-quantized GGUF — avoids loading
+            # full BF16 weights into RAM (which OOM-kills on <64GB systems)
+            from diffusers import GGUFQuantizationConfig, LTX2VideoTransformer3DModel
 
-        pipe = LTX2ImageToVideoPipeline.from_pretrained(
-            self.config.model_id,
-            torch_dtype=torch.bfloat16,
-        )
+            gguf_config = GGUFQuantizationConfig(compute_dtype=torch.bfloat16)
+            log.info(
+                "Loading LTX-2 transformer from GGUF: %s/%s",
+                self.config.gguf_repo, self.config.gguf_file,
+            )
+            from huggingface_hub import hf_hub_download
+            gguf_repo = self.config.gguf_repo or "gguf-org/ltx2-gguf"
+            gguf_file = self.config.gguf_file or "ltx2-19b-dev-iq4_nl.gguf"
+            log.info("Downloading GGUF: repo=%s file=%s", gguf_repo, gguf_file)
+            gguf_path = hf_hub_download(gguf_repo, gguf_file)
+            log.info("GGUF file resolved to: %s", gguf_path)
+            transformer = LTX2VideoTransformer3DModel.from_single_file(
+                gguf_path,
+                config=self.config.model_id,
+                subfolder="transformer",
+                quantization_config=gguf_config,
+                torch_dtype=torch.bfloat16,
+            )
 
-        if self.config.use_fp8:
-            from torchao.quantization import quantize_, Float8WeightOnlyConfig
-            quantize_(pipe.transformer, Float8WeightOnlyConfig())
-            log.info("Transformer quantized to FP8 weight-only")
+            log.info("Loading LTX-Video 2 pipeline (non-transformer components) ...")
+            pipe = LTX2ImageToVideoPipeline.from_pretrained(
+                self.config.model_id,
+                transformer=transformer,
+                torch_dtype=torch.bfloat16,
+            )
+        else:
+            log.info("Loading LTX-Video 2 from %s (BF16) ...", self.config.model_id)
+            pipe = LTX2ImageToVideoPipeline.from_pretrained(
+                self.config.model_id,
+                torch_dtype=torch.bfloat16,
+            )
 
         # Model CPU offload on primary GPU — components load one at a time,
         # run, then return to CPU. VAE decode handled separately on secondary GPU.
         pipe.enable_model_cpu_offload(device=primary)
 
-        log.info("Transformer on %s, text encoder + connectors on %s", primary, secondary)
+        log.info("Transformer on %s (model offload), VAE decode on %s", primary, secondary)
 
         # VAE tiling + slicing for decode (VAE moved to secondary GPU at decode time)
         if self.config.vae_tiling:

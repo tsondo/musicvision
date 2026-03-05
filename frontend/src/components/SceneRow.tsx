@@ -218,9 +218,16 @@ export default function SceneRow({
             {scene.sub_clips.length} clips
           </span>
         )}
-        {hasUpscaled && (
-          <span className="upscaled-badge" title="Upscaled">HD</span>
-        )}
+        {scene.video_width && scene.video_height ? (
+          <span
+            className={`res-badge${hasUpscaled ? " upscaled" : ""}`}
+            title={`${scene.video_width}×${scene.video_height}${hasUpscaled ? " (upscaled)" : ""}`}
+          >
+            {scene.video_height}p
+          </span>
+        ) : hasUpscaled ? (
+          <span className="res-badge upscaled" title="Upscaled">HD</span>
+        ) : null}
         {scene.audio_segment && (
           <button
             className="btn-audio"
