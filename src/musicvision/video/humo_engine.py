@@ -1105,24 +1105,12 @@ def _save_mp4(frames: "Any", path: Path, fps: int = 25) -> None:
 
     frames: (T, H, W, 3) uint8 numpy array or torch tensor
 
-    Uses torchvision.io.write_video when available; falls back to ffmpeg pipe.
-
-    TODO: implement once frame tensor format is known from VAE decode output.
+    Uses ffmpeg raw pipe (no torchvision/PyAV dependency).
     """
     if frames is None:
-        log.warning("_save_mp4: no frames to save (generation stubs not yet implemented)")
+        log.warning("_save_mp4: no frames to save")
         return
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        import torch
-        import torchvision.io as tio
-        if not isinstance(frames, torch.Tensor):
-            frames = torch.from_numpy(frames)
-        tio.write_video(str(path), frames.cpu(), fps=fps)
-    except Exception as exc:
-        log.error("Failed to save MP4 via torchvision: %s — trying ffmpeg pipe", exc)
-        _save_frames_as_mp4_ffmpeg(frames, path, fps=fps)
+    _save_frames_as_mp4_ffmpeg(frames, path, fps=fps)
 
 
 def _save_frames_as_mp4_ffmpeg(frames, output_path: Path, fps: int = 25) -> None:
