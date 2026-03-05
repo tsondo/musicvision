@@ -101,12 +101,61 @@ PyTorch: 2.10.0+cu128 (upgraded for RTX 5090 sm_120 support). Do not downgrade.
 
 - Python 3.11+, type hints everywhere
 - Pydantic v2 for all data models — no raw dicts
-- `from __future__ import annotations` in every module
+- `from __future__ import annotations` in every module (required — prevents circular import issues with Pydantic v2 `model_rebuild()`, not just style)
 - Ruff for linting: `ruff check src/ tests/`
 - Line length: 120 chars
 - Logging via `logging.getLogger(__name__)`, not print()
 - All pipeline logic in core modules (intake/, imaging/, video/, assembly/). UI and API are thin layers that call into these — never put generation logic in api.py or UI code.
 - GPU-heavy and long-running API endpoints must run their sync work in a background thread via `asyncio.to_thread()` so the FastAPI event loop stays responsive for polling and other requests. Any endpoint that calls into GPU inference (intake, image generation, video generation) is a candidate for this pattern.
+- Always guard `import torch` behind try/except or function scope — unit tests must not require torch
+- Subprocess engines (HVA, SeedVR2) must capture and log both stdout and stderr
+- Any new engine must register in `engine_registry.py` ENGINES dict — this is the single source of truth
+- Model loading and unloading must be symmetric — if `load()` moves weights to GPU, `unload()` must free them completely and verifiably
+- Never hardcode resolution, frame count, or FPS — always read from engine constraints
+
+## Do NOT
+
+- Put generation/inference logic in api.py or UI code
+- Use raw dicts where a Pydantic model exists
+- Create test projects in the repo root (use `test_output/`)
+- Import torch at module top-level in non-ML modules
+- Assume fixed max duration — always read from engine config
+- Use seconds for duration math — use frame counts (see `engine_registry.py`)
+- Modify `vendor/` without documenting the patch in `FIXLOG.md`
+- Remove `from __future__ import annotations` from any module
+- Hardcode GPU device indices — use `utils/gpu.py` device map
+
+## Before Editing Any Module
+
+1. Run `pytest tests/ -v --tb=short` — confirm green baseline
+2. Read the existing tests for that module BEFORE changing code
+3. If touching `engine_registry.py`, `models.py`, or `gpu.py` — these are high-fan-out modules. Grep for all importers and run `ruff check src/ tests/` after changes
+4. If touching `vendor/` — these are patched upstream files. Check `FIXLOG.md` for prior patches that must be preserved
+5. Never modify a Pydantic model field without checking `scenes.json` backward compatibility
+
+## Inference Debugging Playbook
+
+When video/image generation produces bad output (noise, black frames, artifacts):
+
+1. **Check denoising health**: Log min/max/mean of latents after each denoising step. Exploding values (>1e3) or collapsing to zero indicate a math bug, not a prompt issue.
+2. **Verify checkpoint keys**: `python scripts/dump_keys.py <weights_path>` — look for prefix mismatches, missing keys, unexpected extras
+3. **Isolate the variable**: Change ONE thing at a time (tier, resolution, steps, prompt, reference image)
+4. **Compare against ComfyUI when possible**: If a ComfyUI workflow produces good output with the same model/settings, diff the parameters systematically (sigma schedule, CFG values, sampler, input scaling)
+5. **VRAM pressure**: OOM mid-inference can produce partial/corrupt output without raising an exception. Check `torch.cuda.memory_allocated()` after generation.
+6. **Subprocess engines (HVA, SeedVR2)**: Check stderr first — the subprocess may fail silently from the caller's perspective. Parse return codes.
+7. **Known gotchas** (see FIXLOG.md):
+   - Timestep must be scaled ×1000 for HuMo
+   - Sigma shift 8.0 (not 5.0) matches ComfyUI
+   - FP8 needs dynamic per-tensor input scaling
+   - Reference frame goes at LAST temporal position, not first
+
+## Common Failure Modes
+
+- **Silent dtype mismatch**: Model expects bf16 input but receives fp32 → runs but produces garbage. Always verify `tensor.dtype` at engine boundaries.
+- **Stale model on GPU**: Previous stage's model wasn't fully unloaded → OOM on next stage. Verify with `torch.cuda.memory_allocated()` after `engine.unload()`.
+- **Audio/video length mismatch in assembly**: Almost always caused by seconds-based math instead of frame-based. All duration math must go through `engine_registry.py`.
+- **Subprocess engine env contamination**: HVA and SeedVR2 run in their own venvs. Don't let MusicVision's env vars (especially `CUDA_VISIBLE_DEVICES`) leak unintentionally.
+- **LoRA swap without full unload**: Some engines cache LoRA weights. Call `engine.unload()` + `engine.load()` when switching LoRAs, not just swapping the path.
 
 ## Testing
 
@@ -139,18 +188,6 @@ Run manually. Each has different hardware requirements — see docs/TESTING.md a
 **After LLM prompt changes:** run both `pytest tests/` and `scripts/test_vllm_prompts.py`.
 **After GPU/model changes:** run `scripts/test_gpu_pipeline.py`.
 
-## LLM Integration
-
-`llm.py` provides a unified `LLMClient` that routes to Anthropic or OpenAI-compatible backends. Three LLM-assisted tasks:
-
-1. **Scene segmentation** (`intake/segmentation.py`) — lyrics + timestamps → JSON scene list
-2. **Image prompt generation** (`imaging/prompt_generator.py`) — scene → FLUX prompt (single + batch)
-3. **Video prompt generation** (`video/prompt_generator.py`) — scene → HuMo TIA prompt
-
-All three degrade gracefully: LLM → interactive terminal prompt → auto-template from style sheet. User overrides in scenes.json always win.
-
-System prompts are defined as module-level constants (`SEGMENTATION_SYSTEM_PROMPT`, `IMAGE_PROMPT_SYSTEM`, `VIDEO_PROMPT_SYSTEM`). When editing these, always re-run both unit tests and `test_vllm_prompts.py`.
-
 ## Key Constraints
 
 - HuMo max output: 97 frames (~3.88s at 25fps). Scenes >4s are auto-split into sub-clips.
@@ -172,6 +209,18 @@ Song audio + lyrics
 ```
 
 Each stage produces artifacts on disk. Any stage can be re-run independently. User reviews and approves at each stage.
+
+## LLM Integration
+
+`llm.py` provides a unified `LLMClient` that routes to Anthropic or OpenAI-compatible backends. Three LLM-assisted tasks:
+
+1. **Scene segmentation** (`intake/segmentation.py`) — lyrics + timestamps → JSON scene list
+2. **Image prompt generation** (`imaging/prompt_generator.py`) — scene → FLUX prompt (single + batch)
+3. **Video prompt generation** (`video/prompt_generator.py`) — scene → HuMo TIA prompt
+
+All three degrade gracefully: LLM → interactive terminal prompt → auto-template from style sheet. User overrides in scenes.json always win.
+
+System prompts are defined as module-level constants (`SEGMENTATION_SYSTEM_PROMPT`, `IMAGE_PROMPT_SYSTEM`, `VIDEO_PROMPT_SYSTEM`). When editing these, always re-run both unit tests and `test_vllm_prompts.py`.
 
 ## Frontend (Scene Review GUI)
 
