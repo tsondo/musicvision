@@ -441,9 +441,9 @@ class HumoEngine:
         # WanT5Encoder: ._model.model is the nn.Module (T5Encoder)
         if hasattr(model, '_model') and hasattr(model._model, 'model'):
             return model._model.model
-        # WanVideoVAE: ._vae is the nn.Module (WanVAE)
+        # WanVideoVAE._vae is WanVAE (plain class), WanVAE.model is the nn.Module (WanVAE_)
         if hasattr(model, '_vae') and model._vae is not None:
-            return model._vae
+            return model._vae.model
         # WanVideoVAE (alternate): .model is the nn.Module
         if hasattr(model, 'model'):
             return model.model
@@ -460,9 +460,14 @@ class HumoEngine:
         if nn_mod is None:
             return
         nn_mod.to("cpu")
-        # Update VAE wrapper's device so encode()/decode() route inputs correctly
+        # Update VAE wrapper chain: WanVideoVAE.device + WanVAE mean/std/scale tensors
         if name == "vae" and self._bundle.vae is not None:
             self._bundle.vae.device = torch.device("cpu")
+            vae_inner = self._bundle.vae._vae
+            if vae_inner is not None:
+                vae_inner.mean = vae_inner.mean.to("cpu")
+                vae_inner.std = vae_inner.std.to("cpu")
+                vae_inner.scale = [vae_inner.mean, 1.0 / vae_inner.std]
         torch.cuda.empty_cache()
         gc.collect()
         log.debug("Offloaded %s to CPU", name)
@@ -485,9 +490,15 @@ class HumoEngine:
         except StopIteration:
             return
         nn_mod.to(device)
-        # Update VAE wrapper's device so encode()/decode() route inputs correctly
+        # Update VAE wrapper chain: WanVideoVAE.device + WanVAE mean/std/scale tensors
         if name == "vae" and self._bundle.vae is not None:
             self._bundle.vae.device = torch.device(device)
+            vae_inner = self._bundle.vae._vae
+            if vae_inner is not None:
+                vae_inner.mean = vae_inner.mean.to(device)
+                vae_inner.std = vae_inner.std.to(device)
+                vae_inner.scale = [vae_inner.mean, 1.0 / vae_inner.std]
+                vae_inner.device = str(device)
         log.debug("Reloaded %s to %s", name, device)
 
     # ------------------------------------------------------------------
