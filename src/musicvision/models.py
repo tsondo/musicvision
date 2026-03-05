@@ -196,6 +196,7 @@ class HumoConfig(BaseModel):
     sub_clip_continuity: bool = True  # pass last frame of sub-clip N as reference for sub-clip N+1
     sampler: str = "uni_pc"           # "uni_pc" or "euler"
     lora: str | None = None           # LoRA key from weight_registry (e.g. "lightx2v_i2v_480p")
+    seed: int | None = None           # global seed (overridden by per-clip HumoInput.seed)
 
     @classmethod
     def from_quality(cls, quality: HumoQuality | str, **overrides) -> "HumoConfig":

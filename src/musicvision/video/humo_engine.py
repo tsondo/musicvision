@@ -258,7 +258,9 @@ class HumoEngine:
 
         # Resolve seed: use provided seed or generate a random one so the result
         # is always reproducible.  The used seed is recorded in HumoOutput.
-        seed = inp.seed if inp.seed is not None else random.randint(0, 2**32 - 1)
+        seed = inp.seed if inp.seed is not None else (
+            self.config.seed if self.config.seed is not None else random.randint(0, 2**32 - 1)
+        )
         log.info("Using seed %d for %s", seed, inp.output_path.name)
 
         # Step 4-5: denoising loop
