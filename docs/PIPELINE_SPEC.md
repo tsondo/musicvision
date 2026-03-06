@@ -538,8 +538,7 @@ image_gen:
   lora_weight: 0.8
 
 vocal_separation:
-  method: "roformer"
-  roformer_model: "MelBandRoFormer.ckpt"
+  method: "demucs"
   demucs_model: "htdemucs"
 ```
 

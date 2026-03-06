@@ -3,6 +3,14 @@ import type { StepStatus } from "../hooks/usePipeline";
 import type { AssembleResult, ImageModelType, PipelineStage, RenderMode, TargetResolution, VideoEngineType } from "../api/types";
 import FileBrowser from "./FileBrowser";
 
+function progressStyle(done: number, total: number): React.CSSProperties {
+  if (total === 0) return {};
+  const pct = Math.round((done / total) * 100);
+  return {
+    background: `linear-gradient(to right, var(--accent) ${pct}%, var(--bg-input) ${pct}%)`,
+  };
+}
+
 interface Props {
   stage: PipelineStage;
   hasAudio: boolean;
@@ -10,6 +18,8 @@ interface Props {
   sceneCount: number;
   imagesRemaining: number;
   videosRemaining: number;
+  videosUnapproved: number;
+  unapprovedSceneIds: string[];
   upscaleRemaining: number;
   uploadStatus: StepStatus;
   intakeStatus: StepStatus;
@@ -20,6 +30,11 @@ interface Props {
   assembleResult: AssembleResult | null;
   error: string | null;
   isRunning: boolean;
+  queueActive: boolean;
+  queueDone: number;
+  queueTotal: number;
+  batchDone: number;
+  batchTotal: number;
   onUploadAudio: (file: File) => void;
   onUploadLyrics: (file: File) => void;
   onImportAudio: (path: string) => void;
@@ -58,6 +73,8 @@ export default function PipelineBar({
   sceneCount,
   imagesRemaining,
   videosRemaining,
+  videosUnapproved,
+  unapprovedSceneIds,
   upscaleRemaining,
   uploadStatus,
   intakeStatus,
@@ -68,6 +85,11 @@ export default function PipelineBar({
   assembleResult,
   error,
   isRunning,
+  queueActive,
+  queueDone,
+  queueTotal,
+  batchDone,
+  batchTotal,
   onUploadAudio,
   onUploadLyrics,
   onImportAudio,
@@ -83,7 +105,7 @@ export default function PipelineBar({
   const [useLlm, setUseLlm] = useState(true);
   const [browseTarget, setBrowseTarget] = useState<"audio" | "lyrics" | null>(null);
   const [imageModel, setImageModel] = useState<ImageModelType>("z-image-turbo");
-  const [videoEngine, setVideoEngine] = useState<VideoEngineType>("hunyuan_avatar");
+  const [videoEngine, setVideoEngine] = useState<VideoEngineType>("humo");
   const [renderMode, setRenderMode] = useState<RenderMode>("preview");
   const [targetResolution, setTargetResolution] = useState<TargetResolution>("1080p");
 
@@ -223,9 +245,10 @@ export default function PipelineBar({
             className="btn-sm"
             disabled={sceneCount === 0 || isRunning || imagesRemaining === 0}
             onClick={() => onGenerateImages(undefined, imageModel)}
+            style={imagesStatus === "running" ? progressStyle(imagesWithCount, sceneCount) : undefined}
           >
             {imagesStatus === "running"
-              ? "Generating..."
+              ? `Generating ${imagesWithCount}/${sceneCount}...`
               : imagesRemaining > 0
                 ? `Generate ${imagesRemaining} Image${imagesRemaining > 1 ? "s" : ""}`
                 : "All Done"}
@@ -252,9 +275,9 @@ export default function PipelineBar({
             onChange={(e) => setVideoEngine(e.target.value as VideoEngineType)}
             disabled={isRunning}
           >
-            <option value="hunyuan_avatar">HunyuanVideo Avatar</option>
-            <option value="ltx_video">LTX-Video 2</option>
             <option value="humo">HuMo</option>
+            <option value="ltx_video">LTX-Video 2</option>
+            <option value="hunyuan_avatar">HunyuanVideo Avatar</option>
           </select>
           <div className="render-mode-toggle">
             <button
@@ -276,14 +299,30 @@ export default function PipelineBar({
           </div>
           <button
             className="btn-sm"
-            disabled={sceneCount === 0 || isRunning || imagesRemaining > 0 || videosRemaining === 0}
-            onClick={() => onGenerateVideos(undefined, videoEngine, renderMode)}
+            disabled={
+              sceneCount === 0 ||
+              isRunning ||
+              imagesRemaining > 0 ||
+              (videosRemaining === 0 && videosUnapproved === 0)
+            }
+            onClick={() => {
+              if (videosRemaining > 0) {
+                onGenerateVideos(undefined, videoEngine, renderMode);
+              } else {
+                onGenerateVideos(unapprovedSceneIds, videoEngine, renderMode);
+              }
+            }}
+            style={videosStatus === "running"
+              ? progressStyle(batchTotal > 0 ? batchDone : videosWithCount, batchTotal > 0 ? batchTotal : sceneCount)
+              : undefined}
           >
             {videosStatus === "running"
-              ? "Rendering..."
+              ? `Rendering ${batchTotal > 0 ? batchDone : videosWithCount}/${batchTotal > 0 ? batchTotal : sceneCount}...`
               : videosRemaining > 0
                 ? `Render ${videosRemaining} ${renderMode} video${videosRemaining > 1 ? "s" : ""}`
-                : "All Done"}
+                : videosUnapproved > 0
+                  ? `Re-render ${videosUnapproved} unapproved`
+                  : "All Approved"}
           </button>
         </div>
       </div>
@@ -316,9 +355,10 @@ export default function PipelineBar({
             className="btn-sm"
             disabled={sceneCount === 0 || isRunning || upscaleRemaining === 0}
             onClick={() => onUpscaleVideos(undefined, targetResolution)}
+            style={upscaleStatus === "running" ? progressStyle(sceneCount - upscaleRemaining, sceneCount) : undefined}
           >
             {upscaleStatus === "running"
-              ? "Upscaling..."
+              ? `Upscaling ${sceneCount - upscaleRemaining}/${sceneCount}...`
               : upscaleRemaining > 0
                 ? `Upscale ${upscaleRemaining} clip${upscaleRemaining > 1 ? "s" : ""}`
                 : "All Done"}
@@ -348,6 +388,18 @@ export default function PipelineBar({
           </button>
         </div>
       </div>
+
+      {queueActive && queueTotal > 0 && (
+        <div className="queue-progress">
+          <button
+            className="btn-sm btn-queue-progress"
+            disabled
+            style={progressStyle(queueDone, queueTotal)}
+          >
+            Queue: {queueDone}/{queueTotal} complete
+          </button>
+        </div>
+      )}
 
       {error && <div className="pipeline-error">{error}</div>}
     </div>

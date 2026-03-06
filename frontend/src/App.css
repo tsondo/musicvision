@@ -244,6 +244,16 @@ body {
   align-items: center;
 }
 
+.queue-progress {
+  width: 100%;
+  padding: 4px 12px 2px;
+}
+
+.btn-queue-progress {
+  width: 100%;
+  cursor: default;
+}
+
 .btn-sm {
   padding: 4px 10px;
   font-size: 11px;
@@ -469,6 +479,16 @@ button:disabled {
 @keyframes pulse-border {
   0%, 100% { border-left-color: var(--accent); }
   50% { border-left-color: transparent; }
+}
+
+/* Queued state */
+.scene-row.queued {
+  border-left: 3px solid #f0ad4e;
+}
+
+.btn-regen.queued {
+  background: #f0ad4e;
+  color: #1a1a1a;
 }
 
 /* Cells */

@@ -4,30 +4,31 @@ import type {
   Scene,
   UpdateSceneRequest,
 } from "../api/types";
+import type { SceneGenStatus } from "../hooks/useScenes";
 import SceneRow from "./SceneRow";
 
 interface Props {
   scenes: Scene[];
-  generating: Set<string>;
+  imageGenStatus: (sceneId: string) => SceneGenStatus;
+  videoGenStatus: (sceneId: string) => SceneGenStatus;
   pipelineRunning?: boolean;
   onUpdate: (sceneId: string, updates: UpdateSceneRequest) => Promise<Scene>;
-  onRegenImage: (
-    sceneId: string,
-    req: RegenerateImageRequest,
-  ) => Promise<Scene>;
-  onRegenVideo: (
-    sceneId: string,
-    req: RegenerateVideoRequest,
-  ) => Promise<Scene>;
+  onRegenImage: (sceneId: string, req: RegenerateImageRequest) => void;
+  onRegenVideo: (sceneId: string, req: RegenerateVideoRequest) => void;
+  onDequeueImage: (sceneId: string) => void;
+  onDequeueVideo: (sceneId: string) => void;
 }
 
 export default function Storyboard({
   scenes,
-  generating,
+  imageGenStatus,
+  videoGenStatus,
   pipelineRunning,
   onUpdate,
   onRegenImage,
   onRegenVideo,
+  onDequeueImage,
+  onDequeueVideo,
 }: Props) {
   if (scenes.length === 0) {
     return (
@@ -54,11 +55,14 @@ export default function Storyboard({
         <SceneRow
           key={scene.id}
           scene={scene}
-          generating={generating}
+          imageGenStatus={imageGenStatus(scene.id)}
+          videoGenStatus={videoGenStatus(scene.id)}
           disabled={pipelineRunning}
           onUpdate={onUpdate}
           onRegenImage={onRegenImage}
           onRegenVideo={onRegenVideo}
+          onDequeueImage={onDequeueImage}
+          onDequeueVideo={onDequeueVideo}
         />
       ))}
     </div>

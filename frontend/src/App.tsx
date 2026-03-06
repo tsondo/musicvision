@@ -13,11 +13,17 @@ export default function App() {
   const {
     scenes,
     loading,
-    generating,
+    queueActive,
+    queueDone,
+    queueTotal,
+    imageGenStatus,
+    videoGenStatus,
     reload: reloadScenes,
     updateScene,
     regenerateImage,
     regenerateVideo,
+    dequeueImage,
+    dequeueVideo,
   } = useScenes(projectLoaded);
 
   const pipeline = usePipeline(
@@ -54,6 +60,8 @@ export default function App() {
         sceneCount={pipeline.sceneCount}
         imagesRemaining={pipeline.imagesRemaining}
         videosRemaining={pipeline.videosRemaining}
+        videosUnapproved={pipeline.videosUnapproved}
+        unapprovedSceneIds={pipeline.unapprovedSceneIds}
         upscaleRemaining={pipeline.upscaleRemaining}
         uploadStatus={pipeline.uploadStatus}
         intakeStatus={pipeline.intakeStatus}
@@ -62,6 +70,11 @@ export default function App() {
         upscaleStatus={pipeline.upscaleStatus}
         error={pipeline.error}
         isRunning={pipeline.isRunning}
+        queueActive={queueActive}
+        queueDone={queueDone}
+        queueTotal={queueTotal}
+        batchDone={pipeline.batchDone}
+        batchTotal={pipeline.batchTotal}
         onUploadAudio={pipeline.uploadAudio}
         onUploadLyrics={pipeline.uploadLyrics}
         onImportAudio={pipeline.importAudio}
@@ -77,11 +90,14 @@ export default function App() {
       <main>
         <Storyboard
           scenes={scenes}
-          generating={generating}
+          imageGenStatus={imageGenStatus}
+          videoGenStatus={videoGenStatus}
           pipelineRunning={pipeline.isRunning}
           onUpdate={updateScene}
           onRegenImage={regenerateImage}
           onRegenVideo={regenerateVideo}
+          onDequeueImage={dequeueImage}
+          onDequeueVideo={dequeueVideo}
         />
       </main>
       {pipeline.assembleResult && <OutputViewer result={pipeline.assembleResult} />}

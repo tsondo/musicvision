@@ -30,8 +30,7 @@ class SceneType(str, Enum):
 
 
 class SeparationMethod(str, Enum):
-    ROFORMER = "roformer"   # MelBandRoFormer via audio-separator (best for live recordings)
-    DEMUCS   = "demucs"     # Demucs htdemucs/mdx via demucs library (often superior on AI-generated music)
+    DEMUCS = "demucs"  # Demucs htdemucs/mdx via demucs library
 
 
 class DemucsModel(str, Enum):
@@ -352,9 +351,8 @@ class SongInfo(BaseModel):
 # ---------------------------------------------------------------------------
 
 class VocalSeparationConfig(BaseModel):
-    method: SeparationMethod = SeparationMethod.ROFORMER
+    method: SeparationMethod = SeparationMethod.DEMUCS
     demucs_model: DemucsModel = DemucsModel.HTDEMUCS
-    roformer_model: str = "MelBandRoformer.ckpt"
 
 
 # Resolution lookup: enum value → (width, height)

@@ -420,22 +420,18 @@ def create_separator(
     method: "SeparationMethod",
     *,
     device: str = "cuda:1",
-    roformer_model: str = "MelBandRoformer.ckpt",
     demucs_model: str = "htdemucs",
-) -> "VocalSeparator | DemucsSeparator":
+) -> "DemucsSeparator":
     """
-    Create and return the appropriate separator for *method*.
+    Create and return a Demucs vocal separator.
 
     Args:
-        method: SeparationMethod.ROFORMER or SeparationMethod.DEMUCS
+        method: SeparationMethod.DEMUCS
         device: CUDA device string (e.g. "cuda:0", "cuda:1", "cpu")
-        roformer_model: audio-separator model filename for ROFORMER method
-        demucs_model: Demucs variant name for DEMUCS method
+        demucs_model: Demucs variant name (htdemucs, htdemucs_ft, mdx_extra, etc.)
     """
     from musicvision.models import SeparationMethod as SM
 
-    if method == SM.ROFORMER:
-        return VocalSeparator(model_name=roformer_model, device=device)
     if method == SM.DEMUCS:
         return DemucsSeparator(model_name=demucs_model, device=device)
     raise ValueError(f"Unknown separation method: {method}")

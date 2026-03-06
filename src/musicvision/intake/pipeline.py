@@ -106,12 +106,11 @@ def run_intake(
             log.info(
                 "Running vocal separation (method=%s, model=%s)…",
                 sep_cfg.method.value,
-                sep_cfg.demucs_model.value if sep_cfg.method.value == "demucs" else sep_cfg.roformer_model,
+                sep_cfg.demucs_model.value,
             )
             separator = create_separator(
                 sep_cfg.method,
                 device=str(device_map.secondary),
-                roformer_model=sep_cfg.roformer_model,
                 demucs_model=sep_cfg.demucs_model.value,
             )
             separator.load()

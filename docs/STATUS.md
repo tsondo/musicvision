@@ -315,7 +315,7 @@ video_engine: VideoEngineType ("humo" | "hunyuan_avatar") — project default
 humo: HumoConfig (tier, resolution, scale_a, scale_t, denoising_steps, block_swap_count, sub_clip_continuity)
 hunyuan_avatar: HunyuanAvatarConfig (hva_repo_dir, hva_venv_python, checkpoint, image_size, infer_steps, ...)
 image_gen: ImageGenConfig (model, quant, steps, guidance_scale, lora_path)
-vocal_separation: VocalSeparationConfig (method, demucs_model, roformer_model)
+vocal_separation: VocalSeparationConfig (method, demucs_model)
 ```
 
 **`SceneList`** (`scenes.json`):

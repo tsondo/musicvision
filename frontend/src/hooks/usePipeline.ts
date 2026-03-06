@@ -31,8 +31,12 @@ export interface PipelineState {
   sceneCount: number;
   imagesRemaining: number;
   videosRemaining: number;
+  videosUnapproved: number;
+  unapprovedSceneIds: string[];
   upscaleRemaining: number;
   isRunning: boolean;
+  batchDone: number;
+  batchTotal: number;
 }
 
 export function usePipeline(
@@ -51,6 +55,21 @@ export function usePipeline(
   const [error, setError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<BatchGenResult | null>(null);
 
+  // Batch progress tracking: snapshot clip paths at batch start, count changes via polling
+  const [batchSnapshot, setBatchSnapshot] = useState<{ step: string; clips: Record<string, string | null>; total: number } | null>(null);
+
+  const batchDone = (() => {
+    if (!batchSnapshot) return 0;
+    let done = 0;
+    for (const scene of scenes) {
+      const oldClip = batchSnapshot.clips[scene.id];
+      const newClip = scene.video_clip || scene.sub_clips.find((sc) => sc.video_clip)?.video_clip || null;
+      if (newClip !== oldClip) done++;
+    }
+    return done;
+  })();
+  const batchTotal = batchSnapshot?.total ?? 0;
+
   const hasAudio = Boolean(config?.song.audio_file);
   const hasLyrics = Boolean(config?.song.lyrics_file);
   const sceneCount = scenes.length;
@@ -58,6 +77,13 @@ export function usePipeline(
   const videosRemaining = scenes.filter(
     (s) => !s.video_clip && !s.sub_clips.some((sc) => sc.video_clip),
   ).length;
+  const unapprovedScenes = scenes.filter(
+    (s) =>
+      s.video_status !== "approved" &&
+      (s.video_clip || s.sub_clips.some((sc) => sc.video_clip)),
+  );
+  const videosUnapproved = unapprovedScenes.length;
+  const unapprovedSceneIds = unapprovedScenes.map((s) => s.id);
   const upscaleRemaining = scenes.filter(
     (s) =>
       (s.video_clip || s.sub_clips.some((sc) => sc.video_clip)) &&
@@ -196,12 +222,20 @@ export function usePipeline(
 
   const generateVideos = useCallback(
     async (sceneIds?: string[], engine?: VideoEngineType, renderMode?: RenderMode) => {
+      // Snapshot current clips to track re-render progress
+      const targetScenes = sceneIds ? scenes.filter((s) => sceneIds.includes(s.id)) : scenes;
+      const clips: Record<string, string | null> = {};
+      for (const s of targetScenes) {
+        clips[s.id] = s.video_clip || s.sub_clips.find((sc) => sc.video_clip)?.video_clip || null;
+      }
+      setBatchSnapshot({ step: "videos", clips, total: targetScenes.length });
       setVideosStatus("running");
       setError(null);
       try {
         const result = await apiGenerateVideos(sceneIds, engine, renderMode);
         setLastResult(result);
         await reloadScenes();
+        setBatchSnapshot(null);
         setVideosStatus(result.failed.length > 0 ? "error" : "done");
         if (result.failed.length > 0) {
           setError(
@@ -211,10 +245,11 @@ export function usePipeline(
       } catch (err) {
         const msg = err instanceof ApiError ? err.detail : String(err);
         setError(msg);
+        setBatchSnapshot(null);
         setVideosStatus("error");
       }
     },
-    [reloadScenes],
+    [scenes, reloadScenes],
   );
 
   const upscaleAll = useCallback(
@@ -261,7 +296,7 @@ export function usePipeline(
     if (generating && !pollRef.current) {
       pollRef.current = setInterval(() => {
         reloadScenes();
-      }, 3000);
+      }, 10000);
     }
     if (!generating && pollRef.current) {
       clearInterval(pollRef.current);
@@ -291,8 +326,12 @@ export function usePipeline(
     sceneCount,
     imagesRemaining,
     videosRemaining,
+    videosUnapproved,
+    unapprovedSceneIds,
     upscaleRemaining,
     isRunning,
+    batchDone,
+    batchTotal,
   };
 
   return {

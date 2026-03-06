@@ -11,6 +11,7 @@ at import time (python-dotenv). Already-set env vars are never overwritten.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Optional
@@ -782,10 +783,8 @@ async def generate_videos(req: GenerateVideosRequest):
 
     proj = get_project()
 
-    # Apply engine override if provided
-    if req.engine:
-        proj.config.video_engine = VideoEngineType(req.engine)
-        proj.save_config()
+    # Engine override for this run only (don't persist to project.yaml)
+    run_engine = VideoEngineType(req.engine) if req.engine else proj.config.video_engine
 
     # Resolve target scenes
     if req.scene_ids:
@@ -825,7 +824,7 @@ async def generate_videos(req: GenerateVideosRequest):
     # Group scenes by engine type
     engine_groups: dict[VideoEngineType, list] = defaultdict(list)
     for scene in sorted(scenes, key=lambda s: s.order):
-        etype = scene.video_engine or proj.config.video_engine
+        etype = scene.video_engine or run_engine
         engine_groups[etype].append(scene)
 
     from musicvision.utils.gpu import _oom_suggestion, estimate_vram_gb, is_oom_error

@@ -292,7 +292,7 @@ class TestProjectService:
 class TestVocalSeparation:
     def test_defaults(self):
         cfg = VocalSeparationConfig()
-        assert cfg.method == SeparationMethod.ROFORMER
+        assert cfg.method == SeparationMethod.DEMUCS
         assert cfg.demucs_model == DemucsModel.HTDEMUCS
 
     def test_roundtrip(self, tmp_path):
@@ -311,12 +311,9 @@ class TestVocalSeparation:
     def test_factory_dispatch(self):
         from musicvision.intake.audio_analysis import (
             DemucsSeparator,
-            VocalSeparator,
             create_separator,
         )
-        roformer = create_separator(SeparationMethod.ROFORMER, device="cpu")
         demucs = create_separator(SeparationMethod.DEMUCS, device="cpu")
-        assert isinstance(roformer, VocalSeparator)
         assert isinstance(demucs, DemucsSeparator)
 
     def test_demucs_load_error_without_package(self):

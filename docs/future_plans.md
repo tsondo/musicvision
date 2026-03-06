@@ -105,6 +105,10 @@ Does not work today. Blocking issues: RoPE float64/complex128 ops not supported 
 
 MLX would offer 1.5–2× better throughput than MPS+PyTorch but requires a full inference stack rewrite (~3–5 weeks). Out of scope for now.
 
+### GPU Power Profiling
+
+Benchmark different power limits on RTX 5090 to find the optimal power/performance/thermal tradeoff for sustained batch rendering. Early data: 450W / 80C gives ~6% speed gain over 400W with acceptable thermals. Goal: recommended power profile in docs and optionally auto-set via `nvidia-smi -pl` at engine startup.
+
 ### Dependency Simplification
 
 - **Drop `flash_attn`** — Native SDPA on PyTorch 2.6+ (currently 2.10.x) is equivalent on Ampere/Hopper/Blackwell. Eliminates build friction, simplifies containers, one fewer binary dependency. SDPA fallback already works in all vendored code.
@@ -228,7 +232,7 @@ Each format is a progressively deeper pass through the pipeline. Users can stop 
 
 ### Phase 1: Validate MusicVision ✅ (mostly complete)
 - ✅ All five pipeline stages code-complete and GPU-tested
-- ✅ Three video engines: HunyuanVideo-Avatar (primary), LTX-Video 2 (cinematic), HuMo (back burner)
+- ✅ Three video engines: HunyuanVideo-Avatar (audio-driven), LTX-Video 2 (cinematic), HuMo (audio-driven, FP8)
 - ✅ Three upscalers: SeedVR2 (faces), LTX Spatial (latent), Real-ESRGAN (fast)
 - ✅ Two image engines: Z-Image (ungated, fast) and FLUX (LoRA support)
 - ✅ React storyboard with scene review, approval, regeneration
@@ -307,3 +311,4 @@ Each format is a progressively deeper pass through the pipeline. Users can stop 
 - **Lyric-melody alignment**: Can the LLM learn to write lyrics with syllable counts and stress patterns that work well with AceStep's melody generation?
 - **Lip sync on AI faces**: LatentSync is benchmarked on real human video. Quality on FLUX/Z-Image-generated characters is unknown and needs testing.
 - **Singing vs speech**: Lip sync models are trained primarily on speech. Singing involves wider mouth openings, sustained vowels, and different temporal patterns. The `lips_expression` parameter helps but may not fully cover this.
+- **Automated quality checks via vision LLM**: Run a Qwen2.5-VL model (on the vLLM server or swapped in) to evaluate generated video output programmatically. Use cases: scene-prompt coherence scoring, artifact detection (checkerboard, banding, temporal flicker), lip sync quality assessment, frame-to-frame consistency across sub-clips. Could feed back into the pipeline as an auto-reject/retry gate or surface quality scores in the review GUI.

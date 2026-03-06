@@ -8,20 +8,18 @@ import type {
   UpdateSceneRequest,
   VideoEngineType,
 } from "../api/types";
+import type { SceneGenStatus } from "../hooks/useScenes";
 
 interface Props {
   scene: Scene;
-  generating: Set<string>;
+  imageGenStatus: SceneGenStatus;
+  videoGenStatus: SceneGenStatus;
   disabled?: boolean;
   onUpdate: (sceneId: string, updates: UpdateSceneRequest) => Promise<Scene>;
-  onRegenImage: (
-    sceneId: string,
-    req: RegenerateImageRequest,
-  ) => Promise<Scene>;
-  onRegenVideo: (
-    sceneId: string,
-    req: RegenerateVideoRequest,
-  ) => Promise<Scene>;
+  onRegenImage: (sceneId: string, req: RegenerateImageRequest) => void;
+  onRegenVideo: (sceneId: string, req: RegenerateVideoRequest) => void;
+  onDequeueImage: (sceneId: string) => void;
+  onDequeueVideo: (sceneId: string) => void;
 }
 
 function formatTime(seconds: number): string {
@@ -32,11 +30,14 @@ function formatTime(seconds: number): string {
 
 export default function SceneRow({
   scene,
-  generating,
+  imageGenStatus,
+  videoGenStatus,
   disabled,
   onUpdate,
   onRegenImage,
   onRegenVideo,
+  onDequeueImage,
+  onDequeueVideo,
 }: Props) {
   const duration = scene.time_end - scene.time_start;
   const effectiveImagePrompt =
@@ -49,7 +50,7 @@ export default function SceneRow({
   const [imageModel, setImageModel] = useState<ImageModelType>("z-image-turbo");
   const [imageSeed, setImageSeed] = useState(-1);
   const [videoEngine, setVideoEngine] =
-    useState<VideoEngineType>("hunyuan_avatar");
+    useState<VideoEngineType>("humo");
   const [videoSeed, setVideoSeed] = useState(-1);
   const [regenError, setRegenError] = useState<string | null>(null);
   const [imgVersion, setImgVersion] = useState(() => Date.now());
@@ -57,8 +58,10 @@ export default function SceneRow({
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
 
-  const isGenImage = generating.has(scene.id + ":image");
-  const isGenVideo = generating.has(scene.id + ":video");
+  const isGenImage = imageGenStatus === "running";
+  const isImageQueued = imageGenStatus === "queued";
+  const isGenVideo = videoGenStatus === "running";
+  const isVideoQueued = videoGenStatus === "queued";
 
   const hasImage = Boolean(scene.reference_image);
   const hasVideo = Boolean(scene.video_clip) || scene.sub_clips.some((sc) => sc.video_clip);
@@ -161,29 +164,26 @@ export default function SceneRow({
 
   const handleRegenImage = async () => {
     setRegenError(null);
-    // Save prompt first if changed
+    if (isImageQueued) {
+      onDequeueImage(scene.id);
+      return;
+    }
     if (!imgSaved && imagePrompt !== effectiveImagePrompt) {
       await onUpdate(scene.id, { image_prompt_user_override: imagePrompt });
     }
-    try {
-      await onRegenImage(scene.id, { model: imageModel, seed: imageSeed });
-      setImgVersion(Date.now());
-    } catch (err) {
-      setRegenError(String(err));
-    }
+    onRegenImage(scene.id, { model: imageModel, seed: imageSeed });
   };
 
   const handleRegenVideo = async () => {
     setRegenError(null);
+    if (isVideoQueued) {
+      onDequeueVideo(scene.id);
+      return;
+    }
     if (!vidSaved && videoPrompt !== effectiveVideoPrompt) {
       await onUpdate(scene.id, { video_prompt_user_override: videoPrompt });
     }
-    try {
-      await onRegenVideo(scene.id, { engine: videoEngine, seed: videoSeed });
-      setImgVersion(Date.now());
-    } catch (err) {
-      setRegenError(String(err));
-    }
+    onRegenVideo(scene.id, { engine: videoEngine, seed: videoSeed });
   };
 
   const toggleAudio = () => {
@@ -204,7 +204,7 @@ export default function SceneRow({
 
   return (
     <div
-      className={`scene-row ${isGenImage || isGenVideo ? "generating" : ""}`}
+      className={`scene-row ${isGenImage || isGenVideo ? "generating" : isImageQueued || isVideoQueued ? "queued" : ""}`}
     >
       {/* Info cell */}
       <div className="cell cell-info">
@@ -367,10 +367,16 @@ export default function SceneRow({
         </div>
         <button
           onClick={handleRegenImage}
-          disabled={isGenImage || disabled}
-          className="btn-regen"
+          disabled={isGenImage || (disabled && !isImageQueued)}
+          className={`btn-regen${isImageQueued ? " queued" : ""}`}
         >
-          {isGenImage ? "Generating..." : hasImage ? "Regenerate" : "Generate"}
+          {isGenImage
+            ? "Generating..."
+            : isImageQueued
+              ? "Queued ✕"
+              : hasImage
+                ? "Regenerate"
+                : "Generate"}
         </button>
       </div>
 
@@ -394,9 +400,9 @@ export default function SceneRow({
             setVideoEngine(e.target.value as VideoEngineType)
           }
         >
-          <option value="hunyuan_avatar">HunyuanVideo Avatar</option>
-          <option value="ltx_video">LTX-Video 2</option>
           <option value="humo">HuMo</option>
+          <option value="ltx_video">LTX-Video 2</option>
+          <option value="hunyuan_avatar">HunyuanVideo Avatar</option>
         </select>
         <label className="checkbox-label">
           <input
@@ -423,10 +429,16 @@ export default function SceneRow({
         </div>
         <button
           onClick={handleRegenVideo}
-          disabled={isGenVideo || !scene.reference_image || disabled}
-          className="btn-regen"
+          disabled={isGenVideo || !scene.reference_image || (disabled && !isVideoQueued)}
+          className={`btn-regen${isVideoQueued ? " queued" : ""}`}
         >
-          {isGenVideo ? "Generating..." : hasVideo ? "Regenerate" : "Generate"}
+          {isGenVideo
+            ? "Rendering..."
+            : isVideoQueued
+              ? "Queued ✕"
+              : hasVideo
+                ? "Regenerate"
+                : "Generate"}
         </button>
         {hasVideo && (
           <label className="checkbox-label approved-toggle">
