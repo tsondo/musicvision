@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import type { StepStatus } from "../hooks/usePipeline";
-import type { AssembleResult, ImageModelType, PipelineStage, RenderMode, TargetResolution, VideoEngineType } from "../api/types";
+import type { AssembleResult, ImageModelType, PipelineStage, RenderMode, SceneBoundary, TargetResolution, VideoEngineType } from "../api/types";
 import FileBrowser from "./FileBrowser";
 
 function progressStyle(done: number, total: number): React.CSSProperties {
@@ -15,6 +15,7 @@ interface Props {
   stage: PipelineStage;
   hasAudio: boolean;
   hasLyrics: boolean;
+  analyzed: boolean;
   sceneCount: number;
   imagesRemaining: number;
   videosRemaining: number;
@@ -22,6 +23,8 @@ interface Props {
   unapprovedSceneIds: string[];
   upscaleRemaining: number;
   uploadStatus: StepStatus;
+  analyzeStatus: StepStatus;
+  scenesStatus: StepStatus;
   intakeStatus: StepStatus;
   imagesStatus: StepStatus;
   videosStatus: StepStatus;
@@ -39,7 +42,10 @@ interface Props {
   onUploadLyrics: (file: File) => void;
   onImportAudio: (path: string) => void;
   onImportLyrics: (path: string) => void;
+  onRunAnalyze: (opts?: { skipTranscription?: boolean }) => void;
   onRunIntake: (opts?: { useLlm?: boolean; skipTranscription?: boolean }) => void;
+  onToggleWaveformEditor: () => void;
+  showWaveformEditor: boolean;
   onGenerateImages: (sceneIds?: string[], model?: ImageModelType) => void;
   onGenerateVideos: (sceneIds?: string[], engine?: VideoEngineType, renderMode?: RenderMode) => void;
   onUpscaleVideos: (sceneIds?: string[], resolution?: TargetResolution) => void;
@@ -55,10 +61,8 @@ function stepState(
   upscaleRemaining?: number,
 ): StepState {
   if (status === "done") return "done";
-  // Allow upscale to be active when there are clips to upscale,
-  // even if the current stage is still "videos" (not all scenes done).
   if (stepStage === "upscale" && upscaleRemaining && upscaleRemaining > 0) return "active";
-  const order: PipelineStage[] = ["upload", "intake", "images", "videos", "upscale", "assembly"];
+  const order: PipelineStage[] = ["upload", "analyze", "scenes", "images", "videos", "upscale", "assembly"];
   const stepIdx = order.indexOf(stepStage);
   const currentIdx = order.indexOf(currentStage);
   if (stepIdx < currentIdx) return "done";
@@ -70,6 +74,7 @@ export default function PipelineBar({
   stage,
   hasAudio,
   hasLyrics,
+  analyzed,
   sceneCount,
   imagesRemaining,
   videosRemaining,
@@ -77,6 +82,8 @@ export default function PipelineBar({
   unapprovedSceneIds,
   upscaleRemaining,
   uploadStatus,
+  analyzeStatus,
+  scenesStatus,
   intakeStatus,
   imagesStatus,
   videosStatus,
@@ -94,7 +101,10 @@ export default function PipelineBar({
   onUploadLyrics,
   onImportAudio,
   onImportLyrics,
+  onRunAnalyze,
   onRunIntake,
+  onToggleWaveformEditor,
+  showWaveformEditor,
   onGenerateImages,
   onGenerateVideos,
   onUpscaleVideos,
@@ -102,7 +112,6 @@ export default function PipelineBar({
 }: Props) {
   const audioRef = useRef<HTMLInputElement>(null);
   const lyricsRef = useRef<HTMLInputElement>(null);
-  const [useLlm, setUseLlm] = useState(true);
   const [browseTarget, setBrowseTarget] = useState<"audio" | "lyrics" | null>(null);
   const [imageModel, setImageModel] = useState<ImageModelType>("z-image-turbo");
   const [videoEngine, setVideoEngine] = useState<VideoEngineType>("humo");
@@ -124,6 +133,9 @@ export default function PipelineBar({
   const imagesWithCount = sceneCount - imagesRemaining;
   const videosWithCount = sceneCount - videosRemaining;
 
+  // Combined analyze status (analyze or legacy intake)
+  const analyzeStepStatus = analyzeStatus !== "idle" ? analyzeStatus : intakeStatus;
+
   return (
     <div className="pipeline-bar">
       {browseTarget && (
@@ -144,7 +156,7 @@ export default function PipelineBar({
         />
       )}
 
-      {/* Step 1: Upload */}
+      {/* Step 1: Import */}
       <div className={`pipeline-step ${stepState("upload", stage, uploadStatus)}`}>
         <div className="step-label">
           <span className="step-num">1</span> Import
@@ -188,10 +200,33 @@ export default function PipelineBar({
 
       <div className="step-arrow" />
 
-      {/* Step 2: Intake */}
-      <div className={`pipeline-step ${stepState("intake", stage, intakeStatus)}`}>
+      {/* Step 2: Analyze */}
+      <div className={`pipeline-step ${stepState("analyze", stage, analyzeStepStatus)}`}>
         <div className="step-label">
-          <span className="step-num">2</span> Intake
+          <span className="step-num">2</span> Analyze
+          {analyzed && <span className="step-check" title="Analysis complete" />}
+        </div>
+        <div className="step-controls">
+          <button
+            className="btn-sm"
+            disabled={!hasAudio || isRunning}
+            onClick={() => onRunAnalyze()}
+          >
+            {analyzeStatus === "running"
+              ? "Analyzing..."
+              : analyzed
+                ? "Re-analyze"
+                : "Analyze Audio"}
+          </button>
+        </div>
+      </div>
+
+      <div className="step-arrow" />
+
+      {/* Step 3: Scenes */}
+      <div className={`pipeline-step ${stepState("scenes", stage, scenesStatus)}`}>
+        <div className="step-label">
+          <span className="step-num">3</span> Scenes
           {sceneCount > 0 && (
             <span className="step-check" title={`${sceneCount} scenes`}>
               {sceneCount}
@@ -199,30 +234,28 @@ export default function PipelineBar({
           )}
         </div>
         <div className="step-controls">
-          <label className="checkbox-label">
-            <input
-              type="checkbox"
-              checked={useLlm}
-              onChange={(e) => setUseLlm(e.target.checked)}
-            />
-            LLM segmentation
-          </label>
           <button
-            className="btn-sm"
-            disabled={!hasAudio || isRunning}
-            onClick={() => onRunIntake({ useLlm })}
+            className={`btn-sm ${showWaveformEditor ? "btn-active" : ""}`}
+            disabled={!analyzed || isRunning}
+            onClick={onToggleWaveformEditor}
           >
-            {intakeStatus === "running" ? "Running..." : "Run Intake"}
+            {scenesStatus === "running"
+              ? "Creating..."
+              : showWaveformEditor
+                ? "Hide Editor"
+                : sceneCount > 0
+                  ? "Edit Scenes"
+                  : "Divide Scenes"}
           </button>
         </div>
       </div>
 
       <div className="step-arrow" />
 
-      {/* Step 3: Images */}
+      {/* Step 4: Images */}
       <div className={`pipeline-step ${stepState("images", stage, imagesStatus)}`}>
         <div className="step-label">
-          <span className="step-num">3</span> Images
+          <span className="step-num">4</span> Images
           {imagesWithCount > 0 && (
             <span className="step-check" title={`${imagesWithCount}/${sceneCount} generated`}>
               {imagesWithCount}/{sceneCount}
@@ -258,10 +291,10 @@ export default function PipelineBar({
 
       <div className="step-arrow" />
 
-      {/* Step 4: Videos */}
+      {/* Step 5: Videos */}
       <div className={`pipeline-step ${stepState("videos", stage, videosStatus)}`}>
         <div className="step-label">
-          <span className="step-num">4</span> Videos
+          <span className="step-num">5</span> Videos
           {videosWithCount > 0 && (
             <span className="step-check" title={`${videosWithCount}/${sceneCount} generated`}>
               {videosWithCount}/{sceneCount}
@@ -329,10 +362,10 @@ export default function PipelineBar({
 
       <div className="step-arrow" />
 
-      {/* Step 5: Upscale */}
+      {/* Step 6: Upscale */}
       <div className={`pipeline-step ${stepState("upscale", stage, upscaleStatus, upscaleRemaining)}`}>
         <div className="step-label">
-          <span className="step-num">5</span> Upscale
+          <span className="step-num">6</span> Upscale
           {sceneCount - upscaleRemaining > 0 && (
             <span className="step-check" title={`${sceneCount - upscaleRemaining}/${sceneCount} upscaled`}>
               {sceneCount - upscaleRemaining}/{sceneCount}
@@ -368,10 +401,10 @@ export default function PipelineBar({
 
       <div className="step-arrow" />
 
-      {/* Step 6: Assembly */}
+      {/* Step 7: Assembly */}
       <div className={`pipeline-step ${stepState("assembly", stage, assembleStatus)}`}>
         <div className="step-label">
-          <span className="step-num">6</span> Assembly
+          <span className="step-num">7</span> Assembly
           {assembleResult && <span className="step-check" title="Assembled" />}
         </div>
         <div className="step-controls">

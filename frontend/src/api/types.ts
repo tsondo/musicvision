@@ -62,12 +62,20 @@ export interface Scene {
   notes: string;
 }
 
+export interface SongSection {
+  name: string;
+  time: number;
+}
+
 export interface SongInfo {
   audio_file: string;
   lyrics_file: string;
   bpm: number | null;
   duration_seconds: number | null;
   keyscale: string;
+  beat_times: number[];
+  sections: SongSection[];
+  analyzed: boolean;
 }
 
 export interface ProjectConfig {
@@ -203,4 +211,28 @@ export interface AssembleResult {
   fcpxml?: string;
 }
 
-export type PipelineStage = "upload" | "intake" | "images" | "videos" | "upscale" | "assembly";
+export type PipelineStage = "upload" | "analyze" | "scenes" | "images" | "videos" | "upscale" | "assembly";
+
+export interface WordTimestamp {
+  word: string;
+  start: number;
+  end: number;
+}
+
+export interface AnalysisResult {
+  analyzed: boolean;
+  duration: number;
+  bpm: number | null;
+  beat_times: number[];
+  word_timestamps: WordTimestamp[];
+  vocal_path: string | null;
+  sections: SongSection[];
+}
+
+export interface SceneBoundary {
+  time_start: number;
+  time_end: number;
+  section: string;
+  type: SceneType;
+  lyrics: string;
+}

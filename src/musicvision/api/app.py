@@ -32,6 +32,7 @@ from musicvision.models import (
     ImageModel,
     ProjectConfig,
     Scene,
+    SceneBoundary,
     StyleSheet,
     VideoEngineType,
 )
@@ -632,17 +633,109 @@ async def regenerate_video(scene_id: str, req: RegenerateVideoRequest) -> Scene:
 # Pipeline stage endpoints (stubs — will call into engine modules)
 # ---------------------------------------------------------------------------
 
+@app.post("/api/pipeline/analyze")
+async def analyze_audio(
+    skip_transcription: bool = False,
+    use_vocal_separation: bool = True,
+):
+    """Phase 1: Analyze audio (BPM, Whisper, demucs). No scene boundaries."""
+    from musicvision.intake.pipeline import run_analyze as _run_analyze
+    from musicvision.utils.gpu import detect_devices
+
+    proj = get_project()
+
+    def _run() -> dict:
+        device_map = detect_devices()
+        result = _run_analyze(
+            project=proj,
+            device_map=device_map,
+            skip_transcription=skip_transcription,
+            use_vocal_separation=use_vocal_separation,
+        )
+        return result.model_dump(mode="json")
+
+    return await asyncio.to_thread(_run)
+
+
+class CreateScenesRequest(BaseModel):
+    boundaries: list[SceneBoundary]
+    snap_to_beats: bool = False
+
+
+@app.post("/api/pipeline/create-scenes")
+async def create_scenes(req: CreateScenesRequest):
+    """Phase 2: Create scenes from manual waveform editor boundaries."""
+    from musicvision.intake.pipeline import create_scenes_from_boundaries
+
+    proj = get_project()
+
+    def _run() -> dict:
+        scene_list = create_scenes_from_boundaries(
+            project=proj,
+            boundaries=req.boundaries,
+            snap_to_beats=req.snap_to_beats,
+        )
+        return {"status": "complete", "scene_count": len(scene_list.scenes)}
+
+    return await asyncio.to_thread(_run)
+
+
+@app.post("/api/pipeline/auto-segment")
+async def auto_segment(use_llm: bool = True):
+    """Phase 2 alternative: LLM/rule-based auto-segmentation."""
+    from musicvision.intake.pipeline import run_auto_segment
+
+    proj = get_project()
+
+    def _run() -> dict:
+        scene_list = run_auto_segment(project=proj, use_llm=use_llm)
+        return {"status": "complete", "scene_count": len(scene_list.scenes)}
+
+    return await asyncio.to_thread(_run)
+
+
+@app.get("/api/analysis")
+async def get_analysis():
+    """Retrieve stored analysis data for the waveform editor."""
+    import json as _json
+
+    proj = get_project()
+    config = proj.config
+
+    if not config.song.analyzed:
+        return {"analyzed": False}
+
+    # Load word timestamps from disk
+    ts_path = proj.paths.input_dir / "word_timestamps.json"
+    word_timestamps = []
+    if ts_path.exists():
+        word_timestamps = _json.loads(ts_path.read_text(encoding="utf-8"))
+
+    vocal_path = None
+    vocal_file = proj.paths.input_dir / "audio_vocal.wav"
+    if vocal_file.exists():
+        vocal_path = str(vocal_file.relative_to(proj.paths.root))
+
+    return {
+        "analyzed": True,
+        "duration": config.song.duration_seconds,
+        "bpm": config.song.bpm,
+        "beat_times": config.song.beat_times,
+        "word_timestamps": word_timestamps,
+        "vocal_path": vocal_path,
+        "sections": [s.model_dump() for s in config.song.sections],
+    }
+
+
 @app.post("/api/pipeline/intake")
 async def run_intake(
     use_llm: bool = True,
     skip_transcription: bool = False,
-    use_vocal_separation: bool = False,
+    use_vocal_separation: bool = True,
 ):
-    """Stage 1: Analyze audio, transcribe, segment into scenes."""
+    """Stage 1: Full intake (analyze + segment in one call). CLI backward-compat."""
     from musicvision.intake.pipeline import run_intake as _run_intake
     from musicvision.utils.gpu import detect_devices
-
-    import asyncio
 
     proj = get_project()
 

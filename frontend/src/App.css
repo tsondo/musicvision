@@ -1035,3 +1035,157 @@ button:disabled {
 .btn-browse:hover {
   border-color: var(--text-dim);
 }
+
+/* ===== Waveform Editor ===== */
+
+.waveform-editor {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin: 8px 12px;
+  padding: 12px 16px;
+}
+
+.waveform-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.waveform-header h3 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.waveform-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.waveform-container {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px;
+  min-height: 136px;
+}
+
+/* wavesurfer region labels */
+.waveform-container [part="region-content"] {
+  font-size: 10px;
+  font-family: var(--font);
+  color: var(--text-dim);
+  padding: 2px 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.waveform-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.waveform-time {
+  font-size: 12px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  min-width: 100px;
+}
+
+.waveform-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.waveform-toggle input {
+  accent-color: var(--accent);
+}
+
+.waveform-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+.btn-active {
+  background: var(--accent) !important;
+  color: #fff !important;
+}
+
+/* Scene list table */
+.waveform-scenes {
+  margin-top: 10px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.scene-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.scene-table th {
+  text-align: left;
+  padding: 4px 8px;
+  color: var(--text-muted);
+  font-weight: 500;
+  border-bottom: 1px solid var(--border);
+}
+
+.scene-table td {
+  padding: 4px 8px;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+}
+
+.scene-table tr {
+  cursor: pointer;
+}
+
+.scene-table tr:hover {
+  background: var(--bg-card-hover);
+}
+
+.scene-table tr.selected {
+  background: rgba(91, 138, 245, 0.1);
+}
+
+.scene-section-cell {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.btn-delete-marker {
+  background: none;
+  border: none;
+  color: var(--red);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.btn-delete-marker:hover {
+  background: var(--red-dim);
+}
+
+.btn-primary {
+  background: var(--accent) !important;
+  color: #fff !important;
+  border-color: var(--accent) !important;
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+}

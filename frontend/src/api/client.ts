@@ -1,4 +1,5 @@
 import type {
+  AnalysisResult,
   AssembleResult,
   BatchGenResult,
   FilesystemListResult,
@@ -11,6 +12,7 @@ import type {
   RegenerateVideoRequest,
   RenderMode,
   Scene,
+  SceneBoundary,
   TargetResolution,
   UpdateSceneRequest,
   UpscaleResult,
@@ -160,6 +162,45 @@ export async function uploadLyrics(
     throw new ApiError(res.status, body.detail ?? res.statusText);
   }
   return res.json();
+}
+
+export async function runAnalyze(opts?: {
+  skipTranscription?: boolean;
+  useVocalSeparation?: boolean;
+}): Promise<AnalysisResult> {
+  const params = new URLSearchParams();
+  if (opts?.skipTranscription !== undefined)
+    params.set("skip_transcription", String(opts.skipTranscription));
+  if (opts?.useVocalSeparation !== undefined)
+    params.set("use_vocal_separation", String(opts.useVocalSeparation));
+  const qs = params.toString();
+  return request(`/api/pipeline/analyze${qs ? `?${qs}` : ""}`, {
+    method: "POST",
+  });
+}
+
+export async function getAnalysis(): Promise<AnalysisResult> {
+  return request("/api/analysis");
+}
+
+export async function createScenes(
+  boundaries: SceneBoundary[],
+  snapToBeats: boolean = false,
+): Promise<IntakeResult> {
+  return request("/api/pipeline/create-scenes", {
+    method: "POST",
+    body: JSON.stringify({ boundaries, snap_to_beats: snapToBeats }),
+  });
+}
+
+export async function autoSegment(
+  useLlm: boolean = true,
+): Promise<IntakeResult> {
+  const params = new URLSearchParams();
+  params.set("use_llm", String(useLlm));
+  return request(`/api/pipeline/auto-segment?${params}`, {
+    method: "POST",
+  });
 }
 
 export async function runIntake(opts?: {

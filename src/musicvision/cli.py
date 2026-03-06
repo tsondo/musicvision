@@ -661,8 +661,9 @@ def main() -> None:
     p_in.add_argument("--llm", action="store_true", help="Use LLM for segmentation (default: rule-based)")
     p_in.add_argument("--skip-transcription", action="store_true", dest="skip_transcription",
                        help="Skip Whisper transcription (use existing lyrics)")
-    p_in.add_argument("--vocal-separation", action="store_true", dest="vocal_separation",
-                       help="Run vocal separation before transcription")
+    p_in.add_argument("--no-vocal-separation", action="store_false", dest="vocal_separation",
+                       help="Skip vocal separation (runs by default)")
+    p_in.set_defaults(vocal_separation=True)
 
     # generate-images
     p_gi = sub.add_parser("generate-images", help="Stage 2: Generate reference images for scenes")

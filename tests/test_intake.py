@@ -201,3 +201,77 @@ class TestValidateAndAdjustScenes:
             assert scene.frame_start is not None
             assert scene.total_frames is not None
             assert scene.subclip_frame_counts is not None
+
+
+class TestAceStepSections:
+    """Test AceStep section marker parsing."""
+
+    def test_parse_sections_basic(self):
+        from musicvision.intake.pipeline import parse_acestep_sections
+
+        lyrics = "(Intro)\nLa la la\n(Verse 1)\nHello world\nGoodbye moon\n(Chorus)\nSing along"
+        words = [
+            WordTimestamp("La", 0.0, 0.5),
+            WordTimestamp("la", 0.5, 1.0),
+            WordTimestamp("la", 1.0, 1.5),
+            WordTimestamp("Hello", 5.0, 5.5),
+            WordTimestamp("world", 5.5, 6.0),
+            WordTimestamp("Goodbye", 8.0, 8.5),
+            WordTimestamp("moon", 8.5, 9.0),
+            WordTimestamp("Sing", 15.0, 15.5),
+            WordTimestamp("along", 15.5, 16.0),
+        ]
+        sections = parse_acestep_sections(lyrics, words, 20.0)
+
+        assert len(sections) == 3
+        assert sections[0].name == "Intro"
+        assert sections[1].name == "Verse 1"
+        assert sections[2].name == "Chorus"
+        # Sections should have increasing times
+        assert sections[0].time < sections[1].time < sections[2].time
+
+    def test_parse_sections_no_markers(self):
+        from musicvision.intake.pipeline import parse_acestep_sections
+
+        lyrics = "Just some lyrics\nNo section markers"
+        sections = parse_acestep_sections(lyrics, [], 10.0)
+        assert sections == []
+
+    def test_parse_sections_no_timestamps(self):
+        from musicvision.intake.pipeline import parse_acestep_sections
+
+        lyrics = "(Verse 1)\nHello\n(Chorus)\nWorld"
+        sections = parse_acestep_sections(lyrics, [], 20.0)
+        assert len(sections) == 2
+        assert sections[0].name == "Verse 1"
+        assert sections[0].time == 0.0
+        assert sections[1].time == 10.0  # evenly distributed
+
+
+class TestSongInfoFields:
+    """Test new SongInfo fields survive roundtrip."""
+
+    def test_beat_times_roundtrip(self, tmp_path):
+        from musicvision.models import ProjectConfig, SongSection
+
+        config = ProjectConfig(
+            song={"audio_file": "test.wav", "beat_times": [0.5, 1.0, 1.5],
+                  "sections": [{"name": "Verse 1", "time": 0.5}],
+                  "analyzed": True},
+        )
+        path = tmp_path / "project.yaml"
+        config.save(path)
+        loaded = ProjectConfig.load(path)
+
+        assert loaded.song.beat_times == [0.5, 1.0, 1.5]
+        assert loaded.song.analyzed is True
+        assert len(loaded.song.sections) == 1
+        assert loaded.song.sections[0].name == "Verse 1"
+
+    def test_defaults_backward_compat(self):
+        from musicvision.models import SongInfo
+
+        song = SongInfo()
+        assert song.beat_times == []
+        assert song.sections == []
+        assert song.analyzed is False

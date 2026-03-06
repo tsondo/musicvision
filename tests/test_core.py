@@ -293,7 +293,7 @@ class TestVocalSeparation:
     def test_defaults(self):
         cfg = VocalSeparationConfig()
         assert cfg.method == SeparationMethod.DEMUCS
-        assert cfg.demucs_model == DemucsModel.HTDEMUCS
+        assert cfg.demucs_model == DemucsModel.HTDEMUCS_FT
 
     def test_roundtrip(self, tmp_path):
         config = ProjectConfig(

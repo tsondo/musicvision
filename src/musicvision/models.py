@@ -337,6 +337,12 @@ class AceStepMeta(BaseModel):
     raw: dict = Field(default_factory=dict)
 
 
+class SongSection(BaseModel):
+    """A labeled section of the song (e.g. 'Verse 1', 'Chorus')."""
+    name: str
+    time: float  # estimated start time in seconds
+
+
 class SongInfo(BaseModel):
     audio_file: str = ""
     lyrics_file: str = ""
@@ -344,6 +350,9 @@ class SongInfo(BaseModel):
     duration_seconds: Optional[float] = None
     keyscale: str = ""
     acestep: Optional[AceStepMeta] = None  # populated if AceStep JSON was found
+    beat_times: list[float] = Field(default_factory=list)
+    sections: list[SongSection] = Field(default_factory=list)
+    analyzed: bool = False  # True after Phase 1 (BPM, Whisper, demucs) completes
 
 
 # ---------------------------------------------------------------------------
@@ -352,7 +361,7 @@ class SongInfo(BaseModel):
 
 class VocalSeparationConfig(BaseModel):
     method: SeparationMethod = SeparationMethod.DEMUCS
-    demucs_model: DemucsModel = DemucsModel.HTDEMUCS
+    demucs_model: DemucsModel = DemucsModel.HTDEMUCS_FT
 
 
 # Resolution lookup: enum value → (width, height)
@@ -604,3 +613,26 @@ class SceneList(BaseModel):
         if not self.scenes:
             return 0.0
         return max(s.time_end for s in self.scenes)
+
+
+# ---------------------------------------------------------------------------
+# Analysis result + manual scene boundary (Phase 1 & 2 split)
+# ---------------------------------------------------------------------------
+
+class AnalysisResult(BaseModel):
+    """Returned by run_analyze() — everything the waveform editor needs."""
+    duration: float
+    bpm: float | None = None
+    beat_times: list[float] = Field(default_factory=list)
+    word_timestamps: list[dict] = Field(default_factory=list)  # [{word, start, end}]
+    vocal_path: str | None = None
+    sections: list[SongSection] = Field(default_factory=list)
+
+
+class SceneBoundary(BaseModel):
+    """A manual scene boundary from the waveform editor."""
+    time_start: float
+    time_end: float
+    section: str = ""
+    type: SceneType = SceneType.VOCAL
+    lyrics: str = ""
