@@ -516,16 +516,24 @@ class HumoEngine:
 
     def _compute_zero_vae(self) -> None:
         """
-        Compute VAE encoding of a multi-frame all-black video and cache on CPU.
+        Load or compute zero_vae: VAE encoding of an all-zeros video.
 
-        The original HuMo loads pre-computed zero_vae_129frame.pt / zero_vae_720p_161frame.pt.
-        The causal 3D convolution in the VAE produces DIFFERENT latent values at each
-        temporal position (earlier frames have less temporal context), so encoding a
-        single frame and tiling is WRONG — it gives identical values at every position
-        whereas the model was trained with position-dependent zero_vae values.
+        IMPORTANT: "zero" means 0.0 in the VAE's native [-1,1] input range
+        (i.e., mid-gray pixels), NOT -1.0 (true black). The original HuMo was
+        trained with torch.zeros() passed directly to the raw WanVAE.encode()
+        which does NOT normalize — so the conditioning signal is for mid-gray.
 
-        We encode a 97-frame black video (max HuMo clip length) → 25 latent frames,
-        then slice to the needed length in _encode_image().
+        Our WanVideoVAE.encode() normalizes [0,1] → [-1,1], so we must pass
+        0.5 (mid-gray in [0,1]) to get 0.0 in [-1,1] space.
+
+        Strategy:
+          1. Try official pre-computed files (exact, no GPU needed):
+             - zero_vae_129frame.pt  → 480p (lat 60×104)
+             - zero_vae_720p_161frame.pt → 720p (lat 90×160)
+          2. Fall back to computing via VAE encode with correct 0.5 input.
+
+        The causal 3D convolution produces position-dependent latent values,
+        so encoding a single frame and tiling is WRONG.
         """
         import torch
 
@@ -533,53 +541,109 @@ class HumoEngine:
             log.warning("VAE not loaded — cannot compute zero_vae")
             return
 
-        vae = self._bundle.vae
         H, W = self.config.height, self.config.width
+        lat_h, lat_w = H // 8, W // 8
 
-        # Use the primary (DiT) GPU for this heavy one-time computation.
-        # Encoding 97 frames through the causal 3D VAE accumulates a large
-        # feature cache that can OOM on the 16GB encoder GPU.  The 32GB DiT
-        # GPU has plenty of headroom, and the result is cached on CPU anyway.
+        # Try loading official pre-computed zero_vae
+        loaded = self._try_load_official_zero_vae(lat_h, lat_w)
+        if loaded:
+            return
+
+        # Fall back to computing ourselves
+        self._compute_zero_vae_from_vae(H, W)
+
+    def _try_load_official_zero_vae(self, lat_h: int, lat_w: int) -> bool:
+        """Try to load official pre-computed zero_vae if resolution matches."""
+        import torch
+        from pathlib import Path
+
+        weights_dir = Path.home() / ".cache/musicvision/weights/humo/reference"
+
+        # Map latent dims to official files
+        official_files = {
+            (60, 104): weights_dir / "zero_vae_129frame.pt",     # 480p
+            (90, 160): weights_dir / "zero_vae_720p_161frame.pt",  # 720p
+        }
+
+        path = official_files.get((lat_h, lat_w))
+        if path is None or not path.exists():
+            return False
+
+        try:
+            zv = torch.load(path, map_location="cpu", weights_only=True)
+            # Official shape: [16, F, lat_h, lat_w] — add batch dim
+            self._zero_vae = zv.unsqueeze(0).float()  # [1, 16, F, lat_h, lat_w]
+            log.info(
+                "Loaded official zero_vae from %s: shape %s, mean=%.6f, std=%.6f",
+                path.name, list(self._zero_vae.shape),
+                self._zero_vae.mean().item(), self._zero_vae.std().item(),
+            )
+            return True
+        except Exception as e:
+            log.warning("Failed to load official zero_vae from %s: %s", path, e)
+            return False
+
+    def _compute_zero_vae_from_vae(self, H: int, W: int) -> None:
+        """Compute zero_vae by encoding mid-gray video through VAE."""
+        import torch
+        import gc
+
+        vae = self._bundle.vae
         dit_device = self._bundle.dit_device
         enc_device = self._bundle.encoder_device
 
-        # We need total_lat_f = lat_f + 1 = 26 latent frames (25 noise + 1 ref slot).
-        # 129 frames → 33 latent frames (matching original's zero_vae_129frame.pt),
-        # giving plenty of headroom for any clip length.
-        n_black_frames = 129
-        log.info("Computing zero_vae (129-frame black video at %dx%d on %s)...", W, H, dit_device)
+        n_frames = 129  # → 33 latent frames
+        log.info("Computing zero_vae (129-frame mid-gray video at %dx%d on %s)...", W, H, dit_device)
 
-        # Temporarily move VAE to DiT GPU for this computation
+        # Offload DiT to CPU to free the 32GB GPU for VAE encoding.
+        dit_nn = self._get_nn_module("dit")
+        if dit_nn is not None:
+            dit_nn.to("cpu")
+            torch.cuda.empty_cache()
+            gc.collect()
+            log.debug("Temporarily offloaded DiT to CPU for zero_vae computation")
+
+        # Move VAE to DiT GPU in float16 for encoding
         vae_nn = self._get_nn_module("vae")
-        original_vae_device = vae.device
+        original_outer_dtype = vae.dtype
+        original_inner_dtype = vae._vae.dtype if vae._vae is not None else torch.float32
+        vae.dtype = torch.float16
         if vae_nn is not None:
-            vae_nn.to(dit_device)
+            vae_nn.to(device=dit_device, dtype=torch.float16)
         vae.device = dit_device
-        # Also move the normalization tensors
         if vae._vae is not None:
-            vae._vae.mean = vae._vae.mean.to(dit_device)
-            vae._vae.std = vae._vae.std.to(dit_device)
+            vae._vae.dtype = torch.float16
+            vae._vae.mean = vae._vae.mean.to(device=dit_device, dtype=torch.float16)
+            vae._vae.std = vae._vae.std.to(device=dit_device, dtype=torch.float16)
             vae._vae.scale = [vae._vae.mean, 1.0 / vae._vae.std]
 
-        # [1, 3, 97, H, W] all-black video in [0,1] range
-        black_video = torch.zeros(1, 3, n_black_frames, H, W, device=dit_device)
+        # Mid-gray (0.5 in [0,1]) → 0.0 in [-1,1] after WanVideoVAE normalization.
+        # This matches the original HuMo which encoded torch.zeros() directly
+        # through the raw WanVAE (no normalization).
+        midgray_video = torch.full((1, 3, n_frames, H, W), 0.5, device=dit_device)
 
         with torch.no_grad():
-            zero_latent = vae.encode(black_video)  # [1, 16, 25, lat_h, lat_w]
+            zero_latent = vae.encode(midgray_video)  # [1, 16, 33, lat_h, lat_w]
 
-        # Cache on CPU
         self._zero_vae = zero_latent.cpu()
-        del black_video, zero_latent
+        del midgray_video, zero_latent
         torch.cuda.empty_cache()
 
-        # Move VAE back to encoder device
+        # Move VAE back to encoder device in float32
+        vae.dtype = original_outer_dtype
         if vae_nn is not None:
-            vae_nn.to(enc_device)
+            vae_nn.to(device=enc_device, dtype=torch.float32)
         vae.device = enc_device
         if vae._vae is not None:
-            vae._vae.mean = vae._vae.mean.to(enc_device)
-            vae._vae.std = vae._vae.std.to(enc_device)
+            vae._vae.dtype = original_inner_dtype
+            vae._vae.mean = vae._vae.mean.to(device=enc_device, dtype=torch.float32)
+            vae._vae.std = vae._vae.std.to(device=enc_device, dtype=torch.float32)
             vae._vae.scale = [vae._vae.mean, 1.0 / vae._vae.std]
+
+        # Reload DiT back to its GPU
+        if dit_nn is not None:
+            dit_nn.to(dit_device)
+            log.debug("Reloaded DiT to %s after zero_vae computation", dit_device)
 
         log.info(
             "zero_vae cached: shape %s, mean=%.6f, std=%.6f",
@@ -613,9 +677,9 @@ class HumoEngine:
         Positive: zero_vae for noise frames, ref image latent at last position.
         Negative: zero_vae for ALL frames (including ref position).
 
-        zero_vae is the VAE encoding of a black frame — NOT torch.zeros().
-        The model was trained with these non-zero baseline values; using literal
-        zeros shifts conditioning and causes noise artifacts.
+        zero_vae is the VAE encoding of an all-zeros input in [-1,1] range
+        (mid-gray pixels, not true black). The model was trained with these
+        non-zero baseline values; using wrong values shifts conditioning.
         """
         if self._bundle is None or self._bundle.vae is None:
             raise RuntimeError("VAE not loaded — call load() first")
@@ -661,6 +725,14 @@ class HumoEngine:
         self._reload("vae")
         with torch.no_grad():
             img_latent = vae.encode_image(img_t)  # [1, 16, 1, lat_h, lat_w]
+
+        log.info(
+            "Image latent: mean=%.4f, std=%.4f | zero_vae[0]: mean=%.4f, std=%.4f",
+            img_latent.float().mean().item(),
+            img_latent.float().std().item(),
+            self._zero_vae[:, :, 0].float().mean().item() if self._zero_vae is not None else 0,
+            self._zero_vae[:, :, 0].float().std().item() if self._zero_vae is not None else 0,
+        )
 
         # Get zero_vae: pre-computed VAE encoding of multi-frame black video.
         # The causal 3D VAE produces position-dependent latent values — each temporal
@@ -1002,13 +1074,29 @@ class HumoEngine:
         # Drop the last latent frame (reference frame used for conditioning)
         noise_latent = latent[:, :, :-1, :, :]  # [1, 16, lat_f, lat_h, lat_w]
 
-        # Move to encoder device for VAE decode
-        noise_latent = noise_latent.to(enc_device).to(torch.float16)
+        log.info(
+            "Decode input latent: shape=%s, mean=%.4f, std=%.4f",
+            list(noise_latent.shape),
+            noise_latent.float().mean().item(),
+            noise_latent.float().std().item(),
+        )
+
+        # Move to encoder device for VAE decode (float32 — matching original HuMo).
+        # The causal 3D decoder accumulates state across temporal frames; float16
+        # precision errors compound and saturate the output to near -1.0.
+        noise_latent = noise_latent.to(enc_device).float()
 
         with torch.no_grad():
-            pixels = vae.decode(noise_latent)  # [1, 3, T, H, W] in [0, 1]
-            # Note: WanVideoVAE.decode() already maps [-1,1] → [0,1] internally
-            # via (out + 1) / 2.  Do NOT re-apply that conversion here.
+            # WanVideoVAE.decode handles un-normalization + [-1,1] → [0,1] mapping
+            pixels = vae.decode(noise_latent)  # [1, 3, T*4, H*8, W*8] in [0,1]
+
+        log.info(
+            "VAE decode output [0,1]: mean=%.4f, std=%.4f, min=%.4f, max=%.4f",
+            pixels.float().mean().item(),
+            pixels.float().std().item(),
+            pixels.float().min().item(),
+            pixels.float().max().item(),
+        )
 
         # Convert to (T, H, W, 3) uint8 on CPU
         pixels = pixels.squeeze(0)           # [3, T, H, W]

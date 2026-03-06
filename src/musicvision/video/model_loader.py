@@ -225,7 +225,7 @@ class BaseHumoLoader(ABC):
             path = download_shared("vae", base_dir=weights_dir)
 
         log.info("Loading VAE from %s onto %s", path.name, device)
-        vae = WanVideoVAE(device=device, dtype=torch.float16)
+        vae = WanVideoVAE(device=device, dtype=torch.float32)
         vae.load(path)
         log.info("VAE ready on %s", device)
         return vae
@@ -503,13 +503,13 @@ class FP8ScaledLinear(__import__("torch").nn.Module):
 
         # Requires compute capability ≥ 8.9; falls back to bf16 on older GPUs
         if not _fp8_supported(x.device):
-            w_bf16 = self.weight.to(torch.bfloat16) * self.scale
+            w_bf16 = (self.weight.to(torch.bfloat16) * self.scale).to(torch.bfloat16)
             out = torch.nn.functional.linear(x.to(torch.bfloat16), w_bf16, self.bias)
             return out
 
         # Dynamic per-tensor input scaling (matching ComfyUI's fp8_optimization.py).
+        # _scaled_mm requires: A (input) = e4m3fn (row-major), B (weight.t()) = e5m2 (col-major).
         # Compute scale_a so that x / scale_a fits in fp8_e4m3fn range [-448, 448].
-        # Without this, values > 448 get clipped, corrupting the computation.
         fp8_max = torch.finfo(torch.float8_e4m3fn).max  # 448.0
         x_abs_max = x.abs().amax().clamp(min=1e-12)
         scale_a = (x_abs_max / fp8_max).to(torch.float32)

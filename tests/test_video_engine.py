@@ -198,9 +198,9 @@ class TestHumoConfig:
         assert cfg.resolution == "544p"
         assert cfg.height == 544
         assert cfg.width == 960
-        assert cfg.scale_a == 2.0
-        assert cfg.scale_t == 7.5
-        assert cfg.denoising_steps == 30
+        assert cfg.scale_a == 5.5
+        assert cfg.scale_t == 5.0
+        assert cfg.denoising_steps == 50
 
     def test_720p_resolution(self):
         cfg = HumoConfig(resolution="720p")
