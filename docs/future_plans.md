@@ -280,6 +280,8 @@ Each format is a progressively deeper pass through the pipeline. Users can stop 
 - **LTX-2 evolution** — Already integrated. Native audio+video generation in a single pass is unique. Quality and controllability will improve with newer checkpoints.
 - **LatentSync** — Lip sync post-processing. v1.6 is current (512×512, diffusion-based). Watch for singing-specific improvements and higher resolution support.
 - **MuseTalk** — Real-time lip sync (single-step, 256×256). Useful as a fast preview engine if quality gap with LatentSync closes.
+- **VBVR / Reasoning-Oriented Training Data** — [VBVR-Wan2.2](https://huggingface.co/Video-Reason/VBVR-Wan2.2) ([paper](https://arxiv.org/abs/2602.20159)) fine-tunes Wan2.2-I2V-A14B on 1M+ video clips spanning 200 reasoning tasks (spatial, causal, temporal, perceptual) with **zero architecture changes**. Result: 84.6% improvement in video reasoning benchmarks, beating Sora 2 and Veo 3.1 on physical plausibility and cause-effect consistency. Key insight: reasoning quality scales with training data volume under fixed architectures — in-domain scores rose from 0.412 → 0.771 at 400K samples before saturating. Not directly usable (Wan2.2-A14B weights, incompatible with HVA/LTX-2; 14B active params needs 24GB+), but signals that the next wave of quality improvements across all video engines will come from better training data rather than new architectures. Watch for: HVA or LTX releases citing reasoning-oriented data; community fine-tunes of engines we use; smaller VBVR-tuned checkpoints (<16GB) that could serve as a cinematic-scene engine.
+
 
 ---
 
