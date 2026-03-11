@@ -475,11 +475,9 @@ export default function WaveformEditor({
       let newTime = snap(region.start);
 
       // Clamp: must stay between neighboring markers (or song bounds)
-      // with a small buffer to prevent exact overlaps
-      const MIN_GAP = 0.001; // seconds
       setMarkers((prev) => {
-        const lo = idx > 0 ? (prev[idx - 1] ?? 0) + MIN_GAP : MIN_GAP;
-        const hi = idx < prev.length - 1 ? (prev[idx + 1] ?? duration) - MIN_GAP : duration - MIN_GAP;
+        const lo = idx > 0 ? (prev[idx - 1] ?? 0) : 0;
+        const hi = idx < prev.length - 1 ? (prev[idx + 1] ?? duration) : duration;
         newTime = Math.max(lo, Math.min(hi, newTime));
         const next = [...prev];
         next[idx] = Math.round(newTime * 100) / 100;
