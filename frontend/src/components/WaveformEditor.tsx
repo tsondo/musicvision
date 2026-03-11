@@ -429,35 +429,41 @@ export default function WaveformEditor({
       if (r.id.startsWith("marker_") || r.id === "active_scene") r.remove();
     }
 
-    // Inactive markers: thin, non-draggable
+    // Render inactive markers first, then active ones on top
     for (let i = 0; i < markers.length; i++) {
-      if (draggableMarkers.has(i)) continue; // skip active markers — handled by resizable region
-      const t = markers[i]!;
+      if (draggableMarkers.has(i)) continue;
       reg.addRegion({
         id: `marker_${i}`,
-        start: t,
-        end: t + 0.05,
-        color: "rgba(245, 197, 66, 0.4)",
+        start: markers[i]!,
+        end: markers[i]! + 0.05,
+        color: "rgba(245, 197, 66, 0.35)",
         drag: false,
         resize: false,
       });
     }
+    for (const i of draggableMarkers) {
+      if (i < 0 || i >= markers.length) continue;
+      reg.addRegion({
+        id: `marker_${i}`,
+        start: markers[i]!,
+        end: markers[i]! + 0.05,
+        color: "rgba(245, 158, 11, 0.95)",
+        drag: true,
+        resize: false,
+      });
+    }
 
-    // Active scene: resizable region with drag handles on both edges
+    // Highlight the active scene region (non-interactive)
     if (activeScene !== null) {
-      const canResizeStart = activeScene > 0; // first scene's start is fixed at 0
-      const canResizeEnd = activeScene < markers.length; // last scene's end is fixed at duration
       const sceneStart = activeScene > 0 ? (markers[activeScene - 1] ?? 0) : 0;
       const sceneEnd = activeScene < markers.length ? (markers[activeScene] ?? duration) : duration;
       reg.addRegion({
         id: "active_scene",
         start: sceneStart,
         end: sceneEnd,
-        color: "rgba(245, 158, 11, 0.18)",
+        color: "rgba(245, 158, 11, 0.12)",
         drag: false,
         resize: false,
-        resizeStart: canResizeStart,
-        resizeEnd: canResizeEnd,
       });
     }
   }, [ready, markers, draggableMarkers, activeScene, duration]);
@@ -483,44 +489,22 @@ export default function WaveformEditor({
     });
   }, [ready, gaps]);
 
-  // ---- Handle active scene resize — update shared boundary markers ----
+  // ---- Handle marker drag — clamp to neighbors ----
   useEffect(() => {
     if (!regionsRef.current) return;
     const reg = regionsRef.current;
 
     const handleUpdate = (region: Region) => {
-      if (region.id !== "active_scene" || activeScene === null) return;
-
-      const startMarkerIdx = activeScene - 1; // -1 if first scene (no marker)
-      const endMarkerIdx = activeScene;       // = markers.length if last scene (no marker)
+      if (!region.id.startsWith("marker_")) return;
+      const idx = parseInt(region.id.replace("marker_", ""), 10);
+      let newTime = snap(region.start);
 
       setMarkers((prev) => {
+        const lo = idx > 0 ? (prev[idx - 1] ?? 0) : 0;
+        const hi = idx < prev.length - 1 ? (prev[idx + 1] ?? duration) : duration;
+        newTime = Math.max(lo, Math.min(hi, newTime));
         const next = [...prev];
-
-        // Update start boundary
-        if (startMarkerIdx >= 0 && startMarkerIdx < next.length) {
-          let newStart = snap(region.start);
-          // Clamp: can't go before the marker before it (or 0)
-          const lo = startMarkerIdx > 0 ? (next[startMarkerIdx - 1] ?? 0) : 0;
-          newStart = Math.max(lo, newStart);
-          // Can't cross the end marker
-          const hi = endMarkerIdx < next.length ? (next[endMarkerIdx] ?? duration) : duration;
-          newStart = Math.min(newStart, hi);
-          next[startMarkerIdx] = Math.round(newStart * 100) / 100;
-        }
-
-        // Update end boundary
-        if (endMarkerIdx >= 0 && endMarkerIdx < next.length) {
-          let newEnd = snap(region.end);
-          // Clamp: can't go past the marker after it (or duration)
-          const hi = endMarkerIdx < next.length - 1 ? (next[endMarkerIdx + 1] ?? duration) : duration;
-          newEnd = Math.min(hi, newEnd);
-          // Can't cross the start marker
-          const lo = startMarkerIdx >= 0 ? (next[startMarkerIdx] ?? 0) : 0;
-          newEnd = Math.max(newEnd, lo);
-          next[endMarkerIdx] = Math.round(newEnd * 100) / 100;
-        }
-
+        next[idx] = Math.round(newTime * 100) / 100;
         return next;
       });
     };
@@ -529,7 +513,7 @@ export default function WaveformEditor({
     return () => {
       reg.un("region-updated", handleUpdate);
     };
-  }, [snap, duration, activeScene]);
+  }, [snap, duration]);
 
   // ---- Double-click inserts a 1-second segment and selects it ----
   useEffect(() => {
