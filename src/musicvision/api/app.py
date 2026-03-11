@@ -198,6 +198,27 @@ async def update_style_sheet(style_sheet: StyleSheet):
     return {"status": "updated"}
 
 
+@app.get("/api/segment-markers")
+async def get_segment_markers():
+    """Load persisted segment markers from input/segment_markers.json."""
+    import json as _json
+    proj = get_project()
+    path = proj.paths.input_dir / "segment_markers.json"
+    if path.exists():
+        return _json.loads(path.read_text())
+    return {"markers": []}
+
+
+@app.put("/api/segment-markers")
+async def save_segment_markers(body: dict):
+    """Persist segment markers to input/segment_markers.json."""
+    import json as _json
+    proj = get_project()
+    path = proj.paths.input_dir / "segment_markers.json"
+    path.write_text(_json.dumps(body, indent=2))
+    return {"status": "saved"}
+
+
 @app.put("/api/projects/config/humo")
 async def update_humo_config(humo: HumoConfig):
     proj = get_project()

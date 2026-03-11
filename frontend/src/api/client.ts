@@ -280,6 +280,17 @@ export async function upscaleScene(
   });
 }
 
+export async function getSegmentMarkers(): Promise<{ markers: number[] }> {
+  return request("/api/segment-markers");
+}
+
+export async function saveSegmentMarkers(markers: number[]): Promise<{ status: string }> {
+  return request("/api/segment-markers", {
+    method: "PUT",
+    body: JSON.stringify({ markers }),
+  });
+}
+
 export async function updateStyleSheet(styleSheet: StyleSheet): Promise<{ status: string }> {
   return request("/api/projects/config/style-sheet", {
     method: "PUT",

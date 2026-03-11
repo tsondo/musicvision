@@ -17,7 +17,7 @@ import WaveSurfer from "wavesurfer.js";
 import RegionsPlugin, { type Region } from "wavesurfer.js/dist/plugins/regions.js";
 import Minimap from "wavesurfer.js/dist/plugins/minimap.js";
 import type { AnalysisResult, SceneBoundary, SceneType, SongSection, VideoEngineType } from "../api/types";
-import { fileUrl } from "../api/client";
+import { fileUrl, getSegmentMarkers, saveSegmentMarkers } from "../api/client";
 
 /* ------------------------------------------------------------------ */
 /*  Props                                                              */
@@ -194,6 +194,20 @@ export default function WaveformEditor({
   const { beat_times, sections, word_timestamps } = analysis;
   const engineKey = videoEngine ?? "hunyuan_avatar";
 
+  // ---- Load persisted markers on mount ----
+  const loadedRef = useRef(false);
+  useEffect(() => {
+    if (loadedRef.current) return;
+    loadedRef.current = true;
+    getSegmentMarkers()
+      .then((data) => {
+        if (data.markers && data.markers.length > 0) {
+          setMarkers(data.markers);
+        }
+      })
+      .catch(() => {}); // no saved markers yet
+  }, []);
+
   // ---- Consume suggested markers (from auto-segment) ----
   const prevSuggestedRef = useRef<number[] | null>(null);
   useEffect(() => {
@@ -206,6 +220,20 @@ export default function WaveformEditor({
       setMarkers(suggestedMarkers);
     }
   }, [suggestedMarkers]);
+
+  // ---- Auto-save markers on change (debounced) ----
+  const saveTimer = useRef<ReturnType<typeof setTimeout>>(null);
+  useEffect(() => {
+    // Skip the initial empty state before load completes
+    if (!loadedRef.current) return;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      saveSegmentMarkers(markers).catch(() => {});
+    }, 500);
+    return () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+    };
+  }, [markers]);
 
   // ---- Container width measurement ----
   useEffect(() => {
