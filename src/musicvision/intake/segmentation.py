@@ -170,11 +170,25 @@ Start numbering scenes at: {start_order}
         if not scene_dicts:
             break
 
-        # Convert to Scene objects
+        # Convert to Scene objects — clamp to song bounds, drop invalid
         pass_scenes: list[Scene] = []
         for sd in scene_dicts:
             t_start = float(sd["time_start"])
             t_end = float(sd["time_end"])
+
+            # Drop scenes that start at or past the song end
+            if t_start >= song_duration:
+                log.debug("Dropping scene starting at %.1fs (past song end %.1fs)", t_start, song_duration)
+                continue
+
+            # Clamp end to song duration
+            t_end = min(t_end, song_duration)
+
+            # Drop zero/negative duration scenes
+            if t_end <= t_start:
+                log.debug("Dropping scene with non-positive duration: %.1fs–%.1fs", t_start, t_end)
+                continue
+
             scene = Scene(
                 id="",  # renumbered after merge
                 order=0,
