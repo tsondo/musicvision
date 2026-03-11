@@ -250,18 +250,23 @@ export function usePipeline(
 
   // Phase 2: Create scenes from manual boundaries
   const confirmScenes = useCallback(
-    async (boundaries: SceneBoundary[], snapToBeats: boolean) => {
+    async (
+      boundaries: SceneBoundary[],
+      snapToBeats: boolean,
+      lyricsAssignments?: Array<{ line: string; scene_indices: number[] }>,
+    ) => {
       setScenesStatus("running");
       setScenesMessage("");
       setError(null);
       try {
-        const result = await apiCreateScenes(boundaries, snapToBeats);
+        const result = await apiCreateScenes(boundaries, snapToBeats, lyricsAssignments);
         await reloadScenes();
         setScenesStatus("done");
         const sourceLabels: Record<LyricsSource, string> = {
           per_scene_whisper: "Lyrics from per-scene Whisper transcription",
           word_timestamps: "Lyrics from word timestamps (may drift on vocals)",
           bpm_estimate: "Lyrics estimated from BPM (approximate)",
+          manual_assignments: "Lyrics from manual line assignments",
         };
         const src = result.lyrics_source as LyricsSource | undefined;
         setScenesMessage(src ? sourceLabels[src] ?? "" : "");

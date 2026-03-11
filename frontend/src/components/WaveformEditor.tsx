@@ -17,16 +17,26 @@ import WaveSurfer from "wavesurfer.js";
 import RegionsPlugin, { type Region } from "wavesurfer.js/dist/plugins/regions.js";
 import Minimap from "wavesurfer.js/dist/plugins/minimap.js";
 import type { AnalysisResult, SceneBoundary, SceneType, SongSection, VideoEngineType } from "../api/types";
-import { fileUrl, getSegmentMarkers, saveSegmentMarkers } from "../api/client";
+import { fileUrl, getSegmentMarkers, saveSegmentMarkers, getLyricsAssignments, saveLyricsAssignments } from "../api/client";
+import LyricsLineEditor from "./LyricsLineEditor";
 
 /* ------------------------------------------------------------------ */
 /*  Props                                                              */
 /* ------------------------------------------------------------------ */
 
+interface LyricsAssignment {
+  line: string;
+  scene_indices: number[];
+}
+
 interface Props {
   audioUrl: string; // relative path like "input/audio.wav"
   analysis: AnalysisResult;
-  onConfirm: (boundaries: SceneBoundary[], snapToBeats: boolean) => void;
+  onConfirm: (
+    boundaries: SceneBoundary[],
+    snapToBeats: boolean,
+    lyricsAssignments?: LyricsAssignment[],
+  ) => void;
   onAutoSegment: (useLlm: boolean) => void;
   isRunning: boolean;
   videoEngine?: VideoEngineType;
@@ -189,12 +199,14 @@ export default function WaveformEditor({
   const [selectedScenes, setSelectedScenes] = useState<Set<number>>(new Set());
   const [zoomLevel, setZoomLevel] = useState(0); // 0 = fit-to-width, else px/sec
   const [containerWidth, setContainerWidth] = useState(0);
+  const [showLyricsEditor, setShowLyricsEditor] = useState(false);
+  const [lyricsAssignments, setLyricsAssignments] = useState<LyricsAssignment[]>([]);
 
   const duration = analysis.duration;
   const { beat_times, sections, word_timestamps } = analysis;
   const engineKey = videoEngine ?? "hunyuan_avatar";
 
-  // ---- Load persisted markers on mount ----
+  // ---- Load persisted markers and lyrics assignments on mount ----
   const loadedRef = useRef(false);
   useEffect(() => {
     if (loadedRef.current) return;
@@ -206,6 +218,13 @@ export default function WaveformEditor({
         }
       })
       .catch(() => {}); // no saved markers yet
+    getLyricsAssignments()
+      .then((data) => {
+        if (data.assignments && data.assignments.length > 0) {
+          setLyricsAssignments(data.assignments);
+        }
+      })
+      .catch(() => {});
   }, []);
 
   // ---- Consume suggested markers (from auto-segment) ----
@@ -622,7 +641,10 @@ export default function WaveformEditor({
       type: s.type,
       lyrics: getSceneLyrics(s.start, s.end),
     }));
-    onConfirm(boundaries, snapToBeats);
+
+    // Pass manual assignments if any lines have scene mappings
+    const hasAssignments = lyricsAssignments.some((a) => a.scene_indices.length > 0);
+    onConfirm(boundaries, snapToBeats, hasAssignments ? lyricsAssignments : undefined);
   };
 
   const toggleSceneSelection = (idx: number) => {
@@ -801,8 +823,27 @@ export default function WaveformEditor({
               From Sections
             </button>
           )}
+          <button
+            className={`btn btn-sm ${showLyricsEditor ? "btn-active" : ""}`}
+            onClick={() => setShowLyricsEditor((v) => !v)}
+            title="Assign lyrics lines to scenes manually"
+          >
+            Lyrics Editor
+          </button>
         </div>
       </div>
+
+      {/* Lyrics line editor — manual assignment of lyrics to scenes */}
+      {showLyricsEditor && derivedScenes.length > 0 && (
+        <LyricsLineEditor
+          assignments={lyricsAssignments}
+          sceneCount={derivedScenes.length}
+          onChange={(updated) => {
+            setLyricsAssignments(updated);
+            saveLyricsAssignments(updated).catch(() => {});
+          }}
+        />
+      )}
 
       {/* Scene table with warnings */}
       {derivedScenes.length > 0 && (

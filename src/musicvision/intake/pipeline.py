@@ -226,6 +226,7 @@ def create_scenes_from_boundaries(
     boundaries: list[SceneBoundary],
     snap_to_beats: bool = False,
     device: str | None = None,
+    lyrics_assignments: list[dict] | None = None,
 ) -> SceneList:
     """
     Create scenes from user-provided boundaries. Slices audio per scene,
@@ -236,6 +237,9 @@ def create_scenes_from_boundaries(
         boundaries: Scene time ranges from the waveform editor
         snap_to_beats: Snap boundaries to nearest beat time
         device: GPU device for Whisper (None = auto-detect)
+        lyrics_assignments: Manual lyrics-to-scene assignments from the editor.
+            Each dict has {"line": str, "scene_indices": list[int]}.
+            When provided, skips Whisper transcription and uses these directly.
     """
     config = project.config
     paths = project.paths
@@ -247,6 +251,18 @@ def create_scenes_from_boundaries(
     beat_times = config.song.beat_times
 
     duration = config.song.duration_seconds or 0.0
+
+    # Build per-scene lyrics from manual assignments if provided
+    manual_lyrics: dict[int, str] | None = None
+    if lyrics_assignments:
+        manual_lyrics = {}
+        for entry in lyrics_assignments:
+            line = entry.get("line", "")
+            for idx in entry.get("scene_indices", []):
+                if idx not in manual_lyrics:
+                    manual_lyrics[idx] = line
+                else:
+                    manual_lyrics[idx] += " / " + line
 
     # Load word timestamps as fallback for lyrics population
     words: list[WordTimestamp] = []
@@ -270,13 +286,16 @@ def create_scenes_from_boundaries(
             t_start = _snap_to_beat(t_start, beat_times)
             t_end = _snap_to_beat(t_end, beat_times)
 
-        # Pre-fill lyrics: try word timestamps, fall back to BPM-based estimation
-        lyrics = _lyrics_from_words(words, t_start, t_end) if words else ""
-        if not lyrics and lyrics_text:
-            lyrics = _lyrics_for_scene_bpm(
-                lyrics_text, t_start, t_end, duration,
-                bpm=config.song.bpm,
-            )
+        # Lyrics: manual assignments > word timestamps > BPM estimation
+        if manual_lyrics is not None and i in manual_lyrics:
+            lyrics = manual_lyrics[i]
+        else:
+            lyrics = _lyrics_from_words(words, t_start, t_end) if words else ""
+            if not lyrics and lyrics_text:
+                lyrics = _lyrics_for_scene_bpm(
+                    lyrics_text, t_start, t_end, duration,
+                    bpm=config.song.bpm,
+                )
 
         scene_id = f"scene_{i + 1:03d}"
         scene = Scene(
@@ -295,15 +314,19 @@ def create_scenes_from_boundaries(
     # Slice audio
     _slice_scenes(scene_list, audio_path, paths)
 
-    # Transcribe each scene's audio slice for accurate lyrics
-    lyrics_source = "bpm_estimate" if not words else "word_timestamps"
-    if device is None:
-        device = _detect_whisper_device()
-    try:
-        _transcribe_scene_slices(scene_list.scenes, paths, device=device)
-        lyrics_source = "per_scene_whisper"
-    except Exception as exc:
-        log.warning("Per-scene transcription failed, keeping fallback lyrics: %s", exc)
+    # Transcribe each scene's audio slice — skip if manual assignments provided
+    if manual_lyrics is not None:
+        lyrics_source = "manual_assignments"
+        log.info("Using manual lyrics assignments, skipping Whisper transcription")
+    else:
+        lyrics_source = "bpm_estimate" if not words else "word_timestamps"
+        if device is None:
+            device = _detect_whisper_device()
+        try:
+            _transcribe_scene_slices(scene_list.scenes, paths, device=device)
+            lyrics_source = "per_scene_whisper"
+        except Exception as exc:
+            log.warning("Per-scene transcription failed, keeping fallback lyrics: %s", exc)
 
     # Save
     project.scenes = scene_list

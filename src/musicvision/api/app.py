@@ -231,6 +231,44 @@ async def save_segment_markers(body: dict):
     return {"status": "saved"}
 
 
+@app.get("/api/lyrics-assignments")
+async def get_lyrics_assignments():
+    """Load persisted lyrics-to-scene assignments, or auto-populate from lyrics file."""
+    import json as _json
+    proj = get_project()
+    path = proj.paths.input_dir / "lyrics_assignments.json"
+    if path.exists():
+        return _json.loads(path.read_text())
+
+    # Auto-populate: parse lyrics into lines (skip section markers)
+    import re
+    assignments: list[dict] = []
+    lyrics_path = (
+        proj.resolve_path(proj.config.song.lyrics_file)
+        if proj.config.song.lyrics_file
+        else None
+    )
+    if lyrics_path and lyrics_path.exists():
+        lyrics_text = lyrics_path.read_text(encoding="utf-8")
+        for line in lyrics_text.split("\n"):
+            stripped = line.strip()
+            if not stripped or re.match(r"^\s*\([^)]+\)\s*$", stripped):
+                continue
+            assignments.append({"line": stripped, "scene_indices": []})
+
+    return {"assignments": assignments}
+
+
+@app.put("/api/lyrics-assignments")
+async def save_lyrics_assignments(body: dict):
+    """Persist lyrics-to-scene assignments."""
+    import json as _json
+    proj = get_project()
+    path = proj.paths.input_dir / "lyrics_assignments.json"
+    path.write_text(_json.dumps(body, indent=2))
+    return {"status": "saved"}
+
+
 @app.put("/api/projects/config/humo")
 async def update_humo_config(humo: HumoConfig):
     proj = get_project()
@@ -736,9 +774,15 @@ async def analyze_audio(
     return await asyncio.to_thread(_run)
 
 
+class LyricsAssignmentItem(BaseModel):
+    line: str
+    scene_indices: list[int]
+
+
 class CreateScenesRequest(BaseModel):
     boundaries: list[SceneBoundary]
     snap_to_beats: bool = False
+    lyrics_assignments: Optional[list[LyricsAssignmentItem]] = None
 
 
 @app.post("/api/pipeline/create-scenes")
@@ -747,12 +791,18 @@ async def create_scenes(req: CreateScenesRequest):
     from musicvision.intake.pipeline import create_scenes_from_boundaries
 
     proj = get_project()
+    assignments = (
+        [a.model_dump() for a in req.lyrics_assignments]
+        if req.lyrics_assignments
+        else None
+    )
 
     def _run() -> dict:
         scene_list, lyrics_source = create_scenes_from_boundaries(
             project=proj,
             boundaries=req.boundaries,
             snap_to_beats=req.snap_to_beats,
+            lyrics_assignments=assignments,
         )
         return {
             "status": "complete",

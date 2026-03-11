@@ -126,8 +126,8 @@ export default function App() {
         <WaveformEditor
           audioUrl={state.config.song.audio_file}
           analysis={pipeline.analysisResult}
-          onConfirm={(boundaries, snapToBeats) => {
-            pipeline.confirmScenes(boundaries, snapToBeats);
+          onConfirm={(boundaries, snapToBeats, lyricsAssignments) => {
+            pipeline.confirmScenes(boundaries, snapToBeats, lyricsAssignments);
             setShowWaveformEditor(false);
           }}
           onAutoSegment={(useLlm) => {

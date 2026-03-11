@@ -140,7 +140,16 @@ export interface RegenerateVideoRequest {
   render_mode?: RenderMode;
 }
 
-export type LyricsSource = "per_scene_whisper" | "word_timestamps" | "bpm_estimate";
+export type LyricsSource = "per_scene_whisper" | "word_timestamps" | "bpm_estimate" | "manual_assignments";
+
+export interface LyricsAssignment {
+  line: string;
+  scene_indices: number[]; // 0-based indices into the scene list
+}
+
+export interface LyricsAssignments {
+  assignments: LyricsAssignment[];
+}
 
 export interface IntakeResult {
   status: string;

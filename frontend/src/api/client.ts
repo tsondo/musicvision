@@ -191,10 +191,15 @@ export async function getAnalysis(): Promise<AnalysisResult> {
 export async function createScenes(
   boundaries: SceneBoundary[],
   snapToBeats: boolean = false,
+  lyricsAssignments?: Array<{ line: string; scene_indices: number[] }>,
 ): Promise<IntakeResult> {
   return request("/api/pipeline/create-scenes", {
     method: "POST",
-    body: JSON.stringify({ boundaries, snap_to_beats: snapToBeats }),
+    body: JSON.stringify({
+      boundaries,
+      snap_to_beats: snapToBeats,
+      lyrics_assignments: lyricsAssignments ?? null,
+    }),
   });
 }
 
@@ -288,6 +293,19 @@ export async function saveSegmentMarkers(markers: number[]): Promise<{ status: s
   return request("/api/segment-markers", {
     method: "PUT",
     body: JSON.stringify({ markers }),
+  });
+}
+
+export async function getLyricsAssignments(): Promise<{ assignments: Array<{ line: string; scene_indices: number[] }> }> {
+  return request("/api/lyrics-assignments");
+}
+
+export async function saveLyricsAssignments(
+  assignments: Array<{ line: string; scene_indices: number[] }>,
+): Promise<{ status: string }> {
+  return request("/api/lyrics-assignments", {
+    method: "PUT",
+    body: JSON.stringify({ assignments }),
   });
 }
 
