@@ -429,14 +429,21 @@ export default function WaveformEditor({
       if (r.id.startsWith("marker_")) r.remove();
     }
 
+    // Start marker = activeScene - 1, end marker = activeScene
+    const startIdx = activeScene !== null ? activeScene - 1 : -1;
+    const endIdx = activeScene !== null ? activeScene : -1;
+
     for (let i = 0; i < markers.length; i++) {
       const t = markers[i]!;
       const isDraggable = draggableMarkers.has(i);
+      let color = "rgba(245, 197, 66, 0.4)"; // inactive: dim yellow
+      if (i === startIdx && isDraggable) color = "rgba(61, 214, 140, 0.95)"; // start: green
+      else if (i === endIdx && isDraggable) color = "rgba(245, 85, 91, 0.95)"; // end: red
       reg.addRegion({
         id: `marker_${i}`,
         start: t,
         end: t + 0.05,
-        color: isDraggable ? "rgba(245, 158, 11, 0.95)" : "rgba(245, 197, 66, 0.4)",
+        color,
         drag: isDraggable,
         resize: false,
       });
