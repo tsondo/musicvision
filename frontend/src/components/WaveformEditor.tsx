@@ -185,7 +185,7 @@ export default function WaveformEditor({
   const [playingSceneIdx, setPlayingSceneIdx] = useState<number | null>(null);
   const sceneEndRef = useRef<number | null>(null);
   const [snapToBeats, setSnapToBeats] = useState(true);
-  const [selectedMarker, setSelectedMarker] = useState<number | null>(null);
+  const [activeScene, setActiveScene] = useState<number | null>(null);
   const [selectedScenes, setSelectedScenes] = useState<Set<number>>(new Set());
   const [zoomLevel, setZoomLevel] = useState(0); // 0 = fit-to-width, else px/sec
   const [containerWidth, setContainerWidth] = useState(0);
@@ -408,6 +408,18 @@ export default function WaveformEditor({
     return () => wrapper.removeEventListener("scroll", sync);
   }, [ready]);
 
+  // ---- Determine which marker indices are draggable (borders of active scene) ----
+  const draggableMarkers = useMemo<Set<number>>(() => {
+    if (activeScene === null) return new Set();
+    const set = new Set<number>();
+    // Scene i spans [markers[i-1], markers[i]]
+    // Its start boundary is marker at index (activeScene - 1)
+    // Its end boundary is marker at index (activeScene)
+    if (activeScene > 0 && activeScene - 1 < markers.length) set.add(activeScene - 1);
+    if (activeScene < markers.length) set.add(activeScene);
+    return set;
+  }, [activeScene, markers.length]);
+
   // ---- Sync marker regions with state ----
   useEffect(() => {
     if (!ready || !regionsRef.current) return;
@@ -419,16 +431,17 @@ export default function WaveformEditor({
 
     for (let i = 0; i < markers.length; i++) {
       const t = markers[i]!;
+      const isDraggable = draggableMarkers.has(i);
       reg.addRegion({
         id: `marker_${i}`,
         start: t,
         end: t + 0.05,
-        color: "rgba(245, 197, 66, 0.7)",
-        drag: true,
+        color: isDraggable ? "rgba(245, 158, 11, 0.95)" : "rgba(245, 197, 66, 0.4)",
+        drag: isDraggable,
         resize: false,
       });
     }
-  }, [ready, markers]);
+  }, [ready, markers, draggableMarkers]);
 
   // ---- Gap regions on waveform ----
   useEffect(() => {
@@ -451,7 +464,7 @@ export default function WaveformEditor({
     });
   }, [ready, gaps]);
 
-  // ---- Handle region drag (marker moved) ----
+  // ---- Handle region drag (marker moved) — clamp to prevent overlap ----
   useEffect(() => {
     if (!regionsRef.current) return;
     const reg = regionsRef.current;
@@ -459,8 +472,15 @@ export default function WaveformEditor({
     const handleUpdate = (region: Region) => {
       if (!region.id.startsWith("marker_")) return;
       const idx = parseInt(region.id.replace("marker_", ""), 10);
-      const newTime = snap(region.start);
+      let newTime = snap(region.start);
+
+      // Clamp: must stay between neighboring markers (or song bounds)
+      // with a small buffer to prevent exact overlaps
+      const MIN_GAP = 0.5; // seconds
       setMarkers((prev) => {
+        const lo = idx > 0 ? (prev[idx - 1] ?? 0) + MIN_GAP : MIN_GAP;
+        const hi = idx < prev.length - 1 ? (prev[idx + 1] ?? duration) - MIN_GAP : duration - MIN_GAP;
+        newTime = Math.max(lo, Math.min(hi, newTime));
         const next = [...prev];
         next[idx] = Math.round(newTime * 100) / 100;
         return next;
@@ -471,7 +491,7 @@ export default function WaveformEditor({
     return () => {
       reg.un("region-updated", handleUpdate);
     };
-  }, [snap]);
+  }, [snap, duration]);
 
   // ---- Add marker on double-click ----
   useEffect(() => {
@@ -496,13 +516,13 @@ export default function WaveformEditor({
 
   const handleDeleteMarker = (idx: number) => {
     setMarkers((prev) => prev.filter((_, i) => i !== idx));
-    setSelectedMarker(null);
+    setActiveScene(null);
     setSelectedScenes(new Set());
   };
 
   const handleClearAll = () => {
     setMarkers([]);
-    setSelectedMarker(null);
+    setActiveScene(null);
     setSelectedScenes(new Set());
     onClearScenes?.();
   };
@@ -767,8 +787,9 @@ export default function WaveformEditor({
                 return (
                   <tr
                     key={i}
-                    className={`${selectedMarker === i ? "selected" : ""} ${warnings.length > 0 ? "has-warning" : ""}`}
+                    className={`${activeScene === i ? "selected" : ""} ${warnings.length > 0 ? "has-warning" : ""}`}
                     onClick={() => {
+                      setActiveScene(activeScene === i ? null : i);
                       if (wsRef.current) wsRef.current.seekTo(s.start / duration);
                     }}
                   >
