@@ -37,7 +37,7 @@ export default function ProjectHeader({ config, scenes, stage, onClose, onConfig
   const [saving, setSaving] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(null);
 
-  const ss = config.style_sheet ?? { visual_style: "", color_palette: "", aspect_ratio: "16:9", resolution: "1280x720" };
+  const ss = config.style_sheet ?? { concept: "", visual_style: "", color_palette: "", aspect_ratio: "16:9", resolution: "1280x720" };
 
   const handleChange = useCallback(
     (field: keyof StyleSheet, value: string) => {
@@ -102,6 +102,15 @@ export default function ProjectHeader({ config, scenes, stage, onClose, onConfig
 
       {expanded && (
         <div className="style-sheet-panel">
+          <div className="style-field">
+            <label>Video Concept</label>
+            <textarea
+              value={ss.concept}
+              onChange={(e) => handleChange("concept", e.target.value)}
+              placeholder="What kind of video are we making? e.g. A late-night R&B music video in a dimly lit lounge, intimate and sensual mood, single male performer..."
+              rows={2}
+            />
+          </div>
           <div className="style-field">
             <label>Visual Style</label>
             <input

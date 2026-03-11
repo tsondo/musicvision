@@ -90,6 +90,7 @@ export interface SongInfo {
 }
 
 export interface StyleSheet {
+  concept: string;
   visual_style: string;
   color_palette: string;
   aspect_ratio: string;

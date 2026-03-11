@@ -178,6 +178,7 @@ class SettingDef(BaseModel):
 
 
 class StyleSheet(BaseModel):
+    concept: str = ""  # overall video concept: "what kind of video are we making"
     visual_style: str = ""
     color_palette: str = ""
     aspect_ratio: str = "16:9"

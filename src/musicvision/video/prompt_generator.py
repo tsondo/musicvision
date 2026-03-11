@@ -54,6 +54,8 @@ def _build_style_context(config: ProjectConfig) -> str:
     ss = config.style_sheet
     parts: list[str] = []
 
+    if ss.concept:
+        parts.append(f"Video concept: {ss.concept}")
     if ss.visual_style:
         parts.append(f"Visual style: {ss.visual_style}")
     if ss.color_palette:
