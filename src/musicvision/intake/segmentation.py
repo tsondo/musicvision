@@ -109,16 +109,13 @@ def segment_scenes(
     if llm_config is None and api_key:
         llm_config = LLMConfig(backend="anthropic", api_key=api_key)
 
+    client: LLMClient = get_client(llm_config)
+
     # Ensure enough output tokens for segmentation JSON (~100 tokens per scene,
     # a 3-min song can have 30+ scenes → need ~4k tokens minimum)
-    from dataclasses import replace as _dc_replace
-
-    if llm_config is None:
-        llm_config = LLMConfig()
-    if not llm_config.max_tokens:
-        llm_config = _dc_replace(llm_config, max_tokens=8192)
-
-    client: LLMClient = get_client(llm_config)
+    if not client.config.max_tokens:
+        from dataclasses import replace as _dc_replace
+        client.config = _dc_replace(client.config, max_tokens=8192)
 
     # Build system prompt — optionally enrich with engine constraints
     system_prompt = SEGMENTATION_SYSTEM_PROMPT
