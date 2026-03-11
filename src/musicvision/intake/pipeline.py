@@ -149,7 +149,7 @@ def run_analyze(
     if skip_transcription and has_lyrics:
         log.info("Using provided lyrics, skipping transcription")
         lyrics_text = load_lyrics_file(lyrics_path)
-        words = _approximate_word_timestamps(lyrics_text, duration)
+        words = _approximate_word_timestamps(lyrics_text, duration, bpm=config.song.bpm)
 
     elif has_lyrics:
         log.info("Transcribing for timestamps, will align with provided lyrics")
@@ -246,12 +246,20 @@ def create_scenes_from_boundaries(
 
     beat_times = config.song.beat_times
 
+    duration = config.song.duration_seconds or 0.0
+
     # Load word timestamps as fallback for lyrics population
     words: list[WordTimestamp] = []
     ts_path = paths.input_dir / "word_timestamps.json"
     if ts_path.exists():
         raw = json.loads(ts_path.read_text(encoding="utf-8"))
         words = [WordTimestamp(word=w["word"], start=w["start"], end=w["end"]) for w in raw]
+
+    # Load raw lyrics text for BPM-based fallback
+    lyrics_text = ""
+    lyrics_path = project.resolve_path(config.song.lyrics_file) if config.song.lyrics_file else None
+    if lyrics_path and lyrics_path.exists():
+        lyrics_text = lyrics_path.read_text(encoding="utf-8")
 
     scenes: list[Scene] = []
     for i, b in enumerate(boundaries):
@@ -262,8 +270,13 @@ def create_scenes_from_boundaries(
             t_start = _snap_to_beat(t_start, beat_times)
             t_end = _snap_to_beat(t_end, beat_times)
 
-        # Pre-fill lyrics from word timestamps (will be overwritten by per-scene transcription)
-        lyrics = _lyrics_from_words(words, t_start, t_end)
+        # Pre-fill lyrics: try word timestamps, fall back to BPM-based estimation
+        lyrics = _lyrics_from_words(words, t_start, t_end) if words else ""
+        if not lyrics and lyrics_text:
+            lyrics = _lyrics_for_scene_bpm(
+                lyrics_text, t_start, t_end, duration,
+                bpm=config.song.bpm,
+            )
 
         scene_id = f"scene_{i + 1:03d}"
         scene = Scene(
@@ -484,6 +497,65 @@ def _lyrics_from_words(
     return " ".join(scene_words)
 
 
+def _lyrics_for_scene_bpm(
+    lyrics_text: str,
+    scene_start: float,
+    scene_end: float,
+    song_duration: float,
+    bpm: float | None = None,
+) -> str:
+    """Estimate which lyrics fall within a scene using BPM-based pacing.
+
+    Used as fallback when Whisper word timestamps are unavailable or
+    unreliable. Parses lyrics into lines (skipping section markers),
+    estimates timing from BPM, and returns lines whose estimated time
+    overlaps with the scene range.
+    """
+    lines: list[str] = []
+    for line in lyrics_text.split("\n"):
+        stripped = line.strip()
+        if not stripped or re.match(r"^\s*\([^)]+\)\s*$", stripped):
+            continue
+        if stripped:
+            lines.append(stripped)
+
+    if not lines:
+        return ""
+
+    total_words = sum(len(line.split()) for line in lines)
+    if total_words == 0:
+        return ""
+
+    effective_bpm = bpm if bpm and bpm > 0 else 120.0
+    seconds_per_word = 60.0 / (effective_bpm * 2.0)
+    line_pause = 60.0 / (effective_bpm * 2)
+
+    # Estimate intro
+    intro = min(2 * 4 * (60.0 / effective_bpm), song_duration * 0.1)
+
+    # Compress if lyrics are too dense for the song
+    singing_time = total_words * seconds_per_word + len(lines) * line_pause
+    if singing_time > song_duration * 0.9:
+        scale = (song_duration * 0.85) / singing_time
+        seconds_per_word *= scale
+        line_pause *= scale
+
+    # Walk through lines, collect those that overlap with scene
+    cursor = intro
+    scene_lines: list[str] = []
+    for line in lines:
+        n_words = len(line.split())
+        line_start = cursor
+        line_end = cursor + n_words * seconds_per_word
+        cursor = line_end + line_pause
+
+        # Check overlap
+        if line_end > scene_start and line_start < scene_end:
+            scene_lines.append(line)
+
+    return " / ".join(scene_lines)
+
+
 def _slice_scenes(
     scene_list: SceneList,
     audio_path: Path,
@@ -605,21 +677,77 @@ def _snap_to_beat(t: float, beat_times: list[float], tolerance: float = 0.15) ->
     return t
 
 
-def _approximate_word_timestamps(lyrics_text: str, duration: float) -> list[WordTimestamp]:
+def _approximate_word_timestamps(
+    lyrics_text: str,
+    duration: float,
+    bpm: float | None = None,
+) -> list[WordTimestamp]:
     """
-    Create rough word timestamps when we have lyrics but no Whisper.
-    Distributes words evenly across the song duration.
+    Create approximate word timestamps when Whisper data is unavailable.
+
+    Uses BPM to estimate singing pace. Lyrics line breaks are treated as
+    phrase boundaries with natural pauses. Section markers like (Verse 1)
+    are skipped. Instrumental intro/outro time is estimated from BPM.
+
+    This doesn't need to be frame-accurate — it's used to assign
+    approximate lyrics to scenes for image/video prompt generation.
     """
-    words_raw = lyrics_text.split()
-    if not words_raw:
+    # Parse lines, skip section markers and blank lines
+    lines: list[list[str]] = []
+    for line in lyrics_text.split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # Skip section markers like (Verse 1), (Chorus), etc.
+        if re.match(r"^\s*\([^)]+\)\s*$", stripped):
+            continue
+        words = stripped.split()
+        if words:
+            lines.append(words)
+
+    if not lines:
         return []
 
-    word_duration = min(0.3, duration / len(words_raw))
-    result: list[WordTimestamp] = []
+    total_words = sum(len(line) for line in lines)
+    if total_words == 0:
+        return []
 
-    for i, word in enumerate(words_raw):
-        start = i * word_duration
-        end = start + word_duration
-        result.append(WordTimestamp(word=word, start=start, end=min(end, duration)))
+    # Estimate singing pace from BPM
+    # Typical pop/rock: ~2 words per beat. Slower ballads: ~1.5, faster rap: ~4+
+    words_per_beat = 2.0
+    effective_bpm = bpm if bpm and bpm > 0 else 120.0
+    seconds_per_word = 60.0 / (effective_bpm * words_per_beat)
+
+    # Estimate total singing time vs. song duration
+    # Assume ~10-15% of song is intro/outro/instrumental gaps
+    singing_duration = total_words * seconds_per_word
+    if singing_duration > duration * 0.9:
+        # Lyrics are denser than expected — compress to fit
+        seconds_per_word = (duration * 0.85) / total_words
+
+    # Estimate intro (instrumental before vocals start) — ~10% or 2 bars
+    bars_intro = 2
+    beats_per_bar = 4
+    intro_seconds = min(
+        bars_intro * beats_per_bar * (60.0 / effective_bpm),
+        duration * 0.1,
+    )
+
+    # Pause between lines (half a beat)
+    line_pause = 60.0 / (effective_bpm * 2)
+
+    result: list[WordTimestamp] = []
+    cursor = intro_seconds
+
+    for line_words in lines:
+        for word in line_words:
+            start = cursor
+            end = cursor + seconds_per_word
+            if end > duration:
+                end = duration
+            result.append(WordTimestamp(word=word, start=start, end=end))
+            cursor = end
+        # Pause between lines
+        cursor += line_pause
 
     return result

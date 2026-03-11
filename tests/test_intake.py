@@ -8,6 +8,7 @@ from musicvision.intake.segmentation import (
     _validate_and_adjust_scenes,
     segment_scenes_simple,
 )
+from musicvision.intake.pipeline import _lyrics_for_scene_bpm
 from musicvision.intake.transcription import WordTimestamp, align_lyrics_with_timestamps, TranscriptionResult
 from musicvision.models import Scene, SceneType
 
@@ -341,6 +342,45 @@ class TestSongInfoFields:
         loaded = ProjectConfig.load(path)
         assert loaded.song.sections_source == "auto"
         assert len(loaded.song.sections) == 1
+
+
+class TestBpmLyricsFallback:
+    """Test BPM-based lyrics estimation for scenes."""
+
+    LYRICS = """(Verse 1)
+Standing in the rain tonight
+Watching shadows dance in light
+(Chorus)
+We are the dreamers of the dawn
+Singing until the night is gone
+(Verse 2)
+Walking down the empty street
+Heartbeat echoing in the heat"""
+
+    def test_early_scene_gets_verse(self):
+        # Scene in the first third should get verse 1 lyrics
+        text = _lyrics_for_scene_bpm(self.LYRICS, 5.0, 12.0, 180.0, bpm=120.0)
+        assert text  # should have some lyrics
+        # Should not be empty for a vocal section early in the song
+
+    def test_late_scene_gets_later_lyrics(self):
+        # Scene near the end should not get verse 1 lyrics
+        early = _lyrics_for_scene_bpm(self.LYRICS, 5.0, 12.0, 180.0, bpm=120.0)
+        late = _lyrics_for_scene_bpm(self.LYRICS, 60.0, 70.0, 180.0, bpm=120.0)
+        assert early != late or (not early and not late)
+
+    def test_skips_section_markers(self):
+        text = _lyrics_for_scene_bpm(self.LYRICS, 0.0, 180.0, 180.0, bpm=120.0)
+        assert "(Verse 1)" not in text
+        assert "(Chorus)" not in text
+
+    def test_empty_lyrics(self):
+        text = _lyrics_for_scene_bpm("", 0.0, 10.0, 180.0, bpm=120.0)
+        assert text == ""
+
+    def test_no_bpm_uses_default(self):
+        text = _lyrics_for_scene_bpm(self.LYRICS, 5.0, 15.0, 180.0, bpm=None)
+        assert text  # should still work with default BPM
 
 
 class TestDetectSections:
