@@ -19,57 +19,21 @@ from musicvision.models import Scene, SceneList, SceneType
 log = logging.getLogger(__name__)
 
 # System prompt for scene segmentation
-SEGMENTATION_SYSTEM_PROMPT = """You are a music video director segmenting a song into visual scenes.
-
-Given lyrics with word-level timestamps, produce a JSON list of scenes.
+SEGMENTATION_SYSTEM_PROMPT = """Segment a song into music video scenes. Output ONLY a JSON array.
 
 Rules:
-- Each scene has a time_start and time_end in seconds
-- Minimum scene duration: 2.0 seconds
-- Maximum scene duration: 10.0 seconds
-- Prefer cutting on phrase/line boundaries — don't split mid-word or mid-phrase
-- Consecutive lines that form one thought can be one scene
-- Instrumental gaps (no lyrics) get their own scene with type "instrumental"
-- The first scene starts at 0.0
-- The last scene ends at the song's total duration
-- Verse/chorus/bridge sections should be noted
-- Chorus repetitions should be marked so imagery can be reused with variations
-- Number scenes sequentially: scene_001, scene_002, etc.
+- Each scene: 2-10 seconds. Group 2-4 lyric lines per scene.
+- Cut on phrase boundaries, not mid-line.
+- Instrumental gaps → type "instrumental". Vocal → type "vocal".
+- First scene starts at 0.0, last ends at song duration.
+- Use section markers from input as "section" values (e.g. "Verse 1", "Chorus").
+- Don't cross section boundaries.
+- Number scenes: scene_001, scene_002, etc.
 
-Section markers (AceStep):
-- When the lyrics include section markers like (Verse 1), (Hook), (Bridge), (Outro), \
-use them directly as the "section" field values (e.g. "Verse 1", "Hook", "Bridge"). \
-Do NOT invent new section labels — mirror the markers from the input exactly.
+JSON format per scene:
+{"id":"scene_001","order":1,"time_start":0.0,"time_end":5.2,"type":"vocal","lyrics":"...","section":"verse_1"}
 
-Section boundary rules:
-- Scenes must NOT cross section boundaries. If a section boundary falls within a \
-scene's time range, split the scene at that boundary (respecting the minimum duration).
-- Instrumental intros, outros, and instrumental breaks between vocal sections should \
-each be their own scene with type "instrumental".
-
-Output format (JSON array):
-[
-  {
-    "id": "scene_001",
-    "order": 1,
-    "time_start": 0.0,
-    "time_end": 3.5,
-    "type": "instrumental",
-    "lyrics": "",
-    "section": "intro"
-  },
-  {
-    "id": "scene_002",
-    "order": 2,
-    "time_start": 3.5,
-    "time_end": 7.2,
-    "type": "vocal",
-    "lyrics": "Standing in the rain tonight",
-    "section": "verse_1"
-  }
-]
-
-Respond with ONLY the JSON array, no other text."""
+Respond with ONLY the JSON array."""
 
 
 def segment_scenes(
@@ -199,23 +163,34 @@ Start numbering scenes at: {start_order}
             break
 
         # Convert to Scene objects
+        pass_scenes: list[Scene] = []
         for sd in scene_dicts:
             t_start = float(sd["time_start"])
             t_end = float(sd["time_end"])
-            order = len(scenes) + 1
             scene = Scene(
-                id=f"scene_{order:03d}",
-                order=order,
+                id="",  # renumbered after merge
+                order=0,
                 time_start=t_start,
                 time_end=t_end,
                 type=SceneType(sd.get("type", "vocal")),
-                lyrics=_lyrics_from_words(lyrics_with_timestamps, t_start, t_end),
+                lyrics=sd.get("lyrics", ""),
                 section=sd.get("section", ""),
             )
-            scenes.append(scene)
+            pass_scenes.append(scene)
+
+        # Merge any too-short scenes before adding to the main list
+        pass_scenes = _merge_short_scenes(pass_scenes, min_scene_seconds)
+
+        for ps in pass_scenes:
+            order = len(scenes) + 1
+            ps.id = f"scene_{order:03d}"
+            ps.order = order
+            ps.lyrics = _lyrics_from_words(lyrics_with_timestamps, ps.time_start, ps.time_end)
+            scenes.append(ps)
 
         covered_end = scenes[-1].time_end if scenes else 0.0
-        log.info("Pass %d produced %d scenes, covered to %.1fs", pass_num + 1, len(scene_dicts), covered_end)
+        log.info("Pass %d: %d raw → %d merged scenes, covered to %.1fs",
+                 pass_num + 1, len(scene_dicts), len(pass_scenes), covered_end)
 
         # If we covered the song, we're done
         if covered_end >= song_duration - 1.0:
@@ -473,6 +448,68 @@ def _extract_section_markers(acestep_lyrics: str) -> str:
             content_line_count += 1
 
     return "\n".join(markers)
+
+
+def _merge_short_scenes(
+    scenes: list[Scene],
+    min_duration: float,
+) -> list[Scene]:
+    """Merge scenes shorter than min_duration into their neighbors.
+
+    Strategy: merge with the shorter neighbor (prefer keeping longer scenes
+    intact). If only one neighbor exists, merge with that one.
+    """
+    if len(scenes) <= 1:
+        return scenes
+
+    merged = list(scenes)
+    changed = True
+    while changed:
+        changed = False
+        i = 0
+        while i < len(merged):
+            scene = merged[i]
+            dur = scene.time_end - scene.time_start
+            if dur >= min_duration or len(merged) <= 1:
+                i += 1
+                continue
+
+            # Pick neighbor to merge with
+            prev_dur = (merged[i - 1].time_end - merged[i - 1].time_start) if i > 0 else float("inf")
+            next_dur = (merged[i + 1].time_end - merged[i + 1].time_start) if i < len(merged) - 1 else float("inf")
+
+            if i == 0:
+                # No previous — merge into next
+                target = i + 1
+            elif i == len(merged) - 1:
+                # No next — merge into previous
+                target = i - 1
+            elif prev_dur <= next_dur:
+                target = i - 1
+            else:
+                target = i + 1
+
+            # Merge: extend target to cover this scene's range
+            t = merged[target]
+            t.time_start = min(t.time_start, scene.time_start)
+            t.time_end = max(t.time_end, scene.time_end)
+            # Combine lyrics and prefer vocal type
+            if scene.type == SceneType.VOCAL or t.type == SceneType.VOCAL:
+                t.type = SceneType.VOCAL
+            if scene.lyrics and t.lyrics:
+                if target < i:
+                    t.lyrics = t.lyrics + " " + scene.lyrics
+                else:
+                    t.lyrics = scene.lyrics + " " + t.lyrics
+            elif scene.lyrics:
+                t.lyrics = scene.lyrics
+
+            merged.pop(i)
+            changed = True
+            # Don't increment i — recheck at same position
+
+    log.debug("Merged %d → %d scenes (min %.1fs)", len(scenes), len(merged), min_duration)
+    return merged
 
 
 def _snap_to_beats(

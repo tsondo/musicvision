@@ -4,6 +4,7 @@ from musicvision.engine_registry import EngineConstraints, get_constraints
 from musicvision.intake.segmentation import (
     _engine_constraint_prompt,
     _format_lyrics_for_llm,
+    _merge_short_scenes,
     _validate_and_adjust_scenes,
     segment_scenes_simple,
 )
@@ -157,6 +158,56 @@ class TestEngineConstraintPrompt:
 # ---------------------------------------------------------------------------
 # _validate_and_adjust_scenes
 # ---------------------------------------------------------------------------
+
+
+class TestMergeShortScenes:
+    """Test post-processing merge of too-short scenes."""
+
+    def test_merges_short_into_neighbor(self):
+        scenes = [
+            Scene(id="s1", order=1, time_start=0.0, time_end=3.0, type=SceneType.VOCAL, lyrics="a"),
+            Scene(id="s2", order=2, time_start=3.0, time_end=3.5, type=SceneType.VOCAL, lyrics="b"),
+            Scene(id="s3", order=3, time_start=3.5, time_end=7.0, type=SceneType.VOCAL, lyrics="c"),
+        ]
+        result = _merge_short_scenes(scenes, min_duration=2.0)
+        assert len(result) == 2
+        # The 0.5s scene should have been absorbed
+        assert all((s.time_end - s.time_start) >= 2.0 for s in result)
+
+    def test_many_tiny_scenes_collapse(self):
+        # Simulate LLM producing per-word scenes
+        scenes = [
+            Scene(id=f"s{i}", order=i, time_start=i * 0.5, time_end=(i + 1) * 0.5,
+                  type=SceneType.VOCAL, lyrics=f"word{i}")
+            for i in range(20)
+        ]
+        result = _merge_short_scenes(scenes, min_duration=2.0)
+        assert len(result) < 10  # collapsed significantly
+        assert all((s.time_end - s.time_start) >= 2.0 for s in result)
+
+    def test_no_merge_needed(self):
+        scenes = [
+            Scene(id="s1", order=1, time_start=0.0, time_end=4.0, type=SceneType.VOCAL, lyrics="a"),
+            Scene(id="s2", order=2, time_start=4.0, time_end=8.0, type=SceneType.VOCAL, lyrics="b"),
+        ]
+        result = _merge_short_scenes(scenes, min_duration=2.0)
+        assert len(result) == 2
+
+    def test_single_scene_not_merged(self):
+        scenes = [
+            Scene(id="s1", order=1, time_start=0.0, time_end=0.5, type=SceneType.VOCAL, lyrics="a"),
+        ]
+        result = _merge_short_scenes(scenes, min_duration=2.0)
+        assert len(result) == 1
+
+    def test_preserves_vocal_type(self):
+        scenes = [
+            Scene(id="s1", order=1, time_start=0.0, time_end=3.0, type=SceneType.INSTRUMENTAL, lyrics=""),
+            Scene(id="s2", order=2, time_start=3.0, time_end=3.5, type=SceneType.VOCAL, lyrics="word"),
+        ]
+        result = _merge_short_scenes(scenes, min_duration=2.0)
+        assert len(result) == 1
+        assert result[0].type == SceneType.VOCAL
 
 
 class TestValidateAndAdjustScenes:
