@@ -200,12 +200,24 @@ async def update_style_sheet(style_sheet: StyleSheet):
 
 @app.get("/api/segment-markers")
 async def get_segment_markers():
-    """Load persisted segment markers from input/segment_markers.json."""
+    """Load persisted segment markers, or derive from existing scenes."""
     import json as _json
     proj = get_project()
     path = proj.paths.input_dir / "segment_markers.json"
     if path.exists():
         return _json.loads(path.read_text())
+
+    # No marker file — derive from existing scenes if available
+    scene_list = proj.load_scenes()
+    if scene_list and scene_list.scenes:
+        scenes = sorted(scene_list.scenes, key=lambda s: s.time_start)
+        # Markers are the boundaries between scenes (exclude song start/end)
+        markers = [s.time_end for s in scenes[:-1]]
+        # Persist so it's available next time without re-deriving
+        data = {"markers": markers}
+        path.write_text(_json.dumps(data, indent=2))
+        return data
+
     return {"markers": []}
 
 
