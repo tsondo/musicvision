@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { createProject, getConfig, openProject, ApiError } from "../api/client";
+import { closeProject as apiCloseProject, createProject, getConfig, openProject, ApiError } from "../api/client";
 import type { ProjectConfig } from "../api/types";
 
 export type ProjectState =
@@ -60,6 +60,8 @@ export function useProject() {
   const lastProjectPath = localStorage.getItem(LAST_PROJECT_KEY) ?? "";
 
   const close = useCallback(() => {
+    localStorage.removeItem(LAST_PROJECT_KEY);
+    apiCloseProject().catch(() => {});
     setState({ status: "no-project" });
   }, []);
 

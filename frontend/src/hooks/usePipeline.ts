@@ -161,14 +161,26 @@ export function usePipeline(
     [reloadConfig],
   );
 
+  const [importMessage, setImportMessage] = useState<string | null>(null);
+
   const importAudio = useCallback(
     async (path: string) => {
       setUploadStatus("running");
       setError(null);
+      setImportMessage(null);
       try {
-        await apiImportAudio(path);
+        const result = await apiImportAudio(path);
         await reloadConfig();
         setUploadStatus("done");
+        if (result.acestep_imported) {
+          const parts: string[] = ["Imported audio with AceStep metadata"];
+          if (result.bpm) parts.push(`BPM ${result.bpm}`);
+          if (result.keyscale) parts.push(result.keyscale);
+          if (result.has_lyrics) parts.push("lyrics");
+          setImportMessage(parts.join(" · "));
+        } else {
+          setImportMessage("Imported audio");
+        }
       } catch (err) {
         const msg = err instanceof ApiError ? err.detail : String(err);
         setError(msg);
@@ -435,6 +447,7 @@ export function usePipeline(
     uploadAudio,
     uploadLyrics,
     importAudio,
+    importMessage,
     importLyrics,
     runAnalyze,
     confirmScenes,

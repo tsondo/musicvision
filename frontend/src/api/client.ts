@@ -64,6 +64,10 @@ export async function openProject(
   });
 }
 
+export async function closeProject(): Promise<{ status: string }> {
+  return request("/api/projects/close", { method: "POST" });
+}
+
 export async function getScenes(): Promise<Scene[]> {
   return request("/api/scenes");
 }
