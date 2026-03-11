@@ -28,11 +28,13 @@ The 1.7B model has lower visual quality but nearly identical audio-visual sync a
 ```bash
 conda create -n humo python=3.11
 conda activate humo
-pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu124
+pip install torch==2.10.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 pip install flash_attn==2.6.3
 pip install -r requirements.txt
 conda install -c conda-forge ffmpeg
 ```
+
+> **Note:** MusicVision uses `torch==2.10.0` with CUDA 12.8 (required for RTX 5090 sm_120 support). The upstream HuMo repo pins `torch==2.5.1` — either version works for inference.
 
 ## Model Weights
 
@@ -92,8 +94,8 @@ diffusion:
 
 ### Guidance Scale Tips
 
-- `scale_t` (text): 5.0-10.0 range. Default 7.5. Higher values = stronger prompt following but can reduce naturalness.
-- `scale_a` (audio): 1.0-3.0 range. Default 2.0. Higher = tighter lip sync but can cause artifacts.
+- `scale_t` (text): 5.0-10.0 range. Upstream default 7.5; MusicVision default 5.0. Higher values = stronger prompt following but can reduce naturalness.
+- `scale_a` (audio): 1.0-5.5 range. Upstream default 2.0; MusicVision default 5.5. Higher = tighter lip sync but can cause artifacts.
 - For **instrumental scenes** (TA mode): reduce `scale_a` to 1.0-1.5 since there are no vocals to sync.
 - HuMo uses a **time-adaptive CFG strategy** — guidance strength varies across denoising steps automatically.
 

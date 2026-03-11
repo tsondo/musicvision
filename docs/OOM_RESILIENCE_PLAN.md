@@ -1,232 +1,100 @@
-# OOM Resilience & Multi-Engine Fallback Plan
+# OOM Resilience — Retrospective & Remaining Concerns
 
-**Date:** 2026-03-03
-**Context:** First HVA preview run OOM'd on RTX 5090 (32GB) because preview mode wasn't sending low-quality settings — model ran at defaults requiring 40GB+. This plan addresses both the immediate bug and the broader architectural need for graceful degradation.
-
----
-
-## Problem Statement
-
-We have one working video engine (HunyuanVideo-Avatar) with one checkpoint (BF16, ~30GB). HuMo is deprioritized (noisy output, never properly denoised). If HVA can't fit in VRAM for a given scene, we currently have no fallback — the run crashes.
-
-Resolution reduction below 320p is not viable (useless as preview). Resolution reduction in final-cut mode sacrifices quality. We need strategies beyond lowering resolution.
+**Original:** 2026-03-03 | **Updated:** 2026-03-11
 
 ---
 
-## Architecture: Per-Scene Engine Selection
+## Original Problem
 
-**Core change:** Move from "one engine per run" to "best engine per scene based on capability budget."
-
-Each scene already has a `Scene.video_engine` field and the pipeline already groups scenes by engine. Extend this so the UI presents only engines that can actually run on the current hardware, per scene.
-
-### Scene capability matching
-
-Different scenes have different requirements:
-
-| Scene type | Needs lip sync? | Needs full-body motion? | Minimum engine |
-|---|---|---|---|
-| Character singing/talking | Yes | Yes | HVA (primary) or LivePortrait (fallback) |
-| Character with body motion, no speech | No | Yes | HVA or lighter T2V model |
-| Landscape / establishing shot | No | No | Lightweight T2V, or animated pan over FLUX image |
-| Abstract / mood visuals | No | No | Any T2V model, lowest VRAM requirement |
-
-The UI scene editor should:
-1. Run a pre-flight VRAM check for each engine at each supported resolution
-2. Populate the engine/resolution dropdown with only options that fit
-3. Auto-select the best available option (highest quality that fits)
-4. Allow user override within the feasible set
-
-It is acceptable — and expected — for a single video to contain scenes rendered by different engines. A talking head close-up in one scene and a desert landscape in another is fine as long as the story flows. Post-production upscaling and color matching can harmonize visual differences.
+First HVA preview run OOM'd on RTX 5090 (32GB) because preview mode sent default settings requiring 40GB+. With only one working video engine at the time and no fallback, the run crashed with no recovery. Resolution reduction below 320p wasn't viable, so we needed strategies beyond lowering resolution: per-scene engine selection, pre-flight VRAM checks, mid-run OOM recovery, fallback engines, and upscaling to decouple creative review from final quality.
 
 ---
 
-## Pre-Flight VRAM Budget Check
+## What Was Implemented
 
-Before any render begins, estimate memory requirements and validate against available VRAM. This runs once per scene configuration, not per frame.
+### Per-scene engine selection — DONE
 
-### Implementation
+Three working video engines with per-scene selection in both CLI and GUI:
 
-```python
-def estimate_vram_gb(engine: str, width: int, height: int, n_frames: int) -> float:
-    """
-    Empirical VRAM estimates based on GPU test results.
-    
-    Known data points (HVA on RTX 5090):
-      - 320p / 129 frames / BF16 + block offload → 16.6 GB peak
-      - 704p / 129 frames / BF16 + block offload → 31.9 GB peak
-    
-    Known data points (FLUX / Z-Image on RTX 5090):
-      - Z-Image-Turbo 768x512 → 12.5 GB peak
-      - FLUX-schnell 768x512 bf16 CPU offload → ~17 GB peak
-    """
-    # Per-engine empirical models — refine as we collect more data points
-    ...
-```
+- **HunyuanVideo-Avatar** — primary, audio-driven lip sync, 5.16s max clips
+- **LTX-Video 2** — cinematic/instrumental scenes, 10.71s max clips (replaced CogVideoX in the plan)
+- **HuMo** — audio-reactive, 24 bugs fixed, 3.88s max clips
 
-### Pre-flight flow
+`Scene.video_engine` field allows mixing engines within a single project. The API groups scenes by engine and processes each group sequentially. The UI has per-scene engine dropdowns.
 
-```
-For each scene in project:
-  1. Determine scene requirements (lip sync, motion, etc.)
-  2. List candidate engines in quality order
-  3. For each candidate:
-     a. estimate_vram_gb(engine, resolution, frames)
-     b. Compare against torch.cuda.mem_get_info() with 2GB headroom
-     c. If fits → select this engine + settings, stop
-  4. If nothing fits → flag scene as "cannot render" with explanation
-  5. Lock settings for the entire run (no mid-run changes for THIS attempt)
-```
+### Preview/final render quality presets — DONE
 
-### VRAM headroom
+Per-engine resolution and step-count presets. Preview mode (320p/10 steps) fits comfortably on 32GB. The original blocking bug (HVA receiving default settings instead of preview settings) was fixed.
 
-Always reserve ~2GB below the physical limit. CUDA fragmentation, kernel overhead, and display server (on workstations) consume memory that `mem_get_info` may not fully account for. The `PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512` environment variable should be set by default in engine startup to reduce fragmentation-induced OOMs.
+### Mid-run OOM recovery — DONE
 
----
+Both `api/app.py` and `cli.py` wrap generation in OOM-aware try/except:
 
-## Graceful Mid-Run OOM Recovery
+- `is_oom_error()` detects CUDA OOM from direct exceptions and subprocess stderr
+- `_oom_suggestion()` provides human-readable recovery advice per engine
+- Consecutive OOM counter: after 2 consecutive OOMs in the same engine group, remaining scenes in that group are skipped (CUDA state is unreliable after OOM)
+- Failed scenes are reported with suggested alternative settings
+- CLI prints a re-run command for failed scene IDs
+- HVA engine detects server OOM and skips futile wrapper fallback
 
-If a scene OOMs despite pre-flight checks (fragmentation, unexpected memory spike, etc.), recover without crashing the entire run.
+### Pre-flight VRAM budget check — PARTIAL
 
-### Recovery flow
+`estimate_vram_gb()` exists in `utils/gpu.py` with empirical models for HVA and LTX-Video 2. Both CLI and API call it before render and warn if estimated VRAM exceeds available. However, the UI does not yet filter engine/resolution dropdowns to only show feasible options — it warns but doesn't prevent infeasible selections.
 
-```
-try:
-    result = engine.generate(scene_params)
-except torch.cuda.OutOfMemoryError:
-    torch.cuda.empty_cache()
-    gc.collect()
-    
-    log.warning("OOM on scene %s with engine=%s res=%s", 
-                scene.id, scene.video_engine, scene.resolution)
-    
-    # Mark this scene as failed with the current settings
-    scene.status = "oom_failed"
-    scene.oom_context = {
-        "engine": scene.video_engine,
-        "resolution": scene.resolution,
-        "vram_available": torch.cuda.mem_get_info()[0] / 1024**3,
-    }
-    
-    # Continue to next scene — do NOT retry inline
-    # Rationale: CUDA state after OOM can be unreliable.
-    # Better to finish what we can, then offer re-run options.
-    continue
-```
+### PYTORCH_CUDA_ALLOC_CONF — DONE
 
-### After the run completes with failures
+Set to `max_split_size_mb:512` in:
+- HVA engine startup (both direct and wrapper modes)
+- HVA server script
+- SeedVR2 engine subprocess
+- `.env.example` documents `expandable_segments:True` as the recommended default
 
-1. Report which scenes failed and why
-2. Suggest alternative settings for failed scenes (lower resolution, different engine, more aggressive offloading)
-3. Let the user re-run only the failed scenes with adjusted settings
-4. **Do not** automatically retry with different settings mid-run — CUDA state after OOM is unreliable, and mixing settings within an engine group can cause subtle device placement bugs
+### Text encoder offload — DONE
 
-### Important: no mixed settings within a single attempt
+HuMo engine has `_should_offload()` that checks free VRAM on the encoder GPU and offloads to CPU when < 2GB free. Encoders are offloaded after use to maximize VRAM headroom for the DiT. HVA uses `apply_group_offloading(block_level)` with CPU offload. LTX-Video 2 uses sequential CPU offload via diffusers.
 
-When the user initiates a render, each scene's settings are locked. If scenes fail, the user gets a report and chooses how to re-render the failures. This avoids the complexity and fragility of mid-run parameter changes while still giving the user full control. Different scenes CAN use different engines/resolutions — that's chosen at planning time, not recovery time.
+### Upscaling pipeline — DONE
+
+Originally listed as "future" — now fully implemented as Stage 4 with three engines:
+
+- **SeedVR2** — subprocess bridge, for HVA/HuMo pixel-space upscaling
+- **LTX Spatial** — in-process diffusers, for LTX-Video 2 latent-space upscaling
+- **Real-ESRGAN** — frame-by-frame, lightweight fallback
+
+Auto-selection per video engine. Pipeline orchestrator groups by engine, loads, processes, unloads. Assembly prefers upscaled clips. Full details in PIPELINE_SPEC.md.
+
+### OOM resilience tests — DONE
+
+`tests/test_oom_resilience.py` covers `is_oom_error()`, `_oom_suggestion()`, and `estimate_vram_gb()` with various exception types and engine configurations.
 
 ---
 
-## Fallback Engine Candidates
+## Remaining Concerns
 
-We need at least one lightweight video engine that can produce acceptable results when HVA won't fit. These should be evaluated and integrated as additional `VideoEngineType` options.
+### Pre-flight VRAM filtering in UI — NOT DONE
 
-### Tier 1: LivePortrait (recommended first integration)
+The UI engine/resolution dropdowns show all options regardless of available VRAM. The plan called for filtering to only feasible options with auto-selection of the best available. Currently the pre-flight check only warns (CLI prints a warning, API logs it) but does not block.
 
-**Why:** Shares the same input contract we already produce (reference image + audio segment). Portrait animation with lip sync at ~4-6GB VRAM. Fast inference.
+### estimate_vram_gb() coverage gaps
 
-- **Input:** Reference image (from Stage 2) + audio segment
-- **Output:** Animated portrait video with lip sync
-- **VRAM:** ~4-6 GB — fits on virtually any GPU
-- **Limitation:** Portrait/upper-body only, no full-scene generation
-- **Best for:** Character singing/talking scenes where HVA won't fit
-- **License:** Check before integrating
+Only HVA and LTX-Video 2 have empirical VRAM models. HuMo returns 0.0 (unknown). As more data points are collected, the estimates should be refined.
 
-**Integration path:** New `video/liveportrait_engine.py` implementing the same `VideoEngine` interface. Subprocess isolation like HVA if dependency conflicts exist.
+### Animated pan/zoom engine — NOT IMPLEMENTED
 
-### Tier 2: CogVideoX-5B
+Pure ffmpeg Ken Burns effect over a still image. Zero VRAM, useful for establishing shots and transitions. Was listed as "implement immediately" but never built. Would be a `VideoEngineType.PAN_ZOOM` with no model loading — just ffmpeg filter graphs.
 
-**Why:** Full scene generation (not just portraits), text+image conditioning, fits in 16GB with quantization.
+### LivePortrait integration — NOT IMPLEMENTED
 
-- **Input:** Text prompt + reference image
-- **Output:** Full video clip (no native audio conditioning)
-- **VRAM:** ~10-16 GB depending on quantization
-- **Limitation:** No audio-driven lip sync — suitable for non-speaking scenes
-- **Best for:** Landscapes, establishing shots, abstract visuals
-- **License:** Apache 2.0
-
-### Tier 3: Animated image pan/zoom
-
-**Why:** Zero additional VRAM beyond what FLUX/Z-Image already uses. Ken Burns effect over a still image.
-
-- **Input:** Reference image from Stage 2
-- **Output:** Slow pan/zoom video clip via ffmpeg
-- **VRAM:** 0 GB (pure ffmpeg operation)
-- **Limitation:** No motion, no lip sync — just camera movement over a still
-- **Best for:** Establishing shots, transitions, mood scenes
-- **Implementation:** Pure ffmpeg, no model needed. Could be done today.
-
-### Priority order for integration
-
-1. **Animated pan/zoom** — implement immediately, zero cost, useful for non-character scenes
-2. **LivePortrait** — research and prototype, covers the critical "character singing but HVA won't fit" case
-3. **CogVideoX** — evaluate if we need full-scene generation at lower VRAM than HVA
-
----
-
-## Upscaling Pipeline (Post-Processing)
-
-Generate everything at 320p for fast iteration, then batch-upscale approved scenes to 720p/1080p. This decouples creative review from final quality.
-
-### Why this matters
-
-- 320p preview at ~16.6 GB is safe on 32GB cards — this is our reliable floor
-- Upscaling 320p → 720p requires far less VRAM than generating at 720p directly
-- User reviews and approves at 320p (fast cycle), then kicks off upscale (slow, one-time)
-- If 320p is the only resolution that fits, the result isn't a dead end
-
-### Candidate upscalers
-
-- **RealESRGAN** (4x) — well-tested, ~2-4 GB VRAM, fast. Good baseline.
-- **TOPAZ Video AI** (commercial) — highest quality but proprietary, not suitable for pipeline integration
-- **Real-ESRGAN + frame interpolation** — upscale + smooth motion in one pass
-
-### Integration point
-
-New Stage 4.5 between video generation and assembly, or as a post-assembly batch operation. Should be optional and per-scene (user may want some scenes at native resolution if they rendered at 704p).
-
----
-
-## Immediate Action Items (for Claude Code)
-
-### Bug fix (blocking — in progress)
-1. Preview mode must send low-quality settings (320p, 10 steps, block offload ON) to HVA wrapper. Currently sending defaults that require 40GB+.
-
-### OOM resilience (high priority)
-2. Set `PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512` in engine startup (both HVA wrapper and HuMo engine)
-3. Add pre-flight VRAM check before render — `estimate_vram_gb()` function with empirical data from our test results
-4. Wrap engine.generate() in OOM try/except — log failure, mark scene, continue run
-5. After run, report failed scenes with suggested alternative settings
-6. Verify text encoders (LLaVA-LLaMA-3-8B + CLIP-L) are fully offloaded to CPU before HVA diffusion loop starts — add explicit `clear_vram()` + VRAM assertion between encoding and diffusion
-
-### Engine dropdown (medium priority)
-7. Per-scene engine selector in UI that only shows feasible options based on pre-flight check
-8. `Scene.video_engine` already exists — extend to support new engine types as they're added
-
-### Fallback engines (next phase)
-9. Implement animated pan/zoom as `VideoEngineType.PAN_ZOOM` — pure ffmpeg, no model, works today
-10. Research LivePortrait — VRAM requirements, license, output quality, integration complexity
-11. Evaluate CogVideoX-5B as a full-scene fallback
-
-### Upscaling (future)
-12. Prototype RealESRGAN integration as optional post-processing step
-13. Design UX: "approve at 320p → upscale to 720p" workflow
+Lightweight portrait animation (~4-6GB VRAM) for the "character singing but primary engine won't fit" fallback case. Has not been researched beyond initial notes. Lower priority now that three engines cover most scene types.
 
 ---
 
 ## Key Principles
 
+These remain valid and should guide future OOM-related work:
+
 - **No surprise degradation.** The user always knows what engine and resolution each scene will use before rendering starts.
 - **Per-scene flexibility.** Different scenes can use different engines. A talking head and a desert landscape don't need the same pipeline.
 - **Pre-flight over retry.** Catch problems before committing GPU time. Mid-run OOM recovery is a safety net, not the primary strategy.
 - **320p is the floor, not a dead end.** With upscaling, a 320p render becomes the fast-iteration step in a two-stage pipeline.
-- **Engines are pluggable.** New engines implement the `VideoEngine` interface and register as a `VideoEngineType`. The pipeline doesn't care what's inside — it just needs generate() to return frames.
+- **Engines are pluggable.** New engines implement the `VideoEngine` interface and register as a `VideoEngineType`. The pipeline doesn't care what's inside — it just needs `generate()` to return frames.

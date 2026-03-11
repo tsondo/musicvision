@@ -26,12 +26,12 @@ Everything runs locally on consumer NVIDIA GPUs. No cloud services, no per-minut
 ### Key Features
 
 - **Lip-synced video generation** — characters sing along to the music with accurate mouth movements, facial expressions, and body motion driven by the audio
-- **Multiple AI video engines** — HunyuanVideo-Avatar (lip sync), LTX-Video 2 (cinematic), HuMo (experimental audio-reactive)
+- **Multiple AI video engines** — HunyuanVideo-Avatar (lip sync), LTX-Video 2 (cinematic), HuMo (audio-reactive)
 - **Multiple image engines** — Z-Image (ungated, fast) and FLUX (LoRA support for character consistency)
 - **Three upscalers** — SeedVR2 (faces), LTX Spatial (latent-space), Real-ESRGAN (fast preview)
 - **Frame-accurate audio sync** — integer frame math eliminates drift; original uncut audio in final assembly
 - **Sub-clip chaining** — scenes longer than the engine's max clip length are automatically split with visual continuity (last frame → next reference image)
-- **Professional export** — rough cut MP4, EDL, and FCPXML 1.9 for DaVinci Resolve
+- **Professional export** — rough cut MP4, EDL, and FCPXML 1.10 for DaVinci Resolve
 - **Iterative workflow** — review and regenerate individual scenes via React GUI or CLI; approve only what you like
 - **Per-scene engine selection** — use different video engines for different scenes in the same project
 - **Fully local LLM option** — vLLM with Qwen2.5-32B on a LAN server for scene segmentation and prompt generation, or use Claude API, or skip LLM entirely with auto-templates
@@ -63,7 +63,7 @@ MusicVision wraps multiple AI models into a five-stage pipeline with user review
 |--------|----------|-------------|----------|------------|----------|
 | **HunyuanVideo-Avatar** | Native | Full mix | 5.16s (129 frames @ 25fps) | 320p–704p | Singing scenes, character performance |
 | **LTX-Video 2** | Post-process | Audio+video unified | Configurable | Up to 720p | Cinematic scenes, non-vocal |
-| **HuMo** | Native | Full mix (TIA mode) | 3.88s (97 frames @ 25fps) | Up to 720p | Audio-reactive motion (experimental) |
+| **HuMo** | Native | Full mix (TIA mode) | 3.88s (97 frames @ 25fps) | Up to 720p | Audio-reactive motion |
 
 ---
 
@@ -116,11 +116,11 @@ A single-GPU setup works if the card has ≥32 GB VRAM. The two-GPU split is a c
 
 ### Cloud (A100 / H100 / H200)
 
-Single-GPU A100 80 GB or H100 80 GB runs the full FP16 model without splitting. No multi-GPU complexity needed. See [PLATFORM_SUPPORT_PLAN.md](docs/PLATFORM_SUPPORT_PLAN.md).
+Single-GPU A100 80 GB or H100 80 GB runs the full FP16 model without splitting. No multi-GPU complexity needed. Minor gaps remain in tier auto-selection for high-VRAM single GPUs — see [future_plans.md](docs/future_plans.md).
 
 ### Apple Silicon (MPS) — Planned
 
-M-series Mac support is planned but not yet implemented. See [PLATFORM_SUPPORT_PLAN.md](docs/PLATFORM_SUPPORT_PLAN.md) for the roadmap.
+M-series Mac support is planned but not yet implemented. Blocking issues include RoPE float64/complex128 ops and FP8 unavailability on MPS. See [future_plans.md](docs/future_plans.md) for the roadmap.
 
 ### Optional: Local LLM Server
 
@@ -249,7 +249,7 @@ All intermediate artifacts are saved. You can re-enter the pipeline at any stage
 ## Testing
 
 ```bash
-# Unit tests — ~250 tests, no GPU, < 10 seconds
+# Unit tests — ~257 tests, no GPU, < 10 seconds
 uv run pytest tests/ -v
 
 # LLM prompt tests (requires vLLM server)
@@ -278,8 +278,8 @@ See [TESTING.md](docs/TESTING.md) for the full test strategy.
 | [HUMO_REFERENCE.md](docs/HUMO_REFERENCE.md) | HuMo model internals, TIA mode, prompt guidelines |
 | [TESTING.md](docs/TESTING.md) | Two-layer test strategy (unit + integration) |
 | [MUSICVISION_GPU_TEST.md](docs/MUSICVISION_GPU_TEST.md) | GPU integration test setup guide |
-| [PLATFORM_SUPPORT_PLAN.md](docs/PLATFORM_SUPPORT_PLAN.md) | Apple Silicon MPS + cloud GPU support roadmap |
-| [LIP_SYNC_SPEC.md](docs/LIP_SYNC_SPEC.md) | LatentSync lip sync post-processing spec |
+| [OOM_RESILIENCE_PLAN.md](docs/OOM_RESILIENCE_PLAN.md) | OOM resilience strategy and implementation status |
+| [LIP_SYNC_POST.md](docs/LIP_SYNC_POST.md) | LatentSync lip sync post-processing spec |
 | [future_plans.md](docs/future_plans.md) | Long-term vision: story bible → manga → animation |
 | [FIXLOG.md](docs/FIXLOG.md) | Checkpoint loading fix history |
 

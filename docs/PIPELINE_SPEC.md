@@ -2,7 +2,7 @@
 
 ## Overview
 
-MusicVision is a music video production pipeline that combines open-source AI tools to turn a song (audio + lyrics) into a complete music video. It wraps multiple video generation backends (HunyuanVideo-Avatar, HuMo) and FLUX for reference image generation into an iterative, user-controlled workflow.
+MusicVision is a music video production pipeline that combines open-source AI tools to turn a song (audio + lyrics) into a complete music video. It wraps multiple video generation backends (HunyuanVideo-Avatar, HuMo, LTX-Video 2) and FLUX for reference image generation into an iterative, user-controlled workflow.
 
 ### Core Principle: Segment for Video, Assemble with Original Audio
 
@@ -57,6 +57,7 @@ Each video engine has fixed frame constraints that govern the entire pipeline:
 | HuMo 17B | 97 | 25 | 3.88s | 25 (1.0s) | TIA mode (text+image+audio) |
 | HuMo 1.7B | 97 | 25 | 3.88s | 25 (1.0s) | Preview/iteration |
 | HunyuanVideo-Avatar | 129 | 25 | 5.16s | 33 (1.32s) | Audio-driven lip sync, subprocess engine |
+| LTX-Video 2 | 257 | 24 | 10.71s | 9 (0.375s) | Joint audio+video generation |
 
 **The active engine's constraints are injected into segmentation and sub-clip splitting.** The pipeline must never assume a fixed max duration — always read from the engine config.
 
@@ -65,6 +66,7 @@ Each video engine has fixed frame constraints that govern the entire pipeline:
 ENGINE_CONSTRAINTS = {
     "humo":              {"max_frames": 97,  "fps": 25, "min_frames": 25},
     "hunyuan_avatar":    {"max_frames": 129, "fps": 25, "min_frames": 33},
+    "ltx_video":         {"max_frames": 257, "fps": 24, "min_frames": 9},
 }
 ```
 
@@ -384,6 +386,7 @@ The active video engine is set in `project.yaml` → `video_engine`. All engines
 |--------|----------|-------------|
 | HunyuanVideo-Avatar | Audio-driven lip sync, full-body animation, excellent quality | Default for most projects (primary engine) |
 | HuMo TIA | Audio-conditioned with dual CFG, character preservation | When audio reactivity is critical (back burner) |
+| LTX-Video 2 | Joint audio+video generation, cinematic | Cinematic/instrumental scenes, long clips (up to 10.7s) |
 
 ### Process
 
@@ -510,16 +513,20 @@ song:
     caption: null
     lyrics: null
 
-video_engine: "hunyuan_avatar"  # hunyuan_avatar | humo
+video_engine: "hunyuan_avatar"  # hunyuan_avatar | humo | ltx_video
 
 humo:
   tier: "fp8_scaled"
-  resolution: 512
-  scale_a: 3.0
+  resolution: "544p"
+  scale_a: 5.5
   scale_t: 5.0
+  shift: 5.0
+  sampler: "uni_pc"
   denoising_steps: 50
   block_swap_count: 0
   sub_clip_continuity: true
+  lora: null
+  seed: null
 
 hunyuan:
   checkpoint: "bf16"
@@ -574,7 +581,7 @@ vocal_separation:
       "video_prompt_user_override": null,
       "video_clip": "clips/scene_001.mp4",
       "video_status": "pending",
-      "video_engine": "hunyuan_avatar",
+      "video_engine": "hunyuan_avatar",    // hunyuan_avatar | humo | ltx_video
 
       "sub_clips": [],
 
@@ -615,7 +622,7 @@ vocal_separation:
       "video_prompt_user_override": null,
       "video_clip": null,
       "video_status": "pending",
-      "video_engine": "hunyuan_avatar",
+      "video_engine": "hunyuan_avatar",    // hunyuan_avatar | humo | ltx_video
 
       "sub_clips": [
         "clips/sub/scene_005_a.mp4",
@@ -715,7 +722,7 @@ my_music_video/
 src/musicvision/
 ├── __init__.py
 ├── cli.py                    # CLI entry point
-├── api.py                    # FastAPI REST API
+├── api/app.py                # FastAPI REST API
 ├── llm.py                    # Unified LLM client (Anthropic + OpenAI/vLLM)
 ├── models.py                 # Pydantic v2 data models
 ├── engine_registry.py        # Engine constraints, frame math, sub-clip computation
@@ -733,7 +740,15 @@ src/musicvision/
 │   ├── base.py                    # Abstract video engine interface
 │   ├── factory.py                 # Engine factory dispatch
 │   ├── humo_engine.py             # HuMo TIA inference wrapper
-│   └── hunyuan_avatar_engine.py   # HunyuanVideo-Avatar subprocess wrapper
+│   ├── hunyuan_avatar_engine.py   # HunyuanVideo-Avatar subprocess wrapper
+│   └── ltx_video_engine.py        # LTX-Video 2 inference wrapper
+├── upscaling/
+│   ├── base.py                    # UpscaleEngine ABC + dataclasses
+│   ├── factory.py                 # Dispatch on UpscalerType → engine
+│   ├── pipeline.py                # Orchestrator: group by engine, upscale, update scenes
+│   ├── realesrgan_engine.py       # Real-ESRGAN frame-by-frame upscaler
+│   ├── seedvr2_engine.py          # SeedVR2 subprocess bridge
+│   └── ltx_spatial_engine.py      # LTX Spatial Upsampler (diffusers in-process)
 ├── assembly/
 │   ├── concatenator.py       # ffmpeg clip joining + audio sync + duration assertion
 │   ├── exporter.py           # FCPXML/EDL generation
@@ -745,7 +760,7 @@ src/musicvision/
     └── paths.py              # ProjectPaths helper
 ```
 
-### New Module: `engine_registry.py`
+### Module: `engine_registry.py`
 
 Single source of truth for engine constraints and frame math:
 
@@ -778,6 +793,7 @@ class EngineConstraints:
 ENGINES = {
     "humo":             EngineConstraints("HuMo",                max_frames=97,  min_frames=25, fps=25),
     "hunyuan_avatar":   EngineConstraints("HunyuanVideo-Avatar", max_frames=129, min_frames=33, fps=25),
+    "ltx_video":        EngineConstraints("LTX-Video 2",        max_frames=257, min_frames=9,  fps=24),
 }
 
 def get_engine(name: str) -> EngineConstraints:
@@ -849,6 +865,6 @@ A React + Vite frontend is implemented for scene review and approval. It communi
 - **Transitions**: Currently hard cuts only. Future: AI-generated transitions, crossfades.
 - **Batch rendering**: Scenes generate sequentially. Future: multi-GPU or cloud parallelism.
 - **LoRA training**: Pipeline accepts LoRA paths but doesn't include training workflows.
-- **Future engine integrations**: LTX-2 (unified audio+video generation) and HunyuanVideo 1.5 (step-distilled fast mode) are candidates for future integration.
+- **Future engine integrations**: HunyuanVideo 1.5 (step-distilled fast mode) is a candidate for future integration.
 - **Engine hot-swap**: Per-scene engine selection is implemented. Future: UI for per-scene engine assignment.
 - **Render time estimation**: No upfront time estimate for users.

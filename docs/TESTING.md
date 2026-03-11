@@ -22,6 +22,8 @@ MusicVision uses a two-layer test strategy: fast unit tests that run anywhere, a
 | `test_engine_registry.py` | Engine constraints, frame math, sub-clip computation |
 | `test_hunyuan_avatar_engine.py` | HVA config, VideoEngineType enum, factory dispatch, engine lifecycle, scene splitting |
 | `test_upscaler.py` | Upscaler enums, UpscalerConfig defaults + auto-selection, factory dispatch, pipeline orchestrator (mock engine), Scene/SubClip upscaled_clip fields, YAML roundtrip |
+| `test_ltx_video_engine.py` | LTX-Video 2 engine config, factory dispatch, scene splitting |
+| `test_oom_resilience.py` | OOM recovery, pre-flight VRAM checks, graceful degradation |
 
 ---
 
@@ -39,6 +41,9 @@ MusicVision uses a two-layer test strategy: fast unit tests that run anywhere, a
 | `test_image_gen.py` | Z-Image-Turbo + FLUX-schnell GPU image generation (2 images each, man + woman) | GPU + `HUGGINGFACE_TOKEN` for FLUX |
 | `test_gpu_pipeline.py` | Full 4-phase HuMo GPU integration test (model loading, single clip, sub-clip splitting, assembly) | GPU + HuMo weights. See `MUSICVISION_GPU_TEST.md`. |
 | `test_humo_inference.py` | Isolated HuMo checkpoint loading and inference smoke test | GPU + HuMo weights |
+| `test_hva_standalone.py` | HunyuanVideo-Avatar standalone inference test | GPU + HVA repo/weights |
+| `test_humo_480p.py` | HuMo 480p resolution inference test | GPU + HuMo weights |
+| `test_humo_720p.py` | HuMo 720p resolution inference test | GPU + HuMo weights |
 | `test_vllm_prompts.py` | All three LLM prompt paths (segmentation, image prompts, video prompts, batch consistency) against a running vLLM server | vLLM server running on LAN with Qwen2.5-32B-AWQ |
 | `dump_keys.py` | Utility to dump checkpoint `state_dict` keys for debugging weight loading issues | Model weights on disk |
 
@@ -64,7 +69,7 @@ musicvision assemble --project ./test_storyboard
 
 ## Recommended Test Workflow
 
-1. **After code changes:** `python -m pytest tests/ -v --tb=short` (~250 tests, <10 seconds)
+1. **After code changes:** `python -m pytest tests/ -v --tb=short` (~257 tests, <10 seconds)
 2. **After LLM prompt changes:** run pytest, then `python scripts/test_vllm_prompts.py`
 3. **After image engine changes:** `python scripts/test_image_gen.py`
 4. **After HuMo/video changes:** `python scripts/test_gpu_pipeline.py`

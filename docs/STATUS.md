@@ -1,6 +1,6 @@
 # MusicVision — Project Status
 
-**Last updated:** 2026-03-04
+**Last updated:** 2026-03-11
 **Branch:** `main`
 
 ---
@@ -27,7 +27,7 @@ The pipeline is designed around AI-generated music from **AceStep** (a text-cond
 |----------------|--------|
 | Intake (audio, BPM, Whisper, segmentation) | ✅ Complete |
 | Reference image generation (FLUX + Z-Image) | ✅ Complete — **GPU tested** |
-| Video generation — HuMo TIA | ✅ Complete — GPU tested, noisy output (back burner) |
+| Video generation — HuMo TIA | ✅ Complete — **GPU tested, working** (24 bugs fixed) |
 | Video generation — HunyuanVideo-Avatar | ✅ Complete — **GPU tested, excellent quality** |
 | Video generation — LTX-Video 2 | ✅ Complete — audio-conditioned |
 | Video upscaling (Real-ESRGAN, SeedVR2, LTX Spatial) | ✅ Complete — per-engine auto-selection |
@@ -42,7 +42,7 @@ The pipeline is designed around AI-generated music from **AceStep** (a text-cond
 | Frame-accurate alignment system | ✅ Complete |
 | Progress/status feedback (SSE/WebSocket) | ❌ Not started |
 
-**All five pipeline stages are code-complete and CLI-accessible.** Full end-to-end workflow: `create` → `import-audio` → `intake` → `generate-images` → `generate-video` → `upscale` → `assemble`. Three video engines: HunyuanVideo-Avatar (primary), LTX-Video 2 (cinematic), HuMo (back burner). Three upscalers: SeedVR2 (faces/HVA), LTX Spatial (LTX-2 latent), Real-ESRGAN (fast preview). Assembly auto-prefers upscaled clips.
+**All five pipeline stages are code-complete and CLI-accessible.** Full end-to-end workflow: `create` → `import-audio` → `intake` → `generate-images` → `generate-video` → `upscale` → `assemble`. Three video engines: HunyuanVideo-Avatar (primary), LTX-Video 2 (cinematic), HuMo (working, 24 bugs fixed). Three upscalers: SeedVR2 (faces/HVA), LTX Spatial (LTX-2 latent), Real-ESRGAN (fast preview). Assembly auto-prefers upscaled clips.
 
 ---
 
@@ -56,7 +56,7 @@ The pipeline is designed around AI-generated music from **AceStep** (a text-cond
 
 > **HunyuanVideo-Avatar runs in a separate subprocess.** HVA has its own venv (`~/HunyuanVideoAvatar/.venv`) to avoid dependency conflicts. The MusicVision engine class communicates via JSON request/response files through `scripts/hva_wrapper.py`. This means HVA is isolated from the main process — no shared GPU state.
 
-> **Per-scene engine selection.** Each scene can specify `video_engine: humo | hunyuan_avatar` or default to the project setting. The pipeline groups scenes by engine and processes each group sequentially (load → generate all → unload).
+> **Per-scene engine selection.** Each scene can specify `video_engine: humo | hunyuan_avatar | ltx_video` or default to the project setting. The pipeline groups scenes by engine and processes each group sequentially (load → generate all → unload).
 
 ---
 
@@ -112,9 +112,9 @@ Each scene gets a reference still image used as the visual anchor for video gene
 ---
 
 ### Stage 3 — Video Generation
-**Status: Complete — GPU tested (two engines)**
+**Status: Complete — GPU tested (three engines)**
 
-Two selectable video backends, configured per-project or per-scene via `VideoEngineType`:
+Three selectable video backends, configured per-project or per-scene via `VideoEngineType`:
 
 #### HunyuanVideo-Avatar (primary engine)
 **Status: GPU tested, excellent quality**
@@ -139,12 +139,29 @@ Tencent's audio-driven video generation model. Full-body animation with lip sync
 - Text encoders (LLaVA-LLaMA-3-8B + CLIP-L) must be offloaded to CPU before diffusion loop
 - `fp8_optimization.py` had an expensive `.sum()` check on every forward pass → patched out
 
-#### HuMo (back burner)
-**Status: GPU tested, noisy output — deprioritized**
+#### LTX-Video 2 (cinematic)
+**Status: Integrated, working**
+
+Lightricks' joint audio+video DiT (19B total: 14B video + 5B audio streams). Image-to-video via `LTX2ImageToVideoPipeline`. 257 frames max @ 24fps = 10.71s per clip (2x HVA length).
+
+- **Transformer**: GGUF IQ4 (~11GB) from `gguf-org/ltx2-gguf` — avoids 62GB RAM OOM from BF16→FP8 runtime quantization
+- **GPU layout**: `model` CPU offload on 5090, VAE decode on 4080
+- **Performance**: ~3.3s/step, ~1 min per 257-frame sub-clip
+- **Audio conditioning**: mel spectrogram encoding (TODO: currently audio VAE decode skipped)
+- **Frame constraint**: must be `(N*8)+1`
+
+| File | Purpose |
+|------|---------|
+| `video/ltx_video_engine.py` | Engine class — diffusers LTX2 pipeline wrapper |
+
+#### HuMo (working)
+**Status: GPU tested, producing high-quality video — 24 bugs fixed**
 
 **All inference stubs have been replaced.** A self-contained PyTorch implementation was written without the `wan.modules` dependency.
 
-**GPU test results (2026-02-27):** FAST preset (LoRA + 384p + 6 steps + UniPC) generates a 3.72s clip in ~52s on RTX 5090. Output shows recognizable content with spatial/temporal coherence but noisy. 10 inference bugs were found and fixed during bring-up (see `humo_debugging.md` in project memory). 3 remaining bugs identified but not yet fixed.
+**Root cause of noise:** Bug 24 — `zero_vae` encoded true black (-1.0) instead of mid-gray (0.0) in [-1,1] VAE space. Official pre-computed `zero_vae` files now downloaded automatically for matching resolutions.
+
+**GPU test results (2026-03-06):** ~9.0s/step at 480p with FP8 (30 steps = ~4.5 min/clip). Performance: `scale_a=5.5, scale_t=5.0, shift=5.0, denoising_steps=50, sampler=uni_pc`.
 
 #### New files (added Feb 2026)
 
@@ -192,28 +209,53 @@ DiT weights require `HUGGINGFACE_TOKEN`. Shared weights (T5, VAE, Whisper) are o
 - Same LLM-unavailable fallback as image prompts: interactive input → auto-template
 - Auto-template anchors on image prompt, style sheet, and scene type
 
+#### Video engine registry (`engine_registry.py`)
+
+| Engine | max_frames | fps | Max Duration | min_frames |
+|--------|-----------|-----|-------------|------------|
+| HuMo | 97 | 25 | 3.88s | — |
+| HunyuanVideo-Avatar | 129 | 25 | 5.16s | — |
+| LTX-Video 2 | 257 | 24 | 10.71s | 9 |
+
 #### Scene splitting
 
-Both engines auto-split long scenes into sub-clips:
+All engines auto-split long scenes into sub-clips:
 - **HuMo:** 97 frames @ 25fps = 3.88s max
 - **HVA:** 129 frames @ 25fps = 5.16s max (configurable via `sample_n_frames`)
+- **LTX-Video 2:** 257 frames @ 24fps = 10.71s max (min 9 frames)
 
 `generate_scene()` on each engine automatically splits longer scenes with pre-sliced audio. Sub-clip continuity: last frame of sub-clip N becomes reference image for sub-clip N+1.
 
 #### GPU test history
 
-All four risk areas from initial bring-up have been resolved. 10 bugs were found and fixed:
+All risk areas from initial bring-up have been resolved. 24 bugs were found and fixed (see `humo_debugging.md` for full list). Key fixes:
 - Bugs 1-3: Reference frame positioning (last temporal position, not first)
 - Bug 4-5: CFG formula corrections (negative conditioning, time-adaptive switching)
 - Bug 6: Sigma shift 5.0 → 8.0 to match ComfyUI workflow
 - Bug 7: FP8 input scaling (dynamic per-tensor, not hardcoded 1.0)
 - Bug 8-9: Diagnostic logging for missing keys and denoising health
-- Bug 10 (root cause of noise): Timestep not scaled ×1000
+- Bug 10: Timestep not scaled ×1000
+- Bug 24 (root cause of noisy output): zero_vae encoded true black (-1.0) instead of mid-gray (0.0) in [-1,1] VAE space
 - Sampler switch: Euler → UniPC (matches ComfyUI `uni_pc` sampler)
 
 ---
 
-### Stage 4 — Assembly
+### Stage 4 — Upscaling
+**Status: Complete**
+
+Per-engine upscaler auto-selection with three backends:
+
+| Upscaler | Use Case | Notes |
+|----------|----------|-------|
+| SeedVR2 | HuMo/HVA clips (pixel-space) | Subprocess bridge, separate venv |
+| LTX Spatial | LTX-2 clips (latent-space) | In-process diffusers, ~12GB VRAM |
+| Real-ESRGAN | Fast preview | Frame-by-frame, CUDA > ncnn-vulkan > lanczos fallback |
+
+Target resolutions: 720p, 1080p, 1440p, 4K. Scene/SubClip have `upscaled_clip` field. Assembly prefers upscaled clips over originals.
+
+---
+
+### Stage 5 — Assembly
 **Status: Complete**
 
 `assemble_rough_cut()` → `output/rough_cut.mp4`
@@ -275,6 +317,8 @@ POST   /api/scenes/approve-all
 POST   /api/pipeline/intake
 POST   /api/pipeline/generate-images
 POST   /api/pipeline/generate-videos
+POST   /api/pipeline/upscale
+POST   /api/scenes/{id}/upscale
 POST   /api/pipeline/assemble
 ```
 
@@ -291,7 +335,8 @@ musicvision info <dir>
 # Pipeline stages (run in order)
 musicvision intake --project <dir> [--llm] [--skip-transcription] [--vocal-separation]
 musicvision generate-images --project <dir> [--model z-image-turbo] [--scene-ids ...]
-musicvision generate-video --project <dir> [--engine hunyuan_avatar|humo] [--tier gguf_q4] [--block-swap 20] [--scene-ids ...]
+musicvision generate-video --project <dir> [--engine hunyuan_avatar|humo|ltx_video] [--tier gguf_q4] [--block-swap 20] [--scene-ids ...]
+musicvision upscale --project <dir> --resolution 1080p [--upscaler TYPE] [--scene-ids ...]
 musicvision assemble --project <dir> [--approved-only] [--no-edl] [--no-fcpxml]
 
 # Utilities
@@ -311,8 +356,8 @@ Everything flows through Pydantic v2 models. No raw dict manipulation.
 name, created
 song: SongInfo (audio_file, bpm, duration, keyscale, AceStep metadata)
 style_sheet: StyleSheet (visual_style, color_palette, characters[], props[], settings[])
-video_engine: VideoEngineType ("humo" | "hunyuan_avatar") — project default
-humo: HumoConfig (tier, resolution, scale_a, scale_t, denoising_steps, block_swap_count, sub_clip_continuity)
+video_engine: VideoEngineType ("humo" | "hunyuan_avatar" | "ltx_video") — project default
+humo: HumoConfig (tier, resolution, scale_a, scale_t, shift, denoising_steps, sampler, block_swap_count, lora, seed, sub_clip_continuity)
 hunyuan_avatar: HunyuanAvatarConfig (hva_repo_dir, hva_venv_python, checkpoint, image_size, infer_steps, ...)
 image_gen: ImageGenConfig (model, quant, steps, guidance_scale, lora_path)
 vocal_separation: VocalSeparationConfig (method, demucs_model)
@@ -336,7 +381,7 @@ scenes[]:
 ## Tests
 
 ```bash
-# CPU unit tests (no GPU needed) — ~107 tests:
+# CPU unit tests (no GPU needed) — ~257 tests:
 uv run pytest tests/ -v
 
 # GPU integration tests (run on workstation):
@@ -351,9 +396,16 @@ python scripts/test_gpu_pipeline.py --fast # HuMo video generation
 | `tests/test_image_engine.py` (31 tests) | Config compat, engine interface, LoRA loading, Z-Image | No (mocked) |
 | `tests/test_video_engine.py` | Constants, config, device map, block swap | No (mocked) |
 | `tests/test_hunyuan_avatar_engine.py` | HVA config, factory dispatch, engine lifecycle, scene splitting | No (mocked) |
+| `tests/test_engine_registry.py` | Engine constraints, frame math, sub-clip computation | No |
+| `tests/test_ltx_video_engine.py` | LTX-Video 2 engine config, factory dispatch | No (mocked) |
+| `tests/test_upscaler.py` | Upscaler enums, config, factory, pipeline orchestrator | No (mocked) |
+| `tests/test_oom_resilience.py` | OOM recovery, pre-flight VRAM checks | No (mocked) |
 | `scripts/test_image_gen.py` | Z-Image-Turbo + FLUX-schnell GPU generation (2 images each) | **Yes** |
 | `scripts/test_humo_inference.py` (11 tests) | WanModel forward, RoPE, AudioProjModel, FlowMatchScheduler | No (CPU) |
 | `scripts/test_gpu_pipeline.py` | HuMo single clip, generate_scene() sub-splits, assemble_rough_cut() | **Yes** |
+| `scripts/test_hva_standalone.py` | HunyuanVideo-Avatar standalone test | **Yes** |
+| `scripts/test_humo_480p.py` | HuMo 480p inference test | **Yes** |
+| `scripts/test_humo_720p.py` | HuMo 720p inference test | **Yes** |
 
 ---
 
@@ -414,8 +466,8 @@ musicvision serve ./my-video
 ## What's Not Built Yet
 
 ### Frontend & UI
-- **Gradio UI** — originally planned as an alternative storyboard interface; not started. Core pipeline modules are UI-agnostic by design.
-- **Scene approval UI** — React storyboard with scene grid, preview panel, per-scene approval, and regeneration is implemented. Further refinements (waveform editor, drag-to-reorder) are future work.
+- **Gradio UI** — originally planned as an alternative storyboard interface; never implemented. React is the UI. Core pipeline modules are UI-agnostic by design.
+- **Scene approval UI** — React storyboard with scene grid, preview panel, per-scene approval, and regeneration is implemented. Further refinements (drag-to-reorder) are future work. Waveform editor for scene division is implemented.
 
 ### Pipeline Features
 - **Progress/status tracking** — no WebSocket or SSE for long-running generation jobs; API endpoints are synchronous. A 50-scene video gen blocks for hours with no progress feedback.
@@ -439,10 +491,11 @@ musicvision serve ./my-video
 
 See also **Critical Design Decisions** above for the most important architectural constraints.
 
-### Dual video engine architecture
-Two engines are integrated:
+### Triple video engine architecture
+Three engines are integrated:
 - **HunyuanVideo-Avatar** (Tencent) — audio-driven full-body animation with lip sync. Runs in separate venv via subprocess. Primary engine for music video production.
-- **HuMo** (ByteDance) — reference image + audio conditioning (TIA mode). Self-contained PyTorch implementation. Currently noisy output; on back burner.
+- **LTX-Video 2** (Lightricks) — joint audio+video DiT, 10.71s clips, image-to-video. Best for cinematic/instrumental scenes.
+- **HuMo** (ByteDance) — reference image + audio conditioning (TIA mode). Self-contained PyTorch implementation. Working after 24 bug fixes.
 
 Per-scene engine selection: `Scene.video_engine` overrides the project default (`ProjectConfig.video_engine`). Pipeline groups scenes by engine for efficient load/unload.
 

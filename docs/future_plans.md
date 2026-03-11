@@ -1,6 +1,6 @@
 # MusicVision — Future Plans
 
-**Last updated:** 2026-03-04
+**Last updated:** 2026-03-11
 
 ---
 
@@ -52,7 +52,7 @@ Users can enter at any panel with their own content — write lyrics by hand, br
 
 ### Lip Sync Post-Processing (Stage 3.5)
 
-**Status:** Spec complete ([LIP_SYNC_SPEC.md](LIP_SYNC_SPEC.md)), needs ComfyUI validation then implementation.
+**Status:** Spec complete ([LIP_SYNC_POST.md](LIP_SYNC_POST.md)), needs ComfyUI validation then implementation.
 
 Per-scene `lip_sync_mode` field (`off | in_process | post`) enables singing in video engines that lack native audio conditioning (LTX-2, future engines). LatentSync 1.6 (ByteDance) is the primary post-processing engine — 512×512 face region, diffusion-based, ~18 GB VRAM inference. Runs as Stage 3.5 between video generation and upscaling.
 
@@ -91,19 +91,33 @@ React storyboard is implemented with scene grid, preview panel, per-scene approv
 
 ### Cloud CUDA (A100 / H100 / H200)
 
-**Status:** Planned, ~2h effort. See [PLATFORM_SUPPORT_PLAN.md](PLATFORM_SUPPORT_PLAN.md).
+**Status:** Planned, ~2h effort. Mostly works today.
 
-Mostly works today. Two gaps: `recommend_tier()` doesn't offer FP16 for single high-VRAM GPUs (≥48 GB), and FLUX applies unnecessary CPU offload on 80 GB+ cards. Single-GPU configs are simpler than the consumer two-GPU split — no model splitting needed.
+Two gaps:
+- `recommend_tier()` in `gpu.py` doesn't offer FP16 for single high-VRAM GPUs (≥48 GB) — needs a single-GPU FP16 threshold (`primary_gb >= 48` bypass for the `n_gpus >= 2` guard)
+- FLUX in `flux_engine.py` applies unnecessary CPU offload on 80 GB+ cards — needs a no-offload high-VRAM path (`_load_bf16_no_offload` when single GPU has ≥28 GB free)
 
-Future: Dockerfile + weight caching strategy for cold starts. FSDP multi-GPU sharding for FP16Loader (~8–12 hours, deferred).
+Single-GPU configs are simpler than the consumer two-GPU split — no model splitting needed. Future: Dockerfile + weight caching strategy for cold starts. FSDP multi-GPU sharding for FP16Loader (~8–12 hours, deferred).
 
 ### Apple Silicon MPS (M-series Mac)
 
-**Status:** Planned, ~9–12h effort. See [PLATFORM_SUPPORT_PLAN.md](PLATFORM_SUPPORT_PLAN.md).
+**Status:** Planned, ~9–12h effort. Does not work today.
 
-Does not work today. Blocking issues: RoPE float64/complex128 ops not supported on MPS, FP8/quanto not available. Preview tier (1.7B model) is the initial target. GGUF tiers on ≥32 GB RAM deferred to Phase 2.
+Blocking issues:
+- RoPE uses float64/complex128 in `vendor/wan_dit_arch.py` — MPS has no float64 or complex128 support. Fix: downcast to float32/complex64 (Stage 1), with real-valued rotation fallback (Stage 2) if complex64 multiply fails on MPS
+- FP8 (`torch.float8_e4m3fn`) cannot be placed on MPS devices — must be blocked in `model_loader.py`
+- `optimum-quanto` quantization kernels are CUDA-only — no FLUX quantization on MPS
 
-MLX would offer 1.5–2× better throughput than MPS+PyTorch but requires a full inference stack rewrite (~3–5 weeks). Out of scope for now.
+Preview tier (1.7B HuMo) is the initial target. Key files needing changes:
+- `gpu.py` — MPS detection in `detect_devices()`, RAM-based `recommend_tier()`, device-agnostic `clear_vram()`
+- `vendor/wan_dit_arch.py` — RoPE float32 downcast, device-aware `_AmpCompat` autocast
+- `model_loader.py` — block FP8 on MPS, T5 FP16 instead of BF16 (M1/M2 lack BF16 tensor cores)
+- `flux_engine.py` — MPS memory detection via `psutil`, no-quantization path
+- `humo_engine.py` — device-aware RNG seeding
+
+Three common patterns applied across all files: device-agnostic cache clearing (`torch.mps.empty_cache()`), device-aware RNG seeding (`torch.mps.manual_seed()`), device-aware autocast (`contextlib.nullcontext()` on non-CUDA).
+
+GGUF tiers on ≥32 GB RAM deferred to Phase 2 (after preview smoke test). MLX would offer 1.5–2x better throughput than MPS+PyTorch but requires a full inference stack rewrite (~3–5 weeks) — out of scope.
 
 ### GPU Power Profiling
 
@@ -232,7 +246,7 @@ Each format is a progressively deeper pass through the pipeline. Users can stop 
 
 ### Phase 1: Validate MusicVision ✅ (mostly complete)
 - ✅ All five pipeline stages code-complete and GPU-tested
-- ✅ Three video engines: HunyuanVideo-Avatar (audio-driven), LTX-Video 2 (cinematic), HuMo (audio-driven, FP8)
+- ✅ Three video engines: HunyuanVideo-Avatar (audio-driven), LTX-Video 2 (cinematic), HuMo (audio-driven, 24 bugs fixed, working)
 - ✅ Three upscalers: SeedVR2 (faces), LTX Spatial (latent), Real-ESRGAN (fast)
 - ✅ Two image engines: Z-Image (ungated, fast) and FLUX (LoRA support)
 - ✅ React storyboard with scene review, approval, regeneration
