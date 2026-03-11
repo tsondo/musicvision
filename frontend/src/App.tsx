@@ -26,6 +26,7 @@ export default function App() {
     regenerateVideo,
     dequeueImage,
     dequeueVideo,
+    clearScenes,
   } = useScenes(projectLoaded);
 
   const pipeline = usePipeline(
@@ -135,6 +136,7 @@ export default function App() {
           videoEngine={state.config.video_engine}
           suggestedMarkers={suggestedMarkers}
           isRunning={pipeline.isRunning}
+          onClearScenes={clearScenes}
         />
       )}
 

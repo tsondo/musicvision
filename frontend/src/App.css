@@ -1332,6 +1332,10 @@ button:disabled {
   color: var(--text-muted);
   font-weight: 500;
   border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--bg-card, #1e1e2e);
+  z-index: 1;
 }
 
 .scene-table td {
@@ -1371,6 +1375,20 @@ button:disabled {
   font-size: 11px;
   color: #f5555b;
   font-weight: 600;
+}
+
+.btn-play-scene {
+  background: none;
+  border: none;
+  color: var(--accent, #5b8af5);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.btn-play-scene:hover {
+  background: rgba(91, 138, 245, 0.15);
 }
 
 .btn-delete-marker {

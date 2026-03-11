@@ -32,6 +32,7 @@ interface Props {
   videoEngine?: VideoEngineType;
   /** Externally-suggested markers (e.g. from auto-segment). Consumed once. */
   suggestedMarkers?: number[] | null;
+  onClearScenes?: () => void;
 }
 
 /* ------------------------------------------------------------------ */
@@ -135,14 +136,22 @@ function sceneWarnings(sceneDuration: number, engineKey: string): string[] {
   const c = ENGINE_CONSTRAINTS[engineKey];
   if (!c) return warnings;
 
-  // Check sub-clip remainder
+  // Check sub-clip split using the same logic as backend compute_subclip_frames:
+  // If naive ceil split leaves a remainder below min, try fewer clips.
   const totalFrames = Math.round(sceneDuration * c.fps);
   if (totalFrames > c.maxFrames) {
-    const nClips = Math.ceil(totalFrames / c.maxFrames);
-    const remainder = totalFrames - (nClips - 1) * c.maxFrames;
-    if (remainder > 0 && remainder < c.minFrames) {
-      const remainderSec = (remainder / c.fps).toFixed(1);
-      warnings.push(`Last sub-clip ${remainderSec}s (below ${c.name} min ${c.minSeconds.toFixed(1)}s)`);
+    let n = Math.ceil(totalFrames / c.maxFrames);
+    const remainder = totalFrames - (n - 1) * c.maxFrames;
+    if (remainder > 0 && remainder < c.minFrames && n > 1) {
+      // Try reducing clip count (backend redistribution)
+      const candidate = n - 1;
+      if (candidate > 0 && Math.ceil(totalFrames / candidate) <= c.maxFrames) {
+        n = candidate; // redistribution works — no warning needed
+      } else {
+        // Can't redistribute — genuinely problematic duration
+        const remainderSec = (remainder / c.fps).toFixed(1);
+        warnings.push(`Last sub-clip ${remainderSec}s (below ${c.name} min ${c.minSeconds.toFixed(1)}s)`);
+      }
     }
   }
 
@@ -161,6 +170,7 @@ export default function WaveformEditor({
   isRunning,
   videoEngine,
   suggestedMarkers,
+  onClearScenes,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const minimapRef = useRef<HTMLDivElement>(null);
@@ -172,8 +182,11 @@ export default function WaveformEditor({
   const [currentTime, setCurrentTime] = useState(0);
   const [ready, setReady] = useState(false);
   const [markers, setMarkers] = useState<number[]>([]);
+  const [playingSceneIdx, setPlayingSceneIdx] = useState<number | null>(null);
+  const sceneEndRef = useRef<number | null>(null);
   const [snapToBeats, setSnapToBeats] = useState(true);
   const [selectedMarker, setSelectedMarker] = useState<number | null>(null);
+  const [selectedScenes, setSelectedScenes] = useState<Set<number>>(new Set());
   const [zoomLevel, setZoomLevel] = useState(0); // 0 = fit-to-width, else px/sec
   const [containerWidth, setContainerWidth] = useState(0);
 
@@ -335,8 +348,18 @@ export default function WaveformEditor({
 
     ws.on("ready", () => setReady(true));
     ws.on("play", () => setPlaying(true));
-    ws.on("pause", () => setPlaying(false));
-    ws.on("timeupdate", (t) => setCurrentTime(t));
+    ws.on("pause", () => {
+      setPlaying(false);
+      setPlayingSceneIdx(null);
+    });
+    ws.on("timeupdate", (t) => {
+      setCurrentTime(t);
+      // Stop at scene end when previewing a single scene
+      if (sceneEndRef.current !== null && t >= sceneEndRef.current) {
+        ws.pause();
+        sceneEndRef.current = null;
+      }
+    });
 
     wsRef.current = ws;
 
@@ -474,11 +497,14 @@ export default function WaveformEditor({
   const handleDeleteMarker = (idx: number) => {
     setMarkers((prev) => prev.filter((_, i) => i !== idx));
     setSelectedMarker(null);
+    setSelectedScenes(new Set());
   };
 
   const handleClearAll = () => {
     setMarkers([]);
     setSelectedMarker(null);
+    setSelectedScenes(new Set());
+    onClearScenes?.();
   };
 
   const handleFromSections = () => {
@@ -509,6 +535,57 @@ export default function WaveformEditor({
       lyrics: getSceneLyrics(s.start, s.end),
     }));
     onConfirm(boundaries, snapToBeats);
+  };
+
+  const toggleSceneSelection = (idx: number) => {
+    setSelectedScenes((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
+  };
+
+  const canMerge = useMemo(() => {
+    if (selectedScenes.size < 2) return false;
+    // Check that selected scenes are contiguous
+    const sorted = [...selectedScenes].sort((a, b) => a - b);
+    for (let i = 1; i < sorted.length; i++) {
+      if (sorted[i]! - sorted[i - 1]! !== 1) return false;
+    }
+    return true;
+  }, [selectedScenes]);
+
+  const handleMerge = () => {
+    if (!canMerge) return;
+    const sorted = [...selectedScenes].sort((a, b) => a - b);
+    // Markers to remove: between scene i and scene i+1 is marker at index i
+    // (markers array is sorted, scene 0 = [0, markers[0]], scene 1 = [markers[0], markers[1]], etc.)
+    // So merging scenes [first..last] means removing markers at indices [first..last-1]
+    const first = sorted[0]!;
+    const last = sorted[sorted.length - 1]!;
+    const indicesToRemove = new Set<number>();
+    for (let i = first; i < last; i++) {
+      indicesToRemove.add(i);
+    }
+    setMarkers((prev) => prev.filter((_, i) => !indicesToRemove.has(i)));
+    setSelectedScenes(new Set());
+  };
+
+  const handlePlayScene = (sceneIdx: number, start: number, end: number) => {
+    const ws = wsRef.current;
+    if (!ws) return;
+    if (playingSceneIdx === sceneIdx) {
+      // Already playing this scene — stop
+      ws.pause();
+      sceneEndRef.current = null;
+      setPlayingSceneIdx(null);
+      return;
+    }
+    sceneEndRef.current = end;
+    setPlayingSceneIdx(sceneIdx);
+    ws.seekTo(start / duration);
+    ws.play();
   };
 
   const handleAutoSegment = () => {
@@ -622,35 +699,41 @@ export default function WaveformEditor({
           Snap to beats
         </label>
 
+        <button className="btn btn-sm" onClick={handleClearAll} disabled={markers.length === 0}>
+          Clear All
+        </button>
+        {canMerge && (
+          <button className="btn btn-sm" onClick={handleMerge} title="Merge selected adjacent segments">
+            Merge {selectedScenes.size} Segments
+          </button>
+        )}
+        <button
+          className="btn btn-sm btn-secondary"
+          onClick={handleAutoSegment}
+          disabled={isRunning}
+          title="Run LLM auto-segmentation and populate timeline"
+        >
+          {isRunning ? "Segmenting..." : "Suggest Segmentation"}
+        </button>
+        <button
+          className="btn btn-sm btn-primary"
+          onClick={handleConfirm}
+          disabled={markers.length === 0 || isRunning}
+        >
+          Confirm {derivedScenes.length} Scenes
+        </button>
+
         <div className="waveform-actions">
           {sections.length > 0 && (
             <button
               className="btn btn-sm"
               onClick={handleFromSections}
               disabled={isRunning}
-              title="Place markers at section boundaries from AceStep"
+              title="Place markers at section boundaries"
             >
               From Sections
             </button>
           )}
-          <button className="btn btn-sm" onClick={handleClearAll} disabled={markers.length === 0}>
-            Clear All
-          </button>
-          <button
-            className="btn btn-sm btn-secondary"
-            onClick={handleAutoSegment}
-            disabled={isRunning}
-            title="Run LLM auto-segmentation and populate timeline"
-          >
-            {isRunning ? "Segmenting..." : "Suggest Segmentation"}
-          </button>
-          <button
-            className="btn btn-sm btn-primary"
-            onClick={handleConfirm}
-            disabled={markers.length === 0 || isRunning}
-          >
-            Confirm {derivedScenes.length} Scenes
-          </button>
         </div>
       </div>
 
@@ -660,7 +743,9 @@ export default function WaveformEditor({
           <table className="scene-table">
             <thead>
               <tr>
+                <th style={{ width: 28 }}></th>
                 <th>#</th>
+                <th></th>
                 <th>Start</th>
                 <th>End</th>
                 <th>Duration</th>
@@ -682,7 +767,30 @@ export default function WaveformEditor({
                       if (wsRef.current) wsRef.current.seekTo(s.start / duration);
                     }}
                   >
+                    <td>
+                      <input
+                        type="checkbox"
+                        checked={selectedScenes.has(i)}
+                        onChange={(e) => {
+                          e.stopPropagation();
+                          toggleSceneSelection(i);
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    </td>
                     <td>{i + 1}</td>
+                    <td>
+                      <button
+                        className="btn-icon btn-play-scene"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handlePlayScene(i, s.start, s.end);
+                        }}
+                        title={playingSceneIdx === i ? "Stop" : "Play this segment"}
+                      >
+                        {playingSceneIdx === i ? "\u25A0" : "\u25B6"}
+                      </button>
+                    </td>
                     <td>{formatTime(s.start)}</td>
                     <td>{formatTime(s.end)}</td>
                     <td>{dur.toFixed(1)}s</td>

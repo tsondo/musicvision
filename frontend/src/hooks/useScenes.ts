@@ -198,5 +198,6 @@ export function useScenes(projectLoaded: boolean) {
     regenerateVideo: queueVideo,
     dequeueImage: (sceneId: string) => dequeue(sceneId, "image"),
     dequeueVideo: (sceneId: string) => dequeue(sceneId, "video"),
+    clearScenes: useCallback(() => setScenes([]), []),
   };
 }

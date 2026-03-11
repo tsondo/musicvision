@@ -109,6 +109,15 @@ def segment_scenes(
     if llm_config is None and api_key:
         llm_config = LLMConfig(backend="anthropic", api_key=api_key)
 
+    # Ensure enough output tokens for segmentation JSON (~100 tokens per scene,
+    # a 3-min song can have 30+ scenes → need ~4k tokens minimum)
+    from dataclasses import replace as _dc_replace
+
+    if llm_config is None:
+        llm_config = LLMConfig()
+    if not llm_config.max_tokens:
+        llm_config = _dc_replace(llm_config, max_tokens=8192)
+
     client: LLMClient = get_client(llm_config)
 
     # Build system prompt — optionally enrich with engine constraints
@@ -182,15 +191,37 @@ Max scene duration: {max_scene_seconds}s
         )
         scenes.append(scene)
 
-    # If truncated recovery gave us scenes that don't cover the end, extend last scene
+    # If LLM output was truncated, fill the uncovered remainder with rule-based scenes
     if scenes and scenes[-1].time_end < song_duration - 1.0:
-        gap = song_duration - scenes[-1].time_end
+        gap_start = scenes[-1].time_end
+        gap = song_duration - gap_start
         log.warning(
-            "Last scene ends at %.1fs but song is %.1fs (%.1fs gap) — "
-            "extending last scene to cover remainder",
-            scenes[-1].time_end, song_duration, gap,
+            "LLM covered only %.1fs of %.1fs (%.1fs gap) — "
+            "filling remainder with rule-based segmentation",
+            gap_start, song_duration, gap,
         )
-        scenes[-1].time_end = song_duration
+        # Collect words in the uncovered portion
+        remaining_words = [
+            WordTimestamp(word=w.word, start=w.start - gap_start, end=w.end - gap_start)
+            for w in lyrics_with_timestamps
+            if (w.start + w.end) / 2 > gap_start
+        ]
+        tail = segment_scenes_simple(
+            remaining_words, gap, max_scene_seconds=max_scene_seconds,
+            engine_constraints=engine_constraints,
+        )
+        # Re-offset and renumber the tail scenes
+        next_order = scenes[-1].order + 1
+        for ts in tail.scenes:
+            ts.time_start += gap_start
+            ts.time_end += gap_start
+            ts.order = next_order
+            ts.id = f"scene_{next_order:03d}"
+            # Re-derive lyrics with original (non-shifted) word timestamps
+            ts.lyrics = _lyrics_from_words(lyrics_with_timestamps, ts.time_start, ts.time_end)
+            next_order += 1
+        scenes.extend(tail.scenes)
+        log.info("Added %d rule-based scenes for uncovered tail", len(tail.scenes))
 
     # Snap to beat times if available
     if beat_times:
