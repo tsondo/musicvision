@@ -225,18 +225,17 @@ def create_scenes_from_boundaries(
     project: ProjectService,
     boundaries: list[SceneBoundary],
     snap_to_beats: bool = False,
+    device: str | None = None,
 ) -> SceneList:
     """
-    Create scenes from user-provided boundaries. Slices audio per scene.
-
-    Lyrics are always populated from word timestamps (Whisper transcription),
-    never from AceStep metadata — the transcription is the ground truth for
-    what was actually sung.
+    Create scenes from user-provided boundaries. Slices audio per scene,
+    then transcribes each slice with Whisper for accurate per-scene lyrics.
 
     Args:
         project: The project to process
         boundaries: Scene time ranges from the waveform editor
         snap_to_beats: Snap boundaries to nearest beat time
+        device: GPU device for Whisper (None = auto-detect)
     """
     config = project.config
     paths = project.paths
@@ -247,7 +246,7 @@ def create_scenes_from_boundaries(
 
     beat_times = config.song.beat_times
 
-    # Load word timestamps for lyrics population
+    # Load word timestamps as fallback for lyrics population
     words: list[WordTimestamp] = []
     ts_path = paths.input_dir / "word_timestamps.json"
     if ts_path.exists():
@@ -263,7 +262,7 @@ def create_scenes_from_boundaries(
             t_start = _snap_to_beat(t_start, beat_times)
             t_end = _snap_to_beat(t_end, beat_times)
 
-        # Derive lyrics from word timestamps (ground truth)
+        # Pre-fill lyrics from word timestamps (will be overwritten by per-scene transcription)
         lyrics = _lyrics_from_words(words, t_start, t_end)
 
         scene_id = f"scene_{i + 1:03d}"
@@ -282,6 +281,14 @@ def create_scenes_from_boundaries(
 
     # Slice audio
     _slice_scenes(scene_list, audio_path, paths)
+
+    # Transcribe each scene's audio slice for accurate lyrics
+    if device is None:
+        device = _detect_whisper_device()
+    try:
+        _transcribe_scene_slices(scene_list.scenes, paths, device=device)
+    except Exception as exc:
+        log.warning("Per-scene transcription failed, keeping word-timestamp lyrics: %s", exc)
 
     # Save
     project.scenes = scene_list
@@ -356,6 +363,12 @@ def run_auto_segment(
 
     # Slice audio
     _slice_scenes(scene_list, audio_path, paths)
+
+    # Transcribe each scene's audio slice for accurate lyrics
+    try:
+        _transcribe_scene_slices(scene_list.scenes, paths, device=_detect_whisper_device())
+    except Exception as exc:
+        log.warning("Per-scene transcription failed, keeping LLM-assigned lyrics: %s", exc)
 
     # Save
     project.scenes = scene_list
@@ -491,6 +504,95 @@ def _slice_scenes(
             vocal_seg = paths.vocal_segment_path(scene.id)
             slice_audio(vocal_path, vocal_seg, scene.time_start, scene.time_end)
             scene.audio_segment_vocal = str(vocal_seg.relative_to(paths.root))
+
+
+def _detect_whisper_device() -> str:
+    """Auto-detect the best device for Whisper (secondary GPU preferred)."""
+    try:
+        from musicvision.utils.gpu import detect_devices
+        dm = detect_devices()
+        return str(dm.secondary)
+    except Exception:
+        return "cpu"
+
+
+def _transcribe_scene_slices(
+    scenes: list[Scene],
+    paths,
+    device: str = "cuda:0",
+) -> None:
+    """Transcribe each scene's vocal audio slice for accurate per-scene lyrics.
+
+    Short clips (2-10s) give Whisper much better accuracy than trying to
+    use word timestamps from a full-song transcription, where timing drifts
+    significantly on sung vocals.
+    """
+    # Check if any vocal segments exist
+    has_vocal_slices = any(
+        s.audio_segment_vocal and (paths.root / s.audio_segment_vocal).exists()
+        for s in scenes
+    )
+    if not has_vocal_slices:
+        # Fall back to full-mix segments
+        has_mix_slices = any(
+            s.audio_segment and (paths.root / s.audio_segment).exists()
+            for s in scenes
+        )
+        if not has_mix_slices:
+            log.warning("No audio segments available for per-scene transcription")
+            return
+
+    log.info("Transcribing %d scene slices with Whisper for accurate lyrics...", len(scenes))
+    transcription_fn = transcribe  # import already at top
+
+    # Load model once, transcribe all scenes
+    import torch
+    from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline as hf_pipeline
+
+    model_name = "openai/whisper-large-v3"
+    torch_dtype = torch.float16 if "cuda" in device else torch.float32
+
+    model = AutoModelForSpeechSeq2Seq.from_pretrained(
+        model_name, torch_dtype=torch_dtype, low_cpu_mem_usage=True,
+    ).to(device)
+    processor = AutoProcessor.from_pretrained(model_name)
+
+    pipe = hf_pipeline(
+        "automatic-speech-recognition",
+        model=model,
+        tokenizer=processor.tokenizer,
+        feature_extractor=processor.feature_extractor,
+        torch_dtype=torch_dtype,
+        device=device,
+    )
+
+    for scene in scenes:
+        # Prefer vocal slice for cleaner transcription
+        audio_rel = scene.audio_segment_vocal or scene.audio_segment
+        if not audio_rel:
+            continue
+        audio_file = paths.root / audio_rel
+        if not audio_file.exists():
+            continue
+
+        try:
+            result = pipe(
+                str(audio_file),
+                return_timestamps=False,
+                generate_kwargs={"task": "transcribe"},
+            )
+            text = result.get("text", "").strip()
+            if text:
+                scene.lyrics = text
+                log.debug("Scene %s lyrics: %s", scene.id, text[:80])
+        except Exception as exc:
+            log.warning("Failed to transcribe %s: %s", scene.id, exc)
+
+    # Unload
+    del pipe, model, processor
+    if "cuda" in device:
+        torch.cuda.empty_cache()
+    log.info("Per-scene transcription complete")
 
 
 def _snap_to_beat(t: float, beat_times: list[float], tolerance: float = 0.15) -> float:
