@@ -476,7 +476,7 @@ export default function WaveformEditor({
 
       // Clamp: must stay between neighboring markers (or song bounds)
       // with a small buffer to prevent exact overlaps
-      const MIN_GAP = 0.5; // seconds
+      const MIN_GAP = 0.001; // seconds
       setMarkers((prev) => {
         const lo = idx > 0 ? (prev[idx - 1] ?? 0) + MIN_GAP : MIN_GAP;
         const hi = idx < prev.length - 1 ? (prev[idx + 1] ?? duration) - MIN_GAP : duration - MIN_GAP;
