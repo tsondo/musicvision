@@ -420,35 +420,42 @@ export default function WaveformEditor({
     return set;
   }, [activeScene, markers.length]);
 
-  // ---- Sync marker regions with state ----
+  // ---- Sync marker regions + active scene highlight with state ----
   useEffect(() => {
     if (!ready || !regionsRef.current) return;
     const reg = regionsRef.current;
 
     for (const r of reg.getRegions()) {
-      if (r.id.startsWith("marker_")) r.remove();
+      if (r.id.startsWith("marker_") || r.id === "active_scene") r.remove();
     }
-
-    // Start marker = activeScene - 1, end marker = activeScene
-    const startIdx = activeScene !== null ? activeScene - 1 : -1;
-    const endIdx = activeScene !== null ? activeScene : -1;
 
     for (let i = 0; i < markers.length; i++) {
       const t = markers[i]!;
       const isDraggable = draggableMarkers.has(i);
-      let color = "rgba(245, 197, 66, 0.4)"; // inactive: dim yellow
-      if (i === startIdx && isDraggable) color = "rgba(61, 214, 140, 0.95)"; // start: green
-      else if (i === endIdx && isDraggable) color = "rgba(245, 85, 91, 0.95)"; // end: red
       reg.addRegion({
         id: `marker_${i}`,
         start: t,
         end: t + 0.05,
-        color,
+        color: isDraggable ? "rgba(245, 158, 11, 0.95)" : "rgba(245, 197, 66, 0.4)",
         drag: isDraggable,
         resize: false,
       });
     }
-  }, [ready, markers, draggableMarkers]);
+
+    // Highlight the active scene region
+    if (activeScene !== null) {
+      const sceneStart = activeScene > 0 ? (markers[activeScene - 1] ?? 0) : 0;
+      const sceneEnd = activeScene < markers.length ? (markers[activeScene] ?? duration) : duration;
+      reg.addRegion({
+        id: "active_scene",
+        start: sceneStart,
+        end: sceneEnd,
+        color: "rgba(245, 158, 11, 0.12)",
+        drag: false,
+        resize: false,
+      });
+    }
+  }, [ready, markers, draggableMarkers, activeScene, duration]);
 
   // ---- Gap regions on waveform ----
   useEffect(() => {
@@ -498,16 +505,33 @@ export default function WaveformEditor({
     };
   }, [snap, duration]);
 
-  // ---- Add marker on double-click ----
+  // ---- Double-click inserts a 1-second segment and selects it ----
   useEffect(() => {
     if (!wsRef.current || !ready) return;
     const ws = wsRef.current;
 
     const handleDblClick = () => {
       const t = snap(ws.getCurrentTime());
-      const tooClose = markers.some((m) => Math.abs(m - t) < 0.5);
-      if (tooClose || t < 0.5 || t > duration - 0.5) return;
-      setMarkers((prev) => [...prev, Math.round(t * 100) / 100].sort((a, b) => a - b));
+      // Need at least 1s from both edges
+      if (t < 1.0 || t > duration - 1.0) return;
+
+      const segStart = Math.round((t - 0.5) * 100) / 100;
+      const segEnd = Math.round((t + 0.5) * 100) / 100;
+
+      // Don't insert if too close to existing markers
+      const tooClose = markers.some(
+        (m) => Math.abs(m - segStart) < 0.1 || Math.abs(m - segEnd) < 0.1,
+      );
+      if (tooClose) return;
+
+      setMarkers((prev) => {
+        const next = [...prev, segStart, segEnd].sort((a, b) => a - b);
+        // Find which scene index the new segment became
+        const newIdx = next.indexOf(segStart) + 1;
+        // Schedule selection after state update
+        setTimeout(() => setActiveScene(newIdx), 0);
+        return next;
+      });
     };
 
     ws.on("dblclick", handleDblClick);
@@ -519,8 +543,9 @@ export default function WaveformEditor({
   // ---- Actions ----
   const handlePlayPause = () => wsRef.current?.playPause();
 
-  const handleDeleteMarker = (idx: number) => {
-    setMarkers((prev) => prev.filter((_, i) => i !== idx));
+  const handleDeleteMarker = (markerIdx: number) => {
+    // Removing a marker merges the two segments it separates
+    setMarkers((prev) => prev.filter((_, i) => i !== markerIdx));
     setActiveScene(null);
     setSelectedScenes(new Set());
   };
