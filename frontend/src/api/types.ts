@@ -89,11 +89,19 @@ export interface SongInfo {
   analyzed: boolean;
 }
 
+export interface StyleSheet {
+  visual_style: string;
+  color_palette: string;
+  aspect_ratio: string;
+  resolution: string;
+}
+
 export interface ProjectConfig {
   name: string;
   created: string;
   song: SongInfo;
   video_engine: VideoEngineType;
+  style_sheet: StyleSheet;
 }
 
 export interface UpdateSceneRequest {

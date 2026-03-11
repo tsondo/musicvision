@@ -13,6 +13,7 @@ import type {
   RenderMode,
   Scene,
   SceneBoundary,
+  StyleSheet,
   TargetResolution,
   UpdateSceneRequest,
   UpscaleResult,
@@ -276,6 +277,13 @@ export async function upscaleScene(
       resolution: resolution ?? null,
       upscaler: upscaler ?? null,
     }),
+  });
+}
+
+export async function updateStyleSheet(styleSheet: StyleSheet): Promise<{ status: string }> {
+  return request("/api/projects/config/style-sheet", {
+    method: "PUT",
+    body: JSON.stringify(styleSheet),
   });
 }
 

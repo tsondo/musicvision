@@ -384,8 +384,7 @@ button:disabled {
 /* Project Header */
 .project-header {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
   padding: 12px 24px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-card);
@@ -431,6 +430,58 @@ button:disabled {
 .stat {
   color: var(--text-dim);
   font-size: 12px;
+}
+
+/* Style Sheet Panel */
+.style-sheet-panel {
+  margin-top: 8px;
+  padding: 10px 0 4px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.style-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.style-field label {
+  font-size: 10px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.style-field input,
+.style-field select {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+.style-field input:focus,
+.style-field select:focus {
+  border-color: var(--border-focus);
+  outline: none;
+}
+
+.style-field-row {
+  display: flex;
+  gap: 12px;
+}
+
+.style-hint {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 2px;
 }
 
 /* Empty state */

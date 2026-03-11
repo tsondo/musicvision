@@ -10,7 +10,7 @@ import OutputViewer from "./components/OutputViewer";
 import WaveformEditor from "./components/WaveformEditor";
 
 export default function App() {
-  const { state, open, create, close, reload: reloadConfig, lastProjectPath } = useProject();
+  const { state, open, create, close, reload: reloadConfig, lastProjectPath, updateConfig } = useProject();
   const projectLoaded = state.status === "loaded";
   const {
     scenes,
@@ -78,7 +78,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <ProjectHeader config={state.config} scenes={scenes} stage={pipeline.stage} onClose={close} />
+      <ProjectHeader config={state.config} scenes={scenes} stage={pipeline.stage} onClose={close} onConfigUpdate={updateConfig} />
       <PipelineBar
         stage={pipeline.stage}
         hasAudio={pipeline.hasAudio}

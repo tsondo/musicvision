@@ -65,5 +65,9 @@ export function useProject() {
     setState({ status: "no-project" });
   }, []);
 
-  return { state, open, create, close, reload: tryLoadConfig, lastProjectPath };
+  const updateConfig = useCallback((config: ProjectConfig) => {
+    setState({ status: "loaded", config });
+  }, []);
+
+  return { state, open, create, close, reload: tryLoadConfig, lastProjectPath, updateConfig };
 }
