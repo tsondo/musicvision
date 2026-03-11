@@ -49,13 +49,48 @@ Length: 2–4 sentences, 100–120 words (HuMo's sweet spot).
 Output only the prompt text itself — no commentary, headers, or markdown."""
 
 
-def _build_style_context(config: ProjectConfig) -> str:
+def _resolve_treatment(scene: Scene, config: ProjectConfig) -> str:
+    """Resolve the effective treatment for a scene based on video_type."""
+    from musicvision.models import SceneTreatment, VideoType
+
+    if scene.treatment is not None:
+        return scene.treatment.value
+
+    vt = config.video_type
+    if vt == VideoType.PERFORMANCE:
+        return SceneTreatment.PERFORMANCE.value
+    if vt == VideoType.STORY:
+        return SceneTreatment.NARRATIVE.value
+    # Hybrid: default from scene type
+    return SceneTreatment.PERFORMANCE.value if scene.type == SceneType.VOCAL else SceneTreatment.NARRATIVE.value
+
+
+def _treatment_context(treatment: str) -> str:
+    """Return hidden prompt context based on scene treatment."""
+    if treatment == "performance":
+        return (
+            "This is a performance scene. The performer is on stage, singing or playing. "
+            "Camera captures the live performance energy — body movement, gestures, lip motion."
+        )
+    return (
+        "This is a narrative/cinematic scene. Focus on mood, story, and visual atmosphere. "
+        "No performer on stage unless specified. Emphasize environmental motion and cinematic camera work."
+    )
+
+
+def _build_style_context(config: ProjectConfig, scene: Scene | None = None) -> str:
     """Serialize the style sheet into a compact text block for the LLM."""
     ss = config.style_sheet
     parts: list[str] = []
 
     if ss.concept:
         parts.append(f"Video concept: {ss.concept}")
+
+    # Inject treatment context if scene is provided
+    if scene is not None:
+        treatment = _resolve_treatment(scene, config)
+        parts.append(f"Scene treatment: {_treatment_context(treatment)}")
+
     if ss.visual_style:
         parts.append(f"Visual style: {ss.visual_style}")
     if ss.color_palette:
@@ -101,7 +136,7 @@ def generate_video_prompt(
 
     client: LLMClient = get_client(llm_config)
 
-    style_context = _build_style_context(config)
+    style_context = _build_style_context(config, scene)
 
     scene_type_label = "instrumental (no lyrics)" if scene.type == SceneType.INSTRUMENTAL else "vocal"
     duration_note = (
@@ -155,36 +190,79 @@ Scene to animate:
 
 def generate_video_prompts_batch(
     scenes: list[Scene],
-    style_sheet: StyleSheet,
-    config: ProjectConfig | None = None,
+    config: ProjectConfig,
     llm_config: LLMConfig | None = None,
 ) -> list[str]:
     """
-    Generate video prompts for a list of scenes, calling generate_video_prompt per scene.
+    Generate video prompts for all scenes in one LLM call for better coherence.
 
-    Stores prompts directly on scene.video_prompt.
-    Returns a list of prompt strings in the same order as input.
-
-    Args:
-        scenes: Scenes needing video prompts
-        style_sheet: Style sheet for visual context
-        config: Full project config (creates a minimal one from style_sheet if None)
-        llm_config: Explicit LLM config; falls back to env vars if None
+    Returns a list of prompt strings in the same order as the input scenes.
+    Falls back to individual calls if the batch response can't be parsed.
     """
-    if config is None:
-        config = ProjectConfig(style_sheet=style_sheet)
+    import json
 
-    prompts: list[str] = []
-    for scene in scenes:
-        try:
-            prompt = generate_video_prompt(scene, config, llm_config=llm_config)
-            scene.video_prompt = prompt
-            prompts.append(prompt)
-        except Exception as exc:
-            log.error("Failed to generate video prompt for %s: %s", scene.id, exc)
-            fallback = scene.effective_image_prompt or scene.lyrics or f"Scene {scene.id}"
-            scene.video_prompt = fallback
-            prompts.append(fallback)
+    client: LLMClient = get_client(llm_config)
+
+    style_context = _build_style_context(config)
+
+    system = VIDEO_PROMPT_SYSTEM + """
+
+When generating multiple scene prompts, output them as a JSON array of strings:
+["prompt for scene 1", "prompt for scene 2", ...]
+One string per scene, in order. Output ONLY the JSON array — no other text."""
+
+    scene_lines = []
+    for i, scene in enumerate(scenes, 1):
+        scene_type_label = "instrumental" if scene.type == SceneType.INSTRUMENTAL else "vocal"
+        treatment = _resolve_treatment(scene, config)
+        treatment_hint = _treatment_context(treatment)
+        img_hint = f" | ref image: {scene.effective_image_prompt[:100]}" if scene.effective_image_prompt else ""
+        scene_lines.append(
+            f"{i}. [{scene.id}] {scene_type_label} ({treatment}) | {scene.duration:.1f}s | "
+            f"lyrics: {scene.lyrics or '(none)'} | {treatment_hint}{img_hint}"
+        )
+
+    user_msg = f"""Style sheet:
+{style_context}
+
+Generate a HuMo video prompt for each of the following {len(scenes)} scenes:
+
+{chr(10).join(scene_lines)}"""
+
+    log.info("Generating video prompts for %d scenes (batch)...", len(scenes))
+    raw = client.chat(system, user_msg)
+
+    # Strip markdown code block fences if present
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+        raw = raw.strip()
+
+    # Parse JSON array
+    try:
+        prompts = json.loads(raw)
+        if not isinstance(prompts, list) or not all(isinstance(p, str) for p in prompts):
+            raise ValueError("Expected a JSON array of strings")
+    except (json.JSONDecodeError, ValueError) as exc:
+        log.warning(
+            "Batch video prompt JSON parse failed (%s). Falling back to individual calls.", exc,
+        )
+        return [
+            generate_video_prompt(scene, config, llm_config=llm_config)
+            for scene in scenes
+        ]
+
+    if len(prompts) != len(scenes):
+        log.warning(
+            "Batch returned %d prompts for %d scenes — falling back to individual calls.",
+            len(prompts), len(scenes),
+        )
+        return [
+            generate_video_prompt(scene, config, llm_config=llm_config)
+            for scene in scenes
+        ]
+
     return prompts
 
 

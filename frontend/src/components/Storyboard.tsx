@@ -3,12 +3,14 @@ import type {
   RegenerateVideoRequest,
   Scene,
   UpdateSceneRequest,
+  VideoType,
 } from "../api/types";
 import type { SceneGenStatus } from "../hooks/useScenes";
 import SceneRow from "./SceneRow";
 
 interface Props {
   scenes: Scene[];
+  videoType: VideoType;
   imageGenStatus: (sceneId: string) => SceneGenStatus;
   videoGenStatus: (sceneId: string) => SceneGenStatus;
   pipelineRunning?: boolean;
@@ -21,6 +23,7 @@ interface Props {
 
 export default function Storyboard({
   scenes,
+  videoType,
   imageGenStatus,
   videoGenStatus,
   pipelineRunning,
@@ -55,6 +58,7 @@ export default function Storyboard({
         <SceneRow
           key={scene.id}
           scene={scene}
+          videoType={videoType}
           imageGenStatus={imageGenStatus(scene.id)}
           videoGenStatus={videoGenStatus(scene.id)}
           disabled={pipelineRunning}

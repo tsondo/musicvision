@@ -484,6 +484,43 @@ button:disabled {
   margin-top: 2px;
 }
 
+.video-type-selector {
+  display: flex;
+  gap: 4px;
+}
+
+.video-type-btn {
+  flex: 1;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-card);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.15s;
+}
+
+.video-type-btn:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.video-type-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.treatment-select {
+  font-size: 11px;
+  padding: 2px 4px;
+  background: var(--bg-card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+
 /* Empty state */
 .empty-state {
   display: flex;
@@ -715,12 +752,37 @@ button:disabled {
   position: relative;
 }
 
+.prompt-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 2px;
+}
+
 .save-indicator {
-  position: absolute;
-  bottom: 2px;
-  right: 6px;
   font-size: 10px;
   color: var(--text-muted);
+}
+
+.btn-describe {
+  padding: 1px 6px;
+  font-size: 10px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-card);
+  color: var(--text-muted);
+  cursor: pointer;
+  margin-left: auto;
+}
+
+.btn-describe:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.btn-describe:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 /* Source cell (lyrics) */

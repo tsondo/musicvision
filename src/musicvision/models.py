@@ -29,6 +29,19 @@ class SceneType(str, Enum):
     INSTRUMENTAL = "instrumental"
 
 
+class VideoType(str, Enum):
+    """Overall video concept type — affects defaults and prompt injection."""
+    PERFORMANCE = "performance"  # staged performance, lip sync on by default
+    STORY       = "story"        # narrative scenes, no lip sync
+    HYBRID      = "hybrid"       # mix of performance + narrative, lip sync opt-in
+
+
+class SceneTreatment(str, Enum):
+    """Per-scene visual treatment (hybrid mode)."""
+    PERFORMANCE = "performance"  # performer on stage/venue
+    NARRATIVE   = "narrative"    # story/cinematic scene
+
+
 class SeparationMethod(str, Enum):
     DEMUCS = "demucs"  # Demucs htdemucs/mdx via demucs library
 
@@ -126,7 +139,6 @@ class FluxQuant(str, Enum):
 class VideoEngineType(str, Enum):
     """Selectable video generation backend."""
     HUMO            = "humo"
-    HUNYUAN_AVATAR  = "hunyuan_avatar"
     LTX_VIDEO       = "ltx_video"
 
 
@@ -262,29 +274,6 @@ class ImageGenConfig(BaseModel):
         return 4 if self.model == ImageModel.FLUX_SCHNELL else 28
 
 
-class HunyuanAvatarConfig(BaseModel):
-    """Configuration for HunyuanVideo-Avatar subprocess engine."""
-
-    hva_repo_dir: str = ""              # path to cloned HunyuanVideoAvatar repo; env: HVA_REPO_DIR
-    hva_venv_python: str = ""           # path to python in HVA venv; env: HVA_VENV_PYTHON
-    checkpoint: str = "bf16"            # "bf16" (recommended) or "fp8" — bf16 works with block offloading
-    image_size: int = 512               # width (height auto-calculated for portrait)
-    sample_n_frames: int = 129          # 129 frames @ 25fps ≈ 5.16s (fixed by HVA, cannot be reduced)
-    cfg_scale: float = 7.5
-    infer_steps: int = 30               # 30 good balance; 50 highest quality
-    flow_shift: float = 5.0
-    seed: int | None = None             # None → random
-    use_deepcache: bool = True
-    use_fp8: bool = False               # FP8 breaks block-level offloading; use bf16 instead
-    cpu_offload: bool = True            # Required for ≤32GB VRAM; enables block-level transformer offloading
-    fps: int = 25
-
-    @property
-    def max_duration(self) -> float:
-        """Maximum clip duration in seconds."""
-        return self.sample_n_frames / self.fps
-
-
 class LtxVideoConfig(BaseModel):
     """Configuration for LTX-Video 2 in-process engine (diffusers)."""
 
@@ -384,7 +373,6 @@ _RESOLUTION_WH: dict[str, tuple[int, int]] = {
 # Default upscaler per video engine (pixel-space engines use SeedVR2, LTX uses latent upsampler)
 _ENGINE_UPSCALER: dict[str, UpscalerType] = {
     "humo":            UpscalerType.SEEDVR2,
-    "hunyuan_avatar":  UpscalerType.SEEDVR2,
     "ltx_video":       UpscalerType.LTX_SPATIAL,
 }
 
@@ -456,9 +444,9 @@ class ProjectConfig(BaseModel):
     created: datetime = Field(default_factory=lambda: datetime.now(UTC))
     song: SongInfo = Field(default_factory=SongInfo)
     style_sheet: StyleSheet = Field(default_factory=StyleSheet)
+    video_type: VideoType = VideoType.HYBRID
     video_engine: VideoEngineType = VideoEngineType.HUMO
     humo: HumoConfig = Field(default_factory=HumoConfig)
-    hunyuan_avatar: HunyuanAvatarConfig = Field(default_factory=HunyuanAvatarConfig)
     ltx_video: LtxVideoConfig = Field(default_factory=LtxVideoConfig)
     image_gen: ImageGenConfig = Field(default_factory=ImageGenConfig)
     vocal_separation: VocalSeparationConfig = Field(default_factory=VocalSeparationConfig)
@@ -546,7 +534,8 @@ class Scene(BaseModel):
     video_status: ApprovalStatus = ApprovalStatus.PENDING
     video_engine: Optional[VideoEngineType] = None  # None → use project default
     video_seed: Optional[int] = None                # seed used for last generation (locked when approved)
-    lip_sync: Optional[bool] = None  # None → auto (True for vocal, False for instrumental)
+    lip_sync: Optional[bool] = None  # None → auto (depends on video_type + treatment)
+    treatment: Optional[SceneTreatment] = None  # None → auto from video_type
     # TODO: per-scene face mask for multi-person lip sync targeting
 
     # LTX-2 generated audio mixing
@@ -590,11 +579,9 @@ class Scene(BaseModel):
         return self.duration > 3.88
 
     def needs_sub_clips_for_engine(
-        self, engine: VideoEngineType, hva_config: HunyuanAvatarConfig | None = None,
+        self, engine: VideoEngineType,
     ) -> bool:
         """Check if this scene needs sub-clips for a specific engine."""
-        if engine == VideoEngineType.HUNYUAN_AVATAR and hva_config:
-            return self.duration > hva_config.max_duration
         return self.duration > 3.88  # HuMo default
 
     @property

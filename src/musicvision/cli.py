@@ -6,7 +6,7 @@ Usage:
     musicvision import-audio --project DIR --audio song.wav [--lyrics lyrics.txt]
     musicvision intake --project DIR [--llm] [--skip-transcription]
     musicvision generate-images --project DIR [--model z-image-turbo]
-    musicvision generate-video --project DIR [--engine hunyuan_avatar]
+    musicvision generate-video --project DIR [--engine humo]
     musicvision assemble --project DIR [--approved-only]
     musicvision info <directory>
     musicvision serve <directory> [--port 8000]
@@ -485,10 +485,7 @@ def cmd_generate_video(args: argparse.Namespace) -> None:
     svc.save_scenes()
 
     # Create engine
-    if engine_type == VideoEngineType.HUNYUAN_AVATAR:
-        engine = create_video_engine(svc.config.hunyuan_avatar, engine_type=engine_type)
-        print("Loading HunyuanVideo-Avatar engine…")
-    elif engine_type == VideoEngineType.LTX_VIDEO:
+    if engine_type == VideoEngineType.LTX_VIDEO:
         from musicvision.utils.gpu import detect_devices
         device_map = detect_devices()
         engine = create_video_engine(svc.config.ltx_video, device_map=device_map, engine_type=engine_type)
@@ -505,9 +502,7 @@ def cmd_generate_video(args: argparse.Namespace) -> None:
     from musicvision.utils.gpu import _oom_suggestion, estimate_vram_gb, is_oom_error
 
     # --- Pre-flight VRAM check (advisory) ---
-    if engine_type == VideoEngineType.HUNYUAN_AVATAR:
-        engine_config = svc.config.hunyuan_avatar
-    elif engine_type == VideoEngineType.LTX_VIDEO:
+    if engine_type == VideoEngineType.LTX_VIDEO:
         engine_config = svc.config.ltx_video
     else:
         engine_config = svc.config.humo
@@ -718,7 +713,7 @@ def main() -> None:
     p_gv.add_argument("--project", required=True, help="Project directory path")
     p_gv.add_argument(
         "--engine", default=None,
-        choices=["humo", "hunyuan_avatar", "ltx_video"],
+        choices=["humo", "ltx_video"],
         help="Video engine (default: project config)",
     )
     p_gv.add_argument(

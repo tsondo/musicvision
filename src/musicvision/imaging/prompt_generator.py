@@ -37,13 +37,43 @@ specified in the style sheet — do not invent or contradict character details
 - Do NOT include any intro, commentary, or markdown — output only the prompt text itself"""
 
 
-def _build_style_context(config: ProjectConfig) -> str:
+def _resolve_treatment(scene: Scene, config: ProjectConfig) -> str:
+    """Resolve the effective treatment for a scene based on video_type."""
+    from musicvision.models import SceneTreatment, VideoType
+
+    if scene.treatment is not None:
+        return scene.treatment.value
+
+    vt = config.video_type
+    if vt == VideoType.PERFORMANCE:
+        return SceneTreatment.PERFORMANCE.value
+    if vt == VideoType.STORY:
+        return SceneTreatment.NARRATIVE.value
+    # Hybrid: default from scene type
+    from musicvision.models import SceneType
+    return SceneTreatment.PERFORMANCE.value if scene.type == SceneType.VOCAL else SceneTreatment.NARRATIVE.value
+
+
+def _treatment_context(treatment: str) -> str:
+    """Return hidden prompt context based on scene treatment."""
+    if treatment == "performance":
+        return "This is a performance scene. The performer is on stage, singing or playing. Camera captures the live performance energy."
+    return "This is a narrative/cinematic scene. Focus on mood, story, and visual atmosphere. No performer on stage unless specified."
+
+
+def _build_style_context(config: ProjectConfig, scene: Scene | None = None) -> str:
     """Serialize the style sheet into a compact text block for the LLM."""
     ss = config.style_sheet
     parts: list[str] = []
 
     if ss.concept:
         parts.append(f"Video concept: {ss.concept}")
+
+    # Inject treatment context if scene is provided
+    if scene is not None:
+        treatment = _resolve_treatment(scene, config)
+        parts.append(f"Scene treatment: {_treatment_context(treatment)}")
+
     if ss.visual_style:
         parts.append(f"Visual style: {ss.visual_style}")
     if ss.color_palette:
@@ -90,7 +120,7 @@ def generate_image_prompt(
 
     client: LLMClient = get_client(llm_config)
 
-    style_context = _build_style_context(config)
+    style_context = _build_style_context(config, scene)
 
     scene_type_label = "instrumental (no lyrics)" if scene.type == SceneType.INSTRUMENTAL else "vocal"
 
@@ -151,9 +181,11 @@ One string per scene, in order. Output ONLY the JSON array — no other text."""
     scene_lines = []
     for i, scene in enumerate(scenes, 1):
         scene_type_label = "instrumental" if scene.type == SceneType.INSTRUMENTAL else "vocal"
+        treatment = _resolve_treatment(scene, config)
+        treatment_hint = _treatment_context(treatment)
         scene_lines.append(
-            f"{i}. [{scene.id}] {scene_type_label} | {scene.duration:.1f}s | "
-            f"lyrics: {scene.lyrics or '(none)'}"
+            f"{i}. [{scene.id}] {scene_type_label} ({treatment}) | {scene.duration:.1f}s | "
+            f"lyrics: {scene.lyrics or '(none)'} | {treatment_hint}"
         )
 
     user_msg = f"""Style sheet:
@@ -212,7 +244,7 @@ def _prompt_interactive_image(scene: Scene, config: ProjectConfig) -> str:
     If stdin is not a TTY (non-interactive / piped), returns a minimal
     auto-generated template instead of blocking.
     """
-    style_context = _build_style_context(config)
+    style_context = _build_style_context(config, scene)
     scene_type_label = "instrumental" if scene.type == SceneType.INSTRUMENTAL else "vocal"
     divider = "─" * 60
 

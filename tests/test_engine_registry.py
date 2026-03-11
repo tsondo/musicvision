@@ -28,12 +28,6 @@ class TestGetConstraints:
         assert c.min_frames == 25
         assert c.fps == 25
 
-    def test_hunyuan_avatar(self):
-        c = get_constraints("hunyuan_avatar")
-        assert c.max_frames == 129
-        assert c.min_frames == 33
-        assert c.fps == 25
-
     def test_unknown_raises(self):
         with pytest.raises(ValueError, match="Unknown engine"):
             get_constraints("nonexistent")
@@ -45,10 +39,6 @@ class TestGetConstraints:
     def test_min_seconds(self):
         c = get_constraints("humo")
         assert c.min_seconds == pytest.approx(1.0)
-
-    def test_hva_max_seconds(self):
-        c = get_constraints("hunyuan_avatar")
-        assert c.max_seconds == pytest.approx(5.16)
 
 
 # ---------------------------------------------------------------------------

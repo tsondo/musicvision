@@ -51,6 +51,13 @@ export default function App() {
     }
   }, [pipeline.analyzeStatus, pipeline.analysisResult]);
 
+  // Auto-close waveform editor when scenes are confirmed and we move past scenes stage
+  useEffect(() => {
+    if (pipeline.scenesStatus === "done" && scenes.length > 0) {
+      setShowWaveformEditor(false);
+    }
+  }, [pipeline.scenesStatus, scenes.length]);
+
   // Extract markers from scenes after auto-segment populates them
   useEffect(() => {
     if (pipeline.scenesStatus === "done" && waveformVisible && scenes.length > 0) {
@@ -85,16 +92,19 @@ export default function App() {
         hasLyrics={pipeline.hasLyrics}
         analyzed={pipeline.analyzed}
         sceneCount={pipeline.sceneCount}
+        descriptionsRemaining={pipeline.descriptionsRemaining}
         imagesRemaining={pipeline.imagesRemaining}
+        videoDescriptionsRemaining={pipeline.videoDescriptionsRemaining}
         videosRemaining={pipeline.videosRemaining}
         videosUnapproved={pipeline.videosUnapproved}
-        unapprovedSceneIds={pipeline.unapprovedSceneIds}
         upscaleRemaining={pipeline.upscaleRemaining}
         uploadStatus={pipeline.uploadStatus}
         analyzeStatus={pipeline.analyzeStatus}
         scenesStatus={pipeline.scenesStatus}
         intakeStatus={pipeline.intakeStatus}
+        descriptionsStatus={pipeline.descriptionsStatus}
         imagesStatus={pipeline.imagesStatus}
+        videoDescriptionsStatus={pipeline.videoDescriptionsStatus}
         videosStatus={pipeline.videosStatus}
         upscaleStatus={pipeline.upscaleStatus}
         error={pipeline.error}
@@ -113,7 +123,9 @@ export default function App() {
         onRunIntake={pipeline.runIntake}
         onToggleWaveformEditor={() => setShowWaveformEditor((v) => !v)}
         showWaveformEditor={waveformVisible}
+        onGenerateDescriptions={pipeline.generateDescriptions}
         onGenerateImages={pipeline.generateImages}
+        onGenerateVideoDescriptions={pipeline.generateVideoDescriptions}
         onGenerateVideos={pipeline.generateVideos}
         onUpscaleVideos={pipeline.upscaleAll}
         assembleStatus={pipeline.assembleStatus}
@@ -146,6 +158,7 @@ export default function App() {
       <main>
         <Storyboard
           scenes={scenes}
+          videoType={state.config.video_type ?? "hybrid"}
           imageGenStatus={imageGenStatus}
           videoGenStatus={videoGenStatus}
           pipelineRunning={pipeline.isRunning}

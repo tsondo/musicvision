@@ -1,18 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fileUrl } from "../api/client";
+import { describeImage, describeVideo, fileUrl } from "../api/client";
 import type {
   ImageModelType,
   RegenerateImageRequest,
   RegenerateVideoRequest,
   Scene,
   SceneAudioMode,
+  SceneTreatment,
   UpdateSceneRequest,
   VideoEngineType,
+  VideoType,
 } from "../api/types";
 import type { SceneGenStatus } from "../hooks/useScenes";
 
 interface Props {
   scene: Scene;
+  videoType: VideoType;
   imageGenStatus: SceneGenStatus;
   videoGenStatus: SceneGenStatus;
   disabled?: boolean;
@@ -31,6 +34,7 @@ function formatTime(seconds: number): string {
 
 export default function SceneRow({
   scene,
+  videoType,
   imageGenStatus,
   videoGenStatus,
   disabled,
@@ -50,10 +54,17 @@ export default function SceneRow({
   const [videoPrompt, setVideoPrompt] = useState(effectiveVideoPrompt);
   const [imageModel, setImageModel] = useState<ImageModelType>("z-image-turbo");
   const [imageSeed, setImageSeed] = useState(-1);
-  const [videoEngine, setVideoEngine] =
-    useState<VideoEngineType>("humo");
+
+  // Resolve default engine: explicit per-scene > treatment-based > project default
+  const defaultEngine: VideoEngineType = scene.video_engine
+    ?? ((scene.treatment ?? (scene.type === "vocal" ? "performance" : "narrative")) === "narrative"
+      ? "ltx_video"
+      : "humo");
+  const [videoEngine, setVideoEngine] = useState<VideoEngineType>(defaultEngine);
   const [videoSeed, setVideoSeed] = useState(-1);
   const [regenError, setRegenError] = useState<string | null>(null);
+  const [describingImage, setDescribingImage] = useState(false);
+  const [describingVideo, setDescribingVideo] = useState(false);
   const [imgVersion, setImgVersion] = useState(() => Date.now());
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -82,6 +93,23 @@ export default function SceneRow({
   ) {
     lastAssetsRef.current = { img: scene.reference_image, vid: scene.video_clip };
     setImgVersion(Date.now());
+  }
+
+  // Also bump cache-buster when generation finishes (path unchanged on regen)
+  const prevGenRef = useRef({ img: imageGenStatus, vid: videoGenStatus });
+  if (
+    (prevGenRef.current.img === "running" && imageGenStatus === "idle") ||
+    (prevGenRef.current.vid === "running" && videoGenStatus === "idle")
+  ) {
+    setImgVersion(Date.now());
+  }
+  prevGenRef.current = { img: imageGenStatus, vid: videoGenStatus };
+
+  // Sync video engine when scene.video_engine changes externally
+  const lastEngineRef = useRef(scene.video_engine);
+  if (lastEngineRef.current !== scene.video_engine) {
+    lastEngineRef.current = scene.video_engine;
+    if (scene.video_engine) setVideoEngine(scene.video_engine);
   }
 
   // Sync prompt state when scene changes externally
@@ -185,6 +213,36 @@ export default function SceneRow({
       await onUpdate(scene.id, { video_prompt_user_override: videoPrompt });
     }
     onRegenVideo(scene.id, { engine: videoEngine, seed: videoSeed });
+  };
+
+  const handleDescribeImage = async () => {
+    setDescribingImage(true);
+    setRegenError(null);
+    try {
+      const updated = await describeImage(scene.id);
+      if (updated.image_prompt) {
+        setImagePrompt(updated.image_prompt);
+      }
+    } catch (err) {
+      setRegenError(String(err));
+    } finally {
+      setDescribingImage(false);
+    }
+  };
+
+  const handleDescribeVideo = async () => {
+    setDescribingVideo(true);
+    setRegenError(null);
+    try {
+      const updated = await describeVideo(scene.id);
+      if (updated.video_prompt) {
+        setVideoPrompt(updated.video_prompt);
+      }
+    } catch (err) {
+      setRegenError(String(err));
+    } finally {
+      setDescribingVideo(false);
+    }
   };
 
   const toggleAudio = () => {
@@ -335,7 +393,17 @@ export default function SceneRow({
           placeholder="Image description..."
           rows={4}
         />
-        {!imgSaved && <span className="save-indicator">saving...</span>}
+        <div className="prompt-actions">
+          {!imgSaved && <span className="save-indicator">saving...</span>}
+          <button
+            className="btn-describe"
+            onClick={handleDescribeImage}
+            disabled={describingImage || disabled}
+            title="Generate image description via LLM"
+          >
+            {describingImage ? "..." : "Describe"}
+          </button>
+        </div>
       </div>
 
       {/* Source (lyrics) */}
@@ -390,31 +458,58 @@ export default function SceneRow({
           placeholder="Motion description..."
           rows={4}
         />
-        {!vidSaved && <span className="save-indicator">saving...</span>}
+        <div className="prompt-actions">
+          {!vidSaved && <span className="save-indicator">saving...</span>}
+          <button
+            className="btn-describe"
+            onClick={handleDescribeVideo}
+            disabled={describingVideo || disabled}
+            title="Generate motion description via LLM"
+          >
+            {describingVideo ? "..." : "Describe"}
+          </button>
+        </div>
       </div>
 
       {/* Generate video controls */}
       <div className="cell cell-controls">
         <select
           value={videoEngine}
-          onChange={(e) =>
-            setVideoEngine(e.target.value as VideoEngineType)
-          }
+          onChange={(e) => {
+            const eng = e.target.value as VideoEngineType;
+            setVideoEngine(eng);
+            onUpdate(scene.id, { video_engine: eng });
+          }}
         >
           <option value="humo">HuMo</option>
           <option value="ltx_video">LTX-Video 2</option>
-          <option value="hunyuan_avatar">HunyuanVideo Avatar</option>
         </select>
         <label className="checkbox-label">
           <input
             type="checkbox"
-            checked={scene.lip_sync ?? scene.type === "vocal"}
+            checked={scene.lip_sync ?? (
+              videoType === "performance" ? scene.type === "vocal"
+              : videoType === "story" ? false
+              : /* hybrid */ scene.type === "vocal" && (scene.treatment ?? "performance") === "performance"
+            )}
             onChange={(e) =>
               onUpdate(scene.id, { lip_sync: e.target.checked })
             }
           />
           Lip sync
         </label>
+        {videoType === "hybrid" && (
+          <select
+            className="treatment-select"
+            value={scene.treatment ?? (scene.type === "vocal" ? "performance" : "narrative")}
+            onChange={(e) =>
+              onUpdate(scene.id, { treatment: e.target.value as SceneTreatment })
+            }
+          >
+            <option value="performance">Performance</option>
+            <option value="narrative">Narrative</option>
+          </select>
+        )}
         <div className="seed-row">
           <label>Seed</label>
           <input

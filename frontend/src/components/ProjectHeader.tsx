@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { PipelineStage, ProjectConfig, Scene, StyleSheet } from "../api/types";
-import { updateStyleSheet } from "../api/client";
+import type { PipelineStage, ProjectConfig, Scene, StyleSheet, VideoType } from "../api/types";
+import { updateStyleSheet, updateVideoType } from "../api/client";
 
 interface Props {
   config: ProjectConfig;
@@ -38,6 +38,19 @@ export default function ProjectHeader({ config, scenes, stage, onClose, onConfig
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(null);
 
   const ss = config.style_sheet ?? { concept: "", visual_style: "", color_palette: "", aspect_ratio: "16:9", resolution: "1280x720" };
+  const videoType = config.video_type ?? "hybrid";
+
+  const handleVideoTypeChange = useCallback(
+    async (vt: VideoType) => {
+      onConfigUpdate({ ...config, video_type: vt });
+      try {
+        await updateVideoType(vt);
+      } catch (e) {
+        console.error("Failed to save video type:", e);
+      }
+    },
+    [config, onConfigUpdate],
+  );
 
   const handleChange = useCallback(
     (field: keyof StyleSheet, value: string) => {
@@ -110,6 +123,30 @@ export default function ProjectHeader({ config, scenes, stage, onClose, onConfig
               placeholder="What kind of video are we making? e.g. A late-night R&B music video in a dimly lit lounge, intimate and sensual mood, single male performer..."
               rows={2}
             />
+          </div>
+          <div className="style-field">
+            <label>Video Type</label>
+            <div className="video-type-selector">
+              {(["performance", "story", "hybrid"] as VideoType[]).map((vt) => (
+                <button
+                  key={vt}
+                  className={`video-type-btn${videoType === vt ? " active" : ""}`}
+                  onClick={() => handleVideoTypeChange(vt)}
+                  title={
+                    vt === "performance" ? "Staged performance — lip sync on all vocal scenes"
+                    : vt === "story" ? "Narrative/cinematic — no lip sync by default"
+                    : "Mix of performance + narrative — lip sync opt-in per scene"
+                  }
+                >
+                  {vt === "performance" ? "Performance" : vt === "story" ? "Story" : "Hybrid"}
+                </button>
+              ))}
+            </div>
+            <span className="style-hint" style={{ marginTop: 2 }}>
+              {videoType === "performance" && "All vocal scenes get lip sync. Prompts focus on stage/venue performance."}
+              {videoType === "story" && "No lip sync. Prompts focus on narrative, mood, and cinematic scenes."}
+              {videoType === "hybrid" && "Default: vocal = performance, instrumental = narrative. Override per scene."}
+            </span>
           </div>
           <div className="style-field">
             <label>Visual Style</label>

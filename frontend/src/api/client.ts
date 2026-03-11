@@ -19,6 +19,7 @@ import type {
   UpscaleResult,
   UpscalerType,
   VideoEngineType,
+  VideoType,
 } from "./types";
 
 class ApiError extends Error {
@@ -85,6 +86,23 @@ export async function updateScene(
 
 export async function approveAll(): Promise<{ status: string; count: number }> {
   return request("/api/scenes/approve-all", { method: "POST" });
+}
+
+export async function describeImage(sceneId: string): Promise<Scene> {
+  return request(`/api/scenes/${sceneId}/describe-image`, { method: "POST" });
+}
+
+export async function describeVideo(sceneId: string): Promise<Scene> {
+  return request(`/api/scenes/${sceneId}/describe-video`, { method: "POST" });
+}
+
+export async function generateVideoDescriptions(
+  sceneIds?: string[],
+): Promise<BatchGenResult> {
+  return request("/api/pipeline/generate-video-descriptions", {
+    method: "POST",
+    body: JSON.stringify({ scene_ids: sceneIds ?? [] }),
+  });
 }
 
 export async function regenerateImage(
@@ -228,6 +246,15 @@ export async function runIntake(opts?: {
   });
 }
 
+export async function generateDescriptions(
+  sceneIds?: string[],
+): Promise<BatchGenResult> {
+  return request("/api/pipeline/generate-descriptions", {
+    method: "POST",
+    body: JSON.stringify({ scene_ids: sceneIds ?? [] }),
+  });
+}
+
 export async function generateAllImages(
   sceneIds?: string[],
   model?: ImageModelType,
@@ -313,6 +340,13 @@ export async function updateStyleSheet(styleSheet: StyleSheet): Promise<{ status
   return request("/api/projects/config/style-sheet", {
     method: "PUT",
     body: JSON.stringify(styleSheet),
+  });
+}
+
+export async function updateVideoType(videoType: VideoType): Promise<{ status: string; video_type: VideoType }> {
+  return request("/api/projects/config/video-type", {
+    method: "PUT",
+    body: JSON.stringify({ video_type: videoType }),
   });
 }
 

@@ -41,12 +41,6 @@ ENGINES: dict[str, EngineConstraints] = {
         min_frames=25,
         fps=25,
     ),
-    "hunyuan_avatar": EngineConstraints(
-        name="HunyuanVideo Avatar",
-        max_frames=129,
-        min_frames=33,
-        fps=25,
-    ),
     "ltx_video": EngineConstraints(
         name="LTX-Video 2",
         max_frames=257,
@@ -57,7 +51,7 @@ ENGINES: dict[str, EngineConstraints] = {
 
 
 def get_constraints(engine_key: str) -> EngineConstraints:
-    """Look up constraints by engine key (e.g. 'humo', 'hunyuan_avatar')."""
+    """Look up constraints by engine key (e.g. 'humo', 'ltx_video')."""
     if engine_key not in ENGINES:
         raise ValueError(f"Unknown engine: {engine_key!r}. Available: {list(ENGINES.keys())}")
     return ENGINES[engine_key]

@@ -77,11 +77,6 @@ class TestUpscalerConfig:
         result = cfg.get_upscaler_for_engine("humo", "final")
         assert result == UpscalerType.SEEDVR2
 
-    def test_auto_select_hva(self):
-        cfg = UpscalerConfig(seedvr2_repo_dir="/fake/seedvr2")
-        result = cfg.get_upscaler_for_engine(VideoEngineType.HUNYUAN_AVATAR, "final")
-        assert result == UpscalerType.SEEDVR2
-
     def test_seedvr2_fallback_to_realesrgan(self):
         """When SeedVR2 is not configured, fall back to Real-ESRGAN."""
         cfg = UpscalerConfig(seedvr2_repo_dir="")

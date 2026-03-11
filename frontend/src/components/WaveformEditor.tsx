@@ -60,7 +60,6 @@ const ENGINE_CONSTRAINTS: Record<
   { name: string; maxFrames: number; minFrames: number; fps: number; maxSeconds: number; minSeconds: number }
 > = {
   humo: { name: "HuMo", maxFrames: 97, minFrames: 25, fps: 25, maxSeconds: 3.88, minSeconds: 1.0 },
-  hunyuan_avatar: { name: "HVA", maxFrames: 129, minFrames: 33, fps: 25, maxSeconds: 5.16, minSeconds: 1.32 },
   ltx_video: { name: "LTX-2", maxFrames: 257, minFrames: 9, fps: 24, maxSeconds: 10.71, minSeconds: 0.375 },
 };
 
@@ -207,7 +206,7 @@ export default function WaveformEditor({
 
   const duration = analysis.duration;
   const { beat_times, sections, word_timestamps } = analysis;
-  const engineKey = videoEngine ?? "hunyuan_avatar";
+  const engineKey = videoEngine ?? "humo";
 
   // ---- Load persisted markers and lyrics assignments on mount ----
   // loadedRef gates auto-save — must only be set AFTER load completes

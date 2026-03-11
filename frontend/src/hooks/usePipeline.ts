@@ -9,13 +9,15 @@ import {
   getAnalysis as apiGetAnalysis,
   createScenes as apiCreateScenes,
   autoSegment as apiAutoSegment,
+  generateDescriptions as apiGenerateDescriptions,
+  generateVideoDescriptions as apiGenerateVideoDescriptions,
   generateAllImages as apiGenerateImages,
   generateAllVideos as apiGenerateVideos,
   upscaleVideos as apiUpscaleVideos,
   assemblePreview as apiAssemble,
   ApiError,
 } from "../api/client";
-import type { AnalysisResult, AssembleResult, BatchGenResult, ImageModelType, LyricsSource, PipelineStage, ProjectConfig, RenderMode, Scene, SceneBoundary, TargetResolution, UpscalerType, VideoEngineType } from "../api/types";
+import type { AnalysisResult, AssembleResult, BatchGenResult, LyricsSource, PipelineStage, ProjectConfig, RenderMode, Scene, SceneBoundary, TargetResolution, UpscalerType } from "../api/types";
 
 export type StepStatus = "idle" | "running" | "done" | "error";
 
@@ -25,7 +27,11 @@ export interface PipelineState {
   analyzeStatus: StepStatus;
   scenesStatus: StepStatus;
   intakeStatus: StepStatus;
+  descriptionsStatus: StepStatus;
+  descriptionsRemaining: number;
   imagesStatus: StepStatus;
+  videoDescriptionsStatus: StepStatus;
+  videoDescriptionsRemaining: number;
   videosStatus: StepStatus;
   upscaleStatus: StepStatus;
   assembleStatus: StepStatus;
@@ -58,7 +64,9 @@ export function usePipeline(
   const [scenesStatus, setScenesStatus] = useState<StepStatus>("idle");
   const [intakeStatus, setIntakeStatus] = useState<StepStatus>("idle");
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
+  const [descriptionsStatus, setDescriptionsStatus] = useState<StepStatus>("idle");
   const [imagesStatus, setImagesStatus] = useState<StepStatus>("idle");
+  const [videoDescriptionsStatus, setVideoDescriptionsStatus] = useState<StepStatus>("idle");
   const [videosStatus, setVideosStatus] = useState<StepStatus>("idle");
   const [upscaleStatus, setUpscaleStatus] = useState<StepStatus>("idle");
   const [assembleStatus, setAssembleStatus] = useState<StepStatus>("idle");
@@ -85,7 +93,13 @@ export function usePipeline(
   const hasLyrics = Boolean(config?.song.lyrics_file);
   const analyzed = Boolean(config?.song.analyzed) || Boolean(analysisResult?.analyzed);
   const sceneCount = scenes.length;
+  const descriptionsRemaining = scenes.filter(
+    (s) => !s.image_prompt && !s.image_prompt_user_override,
+  ).length;
   const imagesRemaining = scenes.filter((s) => !s.reference_image).length;
+  const videoDescriptionsRemaining = scenes.filter(
+    (s) => !s.video_prompt && !s.video_prompt_user_override,
+  ).length;
   const videosRemaining = scenes.filter(
     (s) => !s.video_clip && !s.sub_clips.some((sc) => sc.video_clip),
   ).length;
@@ -110,19 +124,23 @@ export function usePipeline(
     if (!hasAudio) return "upload";
     if (!analyzed) return "analyze";
     if (sceneCount === 0) return "scenes";
+    if (descriptionsRemaining > 0 && !hasVideos) return "descriptions";
     if (imagesRemaining > 0 && !hasVideos) return "images";
+    if (videoDescriptionsRemaining > 0 && !hasVideos) return "video_descriptions";
     if (!hasVideos) return "videos";
     if (videosRemaining > 0) return "videos";
     if (upscaleRemaining > 0) return "upscale";
     return "assembly";
-  }, [hasAudio, analyzed, sceneCount, imagesRemaining, videosRemaining, upscaleRemaining, hasVideos]);
+  }, [hasAudio, analyzed, sceneCount, descriptionsRemaining, imagesRemaining, videoDescriptionsRemaining, videosRemaining, upscaleRemaining, hasVideos]);
 
   const isRunning =
     uploadStatus === "running" ||
     analyzeStatus === "running" ||
     scenesStatus === "running" ||
     intakeStatus === "running" ||
+    descriptionsStatus === "running" ||
     imagesStatus === "running" ||
+    videoDescriptionsStatus === "running" ||
     videosStatus === "running" ||
     upscaleStatus === "running" ||
     assembleStatus === "running";
@@ -316,12 +334,35 @@ export function usePipeline(
     [reloadScenes, reloadConfig],
   );
 
+  const generateDescriptions = useCallback(
+    async (sceneIds?: string[]) => {
+      setDescriptionsStatus("running");
+      setError(null);
+      try {
+        const result = await apiGenerateDescriptions(sceneIds);
+        setLastResult(result);
+        await reloadScenes();
+        setDescriptionsStatus(result.failed.length > 0 ? "error" : "done");
+        if (result.failed.length > 0) {
+          setError(
+            `${result.failed.length} description(s) failed: ${result.failed[0]?.error}`,
+          );
+        }
+      } catch (err) {
+        const msg = err instanceof ApiError ? err.detail : String(err);
+        setError(msg);
+        setDescriptionsStatus("error");
+      }
+    },
+    [reloadScenes],
+  );
+
   const generateImages = useCallback(
-    async (sceneIds?: string[], model?: ImageModelType) => {
+    async () => {
       setImagesStatus("running");
       setError(null);
       try {
-        const result = await apiGenerateImages(sceneIds, model);
+        const result = await apiGenerateImages();
         setLastResult(result);
         await reloadScenes();
         setImagesStatus(result.failed.length > 0 ? "error" : "done");
@@ -339,10 +380,39 @@ export function usePipeline(
     [reloadScenes],
   );
 
+  const generateVideoDescriptions = useCallback(
+    async (sceneIds?: string[]) => {
+      setVideoDescriptionsStatus("running");
+      setError(null);
+      try {
+        const result = await apiGenerateVideoDescriptions(sceneIds);
+        setLastResult(result);
+        await reloadScenes();
+        setVideoDescriptionsStatus(result.failed.length > 0 ? "error" : "done");
+        if (result.failed.length > 0) {
+          setError(
+            `${result.failed.length} video description(s) failed: ${result.failed[0]?.error}`,
+          );
+        }
+      } catch (err) {
+        const msg = err instanceof ApiError ? err.detail : String(err);
+        setError(msg);
+        setVideoDescriptionsStatus("error");
+      }
+    },
+    [reloadScenes],
+  );
+
   const generateVideos = useCallback(
-    async (sceneIds?: string[], engine?: VideoEngineType, renderMode?: RenderMode) => {
+    async (renderMode?: RenderMode) => {
+      // Determine target scenes: all remaining, or unapproved for re-render
+      const targetIds = videosRemaining > 0
+        ? undefined
+        : unapprovedSceneIds.length > 0
+          ? unapprovedSceneIds
+          : undefined;
+      const targetScenes = targetIds ? scenes.filter((s) => targetIds.includes(s.id)) : scenes;
       // Snapshot current clips to track re-render progress
-      const targetScenes = sceneIds ? scenes.filter((s) => sceneIds.includes(s.id)) : scenes;
       const clips: Record<string, string | null> = {};
       for (const s of targetScenes) {
         clips[s.id] = s.video_clip || s.sub_clips.find((sc) => sc.video_clip)?.video_clip || null;
@@ -351,7 +421,7 @@ export function usePipeline(
       setVideosStatus("running");
       setError(null);
       try {
-        const result = await apiGenerateVideos(sceneIds, engine, renderMode);
+        const result = await apiGenerateVideos(targetIds, undefined, renderMode);
         setLastResult(result);
         await reloadScenes();
         setBatchSnapshot(null);
@@ -368,7 +438,7 @@ export function usePipeline(
         setVideosStatus("error");
       }
     },
-    [scenes, reloadScenes],
+    [scenes, videosRemaining, unapprovedSceneIds, reloadScenes],
   );
 
   const upscaleAll = useCallback(
@@ -411,7 +481,7 @@ export function usePipeline(
   // Poll scenes while generation is running so new images/videos appear incrementally
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
-    const generating = imagesStatus === "running" || videosStatus === "running" || upscaleStatus === "running";
+    const generating = descriptionsStatus === "running" || imagesStatus === "running" || videoDescriptionsStatus === "running" || videosStatus === "running" || upscaleStatus === "running";
     if (generating && !pollRef.current) {
       pollRef.current = setInterval(() => {
         reloadScenes();
@@ -427,7 +497,7 @@ export function usePipeline(
         pollRef.current = null;
       }
     };
-  }, [imagesStatus, videosStatus, upscaleStatus, reloadScenes]);
+  }, [descriptionsStatus, imagesStatus, videoDescriptionsStatus, videosStatus, upscaleStatus, reloadScenes]);
 
   const pipelineState: PipelineState = {
     stage,
@@ -435,7 +505,11 @@ export function usePipeline(
     analyzeStatus,
     scenesStatus,
     intakeStatus,
+    descriptionsStatus,
+    descriptionsRemaining,
     imagesStatus,
+    videoDescriptionsStatus,
+    videoDescriptionsRemaining,
     videosStatus,
     upscaleStatus,
     assembleStatus,
@@ -469,7 +543,9 @@ export function usePipeline(
     scenesMessage,
     runAutoSegment,
     runIntake,
+    generateDescriptions,
     generateImages,
+    generateVideoDescriptions,
     generateVideos,
     upscaleAll,
     assemble,

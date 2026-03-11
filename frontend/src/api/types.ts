@@ -2,7 +2,9 @@
 
 export type SceneType = "vocal" | "instrumental";
 export type ApprovalStatus = "pending" | "approved" | "rejected";
-export type VideoEngineType = "humo" | "hunyuan_avatar" | "ltx_video";
+export type VideoType = "performance" | "story" | "hybrid";
+export type SceneTreatment = "performance" | "narrative";
+export type VideoEngineType = "humo" | "ltx_video";
 export type UpscalerType = "ltx_spatial" | "seedvr2" | "real_esrgan" | "none";
 export type SceneAudioMode = "song_only" | "generated_only" | "mix";
 export type TargetResolution = "720p" | "1080p" | "1440p" | "4k";
@@ -53,6 +55,7 @@ export interface Scene {
   video_engine: VideoEngineType | null;
   video_seed: number | null;
   lip_sync: boolean | null;
+  treatment: SceneTreatment | null;
 
   // LTX-2 generated audio mixing
   generated_audio: string | null;
@@ -102,6 +105,7 @@ export interface ProjectConfig {
   created: string;
   song: SongInfo;
   video_engine: VideoEngineType;
+  video_type: VideoType;
   style_sheet: StyleSheet;
 }
 
@@ -112,6 +116,8 @@ export interface UpdateSceneRequest {
   image_status?: ApprovalStatus;
   video_status?: ApprovalStatus;
   lip_sync?: boolean;
+  treatment?: SceneTreatment | "";
+  video_engine?: VideoEngineType;
   notes?: string;
   // LTX-2 generated audio mixing
   audio_mode?: SceneAudioMode;
@@ -252,7 +258,7 @@ export interface AssembleResult {
   fcpxml?: string;
 }
 
-export type PipelineStage = "upload" | "analyze" | "scenes" | "images" | "videos" | "upscale" | "assembly";
+export type PipelineStage = "upload" | "analyze" | "scenes" | "descriptions" | "images" | "video_descriptions" | "videos" | "upscale" | "assembly";
 
 export interface WordTimestamp {
   word: string;

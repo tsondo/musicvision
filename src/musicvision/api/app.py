@@ -113,6 +113,8 @@ class UpdateSceneRequest(BaseModel):
     image_status: Optional[ApprovalStatus] = None
     video_status: Optional[ApprovalStatus] = None
     lip_sync: Optional[bool] = None
+    treatment: Optional[str] = None
+    video_engine: Optional[str] = None
     notes: Optional[str] = None
     # LTX-2 generated audio mixing
     audio_mode: Optional[str] = None
@@ -131,7 +133,7 @@ class GenerateImagesRequest(BaseModel):
 
 class GenerateVideosRequest(BaseModel):
     scene_ids: list[str] = []
-    engine: str | None = None  # override project config engine (e.g. "hunyuan_avatar")
+    engine: str | None = None  # override project config engine (e.g. "humo", "ltx_video")
     render_mode: str = "preview"  # "preview" (256p/10steps) or "final" (512p/30steps)
 
 
@@ -141,7 +143,7 @@ class RegenerateImageRequest(BaseModel):
 
 
 class RegenerateVideoRequest(BaseModel):
-    engine: str | None = None  # "hunyuan_avatar" | "humo"
+    engine: str | None = None  # "humo" | "ltx_video"
     seed: int = -1
     render_mode: str = "preview"  # "preview" (256p/10steps) or "final" (512p/30steps)
 
@@ -197,6 +199,15 @@ async def update_style_sheet(style_sheet: StyleSheet):
     proj.config.style_sheet = style_sheet
     proj.save_config()
     return {"status": "updated"}
+
+
+@app.put("/api/projects/config/video-type")
+async def update_video_type(req: dict):
+    from musicvision.models import VideoType
+    proj = get_project()
+    proj.config.video_type = VideoType(req["video_type"])
+    proj.save_config()
+    return {"status": "updated", "video_type": proj.config.video_type.value}
 
 
 @app.get("/api/segment-markers")
@@ -480,6 +491,12 @@ async def update_scene(scene_id: str, req: UpdateSceneRequest):
         scene.video_status = req.video_status
     if req.lip_sync is not None:
         scene.lip_sync = req.lip_sync
+    if req.treatment is not None:
+        from musicvision.models import SceneTreatment
+        scene.treatment = SceneTreatment(req.treatment) if req.treatment != "" else None
+    if req.video_engine is not None:
+        from musicvision.models import VideoEngineType
+        scene.video_engine = VideoEngineType(req.video_engine)
     if req.notes is not None:
         scene.notes = req.notes
     # LTX-2 generated audio mixing fields
@@ -513,6 +530,50 @@ async def approve_all_scenes():
             scene.video_status = ApprovalStatus.APPROVED
     proj.save_scenes()
     return {"status": "approved", "count": len(proj.scenes.scenes)}
+
+
+# ---------------------------------------------------------------------------
+# Per-scene describe endpoints (LLM prompt generation, no GPU)
+# ---------------------------------------------------------------------------
+
+@app.post("/api/scenes/{scene_id}/describe-image")
+async def describe_image(scene_id: str):
+    """Generate an image prompt for a single scene via LLM."""
+    from musicvision.imaging.prompt_generator import generate_image_prompt
+
+    proj = get_project()
+    scene = proj.scenes.get_scene(scene_id)
+    if not scene:
+        raise HTTPException(status_code=404, detail=f"Scene {scene_id} not found")
+
+    import asyncio
+
+    def _run():
+        scene.image_prompt = generate_image_prompt(scene, proj.config)
+        proj.save_scenes()
+        return scene
+
+    return await asyncio.to_thread(_run)
+
+
+@app.post("/api/scenes/{scene_id}/describe-video")
+async def describe_video(scene_id: str):
+    """Generate a video motion prompt for a single scene via LLM."""
+    from musicvision.video.prompt_generator import generate_video_prompt
+
+    proj = get_project()
+    scene = proj.scenes.get_scene(scene_id)
+    if not scene:
+        raise HTTPException(status_code=404, detail=f"Scene {scene_id} not found")
+
+    import asyncio
+
+    def _run():
+        scene.video_prompt = generate_video_prompt(scene, proj.config)
+        proj.save_scenes()
+        return scene
+
+    return await asyncio.to_thread(_run)
 
 
 # ---------------------------------------------------------------------------
@@ -633,16 +694,7 @@ async def regenerate_video(scene_id: str, req: RegenerateVideoRequest) -> Scene:
     plan_subclips([scene], constraints, proj.paths.segments_dir, proj.paths.sub_segments_dir)
 
     # Apply render mode
-    if engine_type == VideoEngineType.HUNYUAN_AVATAR:
-        config = proj.config.hunyuan_avatar.model_copy()
-        if req.render_mode == "preview":
-            config.image_size = 256
-            config.infer_steps = 10
-        else:
-            config.image_size = 512
-            config.infer_steps = 30
-        engine = create_video_engine(config, engine_type=engine_type)
-    elif engine_type == VideoEngineType.LTX_VIDEO:
+    if engine_type == VideoEngineType.LTX_VIDEO:
         from musicvision.utils.gpu import detect_devices
 
         config = proj.config.ltx_video.model_copy()
@@ -894,9 +946,74 @@ async def run_intake(
     return await asyncio.to_thread(_run)
 
 
+class GenerateDescriptionsRequest(BaseModel):
+    scene_ids: list[str] = []
+
+
+@app.post("/api/pipeline/generate-descriptions")
+async def generate_descriptions(req: GenerateDescriptionsRequest):
+    """Generate image prompt descriptions for scenes via LLM (no GPU)."""
+    from musicvision.imaging.prompt_generator import (
+        generate_image_prompt,
+        generate_image_prompts_batch,
+    )
+
+    proj = get_project()
+
+    # Resolve target scenes
+    if req.scene_ids:
+        scenes = []
+        for sid in req.scene_ids:
+            scene = proj.scenes.get_scene(sid)
+            if not scene:
+                raise HTTPException(status_code=404, detail=f"Scene {sid} not found")
+            scenes.append(scene)
+    else:
+        scenes = proj.scenes.scenes
+
+    # Only scenes that still need a prompt
+    need_prompt = [s for s in scenes if not s.effective_image_prompt]
+
+    if not need_prompt:
+        return {"status": "complete", "generated": [], "failed": [], "total": 0}
+
+    import asyncio
+
+    def _run() -> dict:
+        generated: list[str] = []
+        failed: list[dict] = []
+
+        # Try batch first for coherence, fall back to individual
+        try:
+            prompts = generate_image_prompts_batch(need_prompt, proj.config)
+            for scene, prompt in zip(need_prompt, prompts):
+                scene.image_prompt = prompt
+                generated.append(scene.id)
+            proj.save_scenes()
+        except Exception as batch_exc:
+            log.warning("Batch prompt generation failed: %s — falling back to individual", batch_exc)
+            for scene in need_prompt:
+                try:
+                    scene.image_prompt = generate_image_prompt(scene, proj.config)
+                    generated.append(scene.id)
+                    proj.save_scenes()
+                except Exception as exc:
+                    log.error("Prompt generation failed for %s: %s", scene.id, exc)
+                    failed.append({"scene_id": scene.id, "error": str(exc)})
+
+        return {
+            "status": "complete",
+            "generated": generated,
+            "failed": failed,
+            "total": len(need_prompt),
+        }
+
+    return await asyncio.to_thread(_run)
+
+
 @app.post("/api/pipeline/generate-images")
 async def generate_images(req: GenerateImagesRequest):
-    """Stage 2: Generate reference images for specified scenes (or all)."""
+    """Generate reference images for scenes that have prompts."""
     from musicvision.imaging import create_engine
     from musicvision.imaging.prompt_generator import generate_image_prompt
     from musicvision.utils.gpu import detect_devices
@@ -922,7 +1039,7 @@ async def generate_images(req: GenerateImagesRequest):
     if not scenes:
         raise HTTPException(status_code=400, detail="No scenes to process")
 
-    # Generate prompts for scenes that don't have one yet
+    # Auto-generate prompts for any scenes still missing one (backward compat with CLI/per-scene regen)
     for scene in scenes:
         if not scene.effective_image_prompt:
             scene.image_prompt = generate_image_prompt(scene, proj.config)
@@ -993,6 +1110,71 @@ async def generate_images(req: GenerateImagesRequest):
         }
 
     return await asyncio.to_thread(_run_generation)
+
+
+class GenerateVideoDescriptionsRequest(BaseModel):
+    scene_ids: list[str] = []
+
+
+@app.post("/api/pipeline/generate-video-descriptions")
+async def generate_video_descriptions(req: GenerateVideoDescriptionsRequest):
+    """Generate video motion prompts for scenes via LLM (no GPU)."""
+    from musicvision.video.prompt_generator import (
+        generate_video_prompt,
+        generate_video_prompts_batch,
+    )
+
+    proj = get_project()
+
+    # Resolve target scenes
+    if req.scene_ids:
+        scenes = []
+        for sid in req.scene_ids:
+            scene = proj.scenes.get_scene(sid)
+            if not scene:
+                raise HTTPException(status_code=404, detail=f"Scene {sid} not found")
+            scenes.append(scene)
+    else:
+        scenes = proj.scenes.scenes
+
+    # Only scenes that still need a prompt
+    need_prompt = [s for s in scenes if not s.effective_video_prompt]
+
+    if not need_prompt:
+        return {"status": "complete", "generated": [], "failed": [], "total": 0}
+
+    import asyncio
+
+    def _run() -> dict:
+        generated: list[str] = []
+        failed: list[dict] = []
+
+        # Try batch first for coherence, fall back to individual
+        try:
+            prompts = generate_video_prompts_batch(need_prompt, proj.config)
+            for scene, prompt in zip(need_prompt, prompts):
+                scene.video_prompt = prompt
+                generated.append(scene.id)
+            proj.save_scenes()
+        except Exception as batch_exc:
+            log.warning("Batch video prompt generation failed: %s — falling back to individual", batch_exc)
+            for scene in need_prompt:
+                try:
+                    scene.video_prompt = generate_video_prompt(scene, proj.config)
+                    generated.append(scene.id)
+                    proj.save_scenes()
+                except Exception as exc:
+                    log.error("Video prompt generation failed for %s: %s", scene.id, exc)
+                    failed.append({"scene_id": scene.id, "error": str(exc)})
+
+        return {
+            "status": "complete",
+            "generated": generated,
+            "failed": failed,
+            "total": len(need_prompt),
+        }
+
+    return await asyncio.to_thread(_run)
 
 
 @app.post("/api/pipeline/generate-videos")
@@ -1069,16 +1251,11 @@ async def generate_videos(req: GenerateVideosRequest):
 
     # --- Pre-flight VRAM check (advisory, does not block) ---
     for engine_type, group_scenes in engine_groups.items():
+        engine_config = proj.config.ltx_video if engine_type == VideoEngineType.LTX_VIDEO else proj.config.humo
         estimated = estimate_vram_gb(
             engine_type.value,
-            image_size=getattr(
-                proj.config.hunyuan_avatar if engine_type == VideoEngineType.HUNYUAN_AVATAR else proj.config.humo,
-                "image_size", 0,
-            ),
-            cpu_offload=getattr(
-                proj.config.hunyuan_avatar if engine_type == VideoEngineType.HUNYUAN_AVATAR else proj.config.humo,
-                "cpu_offload", True,
-            ),
+            image_size=getattr(engine_config, "image_size", 0),
+            cpu_offload=getattr(engine_config, "cpu_offload", True),
         )
         if estimated > 0:
             try:
@@ -1089,11 +1266,6 @@ async def generate_videos(req: GenerateVideosRequest):
                 available_gb = None
 
             if available_gb is not None and estimated + 2.0 > available_gb:
-                engine_config = (
-                    proj.config.hunyuan_avatar
-                    if engine_type == VideoEngineType.HUNYUAN_AVATAR
-                    else proj.config.humo
-                )
                 warning = {
                     "engine": engine_type.value,
                     "estimated_gb": estimated,
@@ -1110,14 +1282,10 @@ async def generate_videos(req: GenerateVideosRequest):
     # --- Apply render mode to engine configs (ephemeral, not saved to disk) ---
     render_mode = req.render_mode
     if render_mode == "preview":
-        proj.config.hunyuan_avatar.image_size = 256
-        proj.config.hunyuan_avatar.infer_steps = 10
         proj.config.ltx_video.width = 480
         proj.config.ltx_video.height = 320
         proj.config.ltx_video.num_inference_steps = 20
     else:  # "final"
-        proj.config.hunyuan_avatar.image_size = 512
-        proj.config.hunyuan_avatar.infer_steps = 30
         proj.config.ltx_video.width = 768
         proj.config.ltx_video.height = 512
         proj.config.ltx_video.num_inference_steps = 40
@@ -1134,9 +1302,7 @@ async def generate_videos(req: GenerateVideosRequest):
             constraints = get_constraints(engine_type.value)
             plan_subclips(group_scenes, constraints, proj.paths.segments_dir, proj.paths.sub_segments_dir)
 
-            if engine_type == VideoEngineType.HUNYUAN_AVATAR:
-                engine = create_video_engine(proj.config.hunyuan_avatar, engine_type=engine_type)
-            elif engine_type == VideoEngineType.LTX_VIDEO:
+            if engine_type == VideoEngineType.LTX_VIDEO:
                 from musicvision.utils.gpu import detect_devices
                 device_map = detect_devices()
                 engine = create_video_engine(proj.config.ltx_video, device_map=device_map, engine_type=engine_type)
@@ -1151,11 +1317,7 @@ async def generate_videos(req: GenerateVideosRequest):
             try:
                 for scene in group_scenes:
                     if consecutive_ooms >= 2:
-                        engine_config = (
-                            proj.config.hunyuan_avatar
-                            if engine_type == VideoEngineType.HUNYUAN_AVATAR
-                            else proj.config.humo
-                        )
+                        engine_config = proj.config.ltx_video if engine_type == VideoEngineType.LTX_VIDEO else proj.config.humo
                         log.warning(
                             "Skipping %s — %d consecutive OOMs, remaining scenes in "
                             "%s group will also fail",
@@ -1181,9 +1343,7 @@ async def generate_videos(req: GenerateVideosRequest):
                             scene_seed = random.randint(0, 2**31 - 1)
                             scene.video_seed = scene_seed
 
-                        if engine_type == VideoEngineType.HUNYUAN_AVATAR:
-                            proj.config.hunyuan_avatar.seed = scene_seed
-                        elif engine_type == VideoEngineType.LTX_VIDEO:
+                        if engine_type == VideoEngineType.LTX_VIDEO:
                             proj.config.ltx_video.seed = scene_seed
                         else:
                             proj.config.humo.seed = scene_seed
@@ -1259,11 +1419,7 @@ async def generate_videos(req: GenerateVideosRequest):
                     except Exception as exc:
                         if is_oom_error(exc):
                             consecutive_ooms += 1
-                            engine_config = (
-                                proj.config.hunyuan_avatar
-                                if engine_type == VideoEngineType.HUNYUAN_AVATAR
-                                else proj.config.humo
-                            )
+                            engine_config = proj.config.ltx_video if engine_type == VideoEngineType.LTX_VIDEO else proj.config.humo
                             log.error(
                                 "OOM on %s (%d consecutive): %s", scene.id, consecutive_ooms, exc,
                             )

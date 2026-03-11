@@ -230,12 +230,12 @@ class TestValidateAndAdjustScenes:
         assert _validate_and_adjust_scenes([], 10.0, constraints) == []
 
     def test_single_scene_covering_song(self):
-        constraints = get_constraints("hunyuan_avatar")
+        constraints = get_constraints("humo")
         scenes = [Scene(id="scene_001", order=1, time_start=0.0, time_end=10.0)]
         result = _validate_and_adjust_scenes(scenes, 10.0, constraints)
         assert result[0].total_frames == 250
-        # 250 frames with max=129, min=33 → 2 clips
-        assert len(result[0].subclip_frame_counts) == 2
+        # 250 frames with max=97, min=25 → 3 clips
+        assert len(result[0].subclip_frame_counts) == 3
         assert sum(result[0].subclip_frame_counts) == 250
 
     def test_with_engine_constraints_simple_segmenter(self):
