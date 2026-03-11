@@ -75,6 +75,14 @@ def segment_scenes(
 
     client: LLMClient = get_client(llm_config)
 
+    # Set a reasonable output budget if not already configured.
+    # Each scene is ~80-100 tokens of JSON. For a 3-min song with ~30 scenes
+    # that's ~3k tokens. 2048 is a good per-pass budget that leaves room for
+    # the prompt in small context windows (3.4k on vLLM).
+    if not client.config.max_tokens:
+        from dataclasses import replace as _dc_replace
+        client.config = _dc_replace(client.config, max_tokens=2048)
+
     # Build system prompt — optionally enrich with engine constraints
     system_prompt = SEGMENTATION_SYSTEM_PROMPT
     if engine_constraints:
