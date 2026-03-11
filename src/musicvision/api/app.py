@@ -208,7 +208,7 @@ async def get_segment_markers():
         return _json.loads(path.read_text())
 
     # No marker file — derive from existing scenes if available
-    scene_list = proj.load_scenes()
+    scene_list = proj.scenes
     if scene_list and scene_list.scenes:
         scenes = sorted(scene_list.scenes, key=lambda s: s.time_start)
         # Markers are the boundaries between scenes (exclude song start/end)
