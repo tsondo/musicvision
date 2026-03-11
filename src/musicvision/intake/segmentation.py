@@ -122,82 +122,120 @@ def segment_scenes(
     if engine_constraints:
         system_prompt += _engine_constraint_prompt(engine_constraints)
 
-    # Build the user message — always use Whisper word timestamps as the
-    # canonical lyrics source (AceStep text may not match what was actually sung).
-    user_message = f"""Song duration: {song_duration:.1f} seconds
+    # Iterative segmentation: call the LLM for the full song, then re-submit
+    # any uncovered tail (from truncated output) until the song is fully covered.
+    # Falls back to rule-based for the final tail if retries are exhausted.
+    MAX_LLM_PASSES = 5
+    scenes: list[Scene] = []
+    covered_end = 0.0
+
+    for pass_num in range(MAX_LLM_PASSES):
+        # Words for this pass (only the uncovered portion)
+        pass_words = [
+            w for w in lyrics_with_timestamps
+            if (w.start + w.end) / 2 >= covered_end
+        ]
+        pass_duration = song_duration - covered_end
+
+        if pass_duration < 1.0:
+            break
+
+        # Determine starting scene number for this pass
+        start_order = len(scenes) + 1
+
+        user_message = f"""Song duration: {pass_duration:.1f} seconds
+Song starts at: {covered_end:.1f}s (absolute position in full song)
 BPM: {bpm or 'unknown'}
 Min scene duration: {min_scene_seconds}s
 Max scene duration: {max_scene_seconds}s
+Start numbering scenes at: {start_order}
 """
 
-    lyrics_text = _format_lyrics_for_llm(lyrics_with_timestamps)
-    user_message += f"\nLyrics with timestamps:\n{lyrics_text}\n"
+        lyrics_text = _format_lyrics_for_llm(pass_words)
+        user_message += f"\nLyrics with timestamps:\n{lyrics_text}\n"
 
-    # Pass AceStep section markers as structural hints (not as lyrics source)
-    if acestep_lyrics:
-        section_markers = _extract_section_markers(acestep_lyrics)
-        if section_markers:
-            user_message += f"\nSection structure hints (from metadata, for boundary guidance only):\n{section_markers}\n"
+        # Pass AceStep section markers as structural hints (first pass only)
+        if pass_num == 0 and acestep_lyrics:
+            section_markers = _extract_section_markers(acestep_lyrics)
+            if section_markers:
+                user_message += f"\nSection structure hints (from metadata, for boundary guidance only):\n{section_markers}\n"
 
-    user_message += "\nPlease segment this song into scenes for a music video."
+        user_message += "\nPlease segment this song into scenes for a music video."
 
-    if beat_times:
-        # Include a sparse subset of beat times (every 4th beat) to save tokens
-        sparse_beats = beat_times[::4][:20]
-        beat_str = ", ".join(f"{t:.1f}" for t in sparse_beats)
-        user_message += f"\n\nBeat timestamps (sample): [{beat_str}]"
+        if beat_times:
+            # Include beats relevant to this pass
+            pass_beats = [t for t in beat_times if t >= covered_end]
+            sparse_beats = pass_beats[::4][:20]
+            if sparse_beats:
+                beat_str = ", ".join(f"{t:.1f}" for t in sparse_beats)
+                user_message += f"\n\nBeat timestamps (sample): [{beat_str}]"
 
-    # AceStep caption adds genre/mood context
-    if acestep_caption:
-        user_message += f"\n\nSong description (genre/mood/instrumentation):\n{acestep_caption}"
+        # AceStep caption adds genre/mood context (first pass only)
+        if pass_num == 0 and acestep_caption:
+            user_message += f"\n\nSong description (genre/mood/instrumentation):\n{acestep_caption}"
 
-    log.info("Calling LLM for scene segmentation...")
-
-    response_text = client.chat(system_prompt, user_message)
-
-    # Handle potential markdown code blocks
-    if response_text.startswith("```"):
-        response_text = response_text.split("```")[1]
-        if response_text.startswith("json"):
-            response_text = response_text[4:]
-        response_text = response_text.strip()
-
-    try:
-        scene_dicts = json.loads(response_text, strict=False)
-    except json.JSONDecodeError as e:
-        log.warning("JSON parse failed (%s), attempting truncated JSON recovery...", e)
-        scene_dicts = _recover_truncated_json(response_text)
-        if not scene_dicts:
-            log.error("Could not recover any scenes from LLM response")
-            log.error("Response was: %s", response_text[:500])
-            raise ValueError(f"LLM returned invalid JSON: {e}")
-
-    # Convert to Scene objects — populate lyrics from word timestamps (ground truth)
-    scenes = []
-    for sd in scene_dicts:
-        t_start = float(sd["time_start"])
-        t_end = float(sd["time_end"])
-        scene = Scene(
-            id=sd["id"],
-            order=sd["order"],
-            time_start=t_start,
-            time_end=t_end,
-            type=SceneType(sd.get("type", "vocal")),
-            lyrics=_lyrics_from_words(lyrics_with_timestamps, t_start, t_end),
-            section=sd.get("section", ""),
+        log.info(
+            "LLM segmentation pass %d: %.1fs–%.1fs (%.1fs remaining)",
+            pass_num + 1, covered_end, song_duration, pass_duration,
         )
-        scenes.append(scene)
 
-    # If LLM output was truncated, fill the uncovered remainder with rule-based scenes
+        try:
+            response_text = client.chat(system_prompt, user_message)
+        except Exception as exc:
+            log.error("LLM call failed on pass %d: %s", pass_num + 1, exc)
+            break
+
+        # Handle potential markdown code blocks
+        if response_text.startswith("```"):
+            response_text = response_text.split("```")[1]
+            if response_text.startswith("json"):
+                response_text = response_text[4:]
+            response_text = response_text.strip()
+
+        try:
+            scene_dicts = json.loads(response_text, strict=False)
+        except json.JSONDecodeError as e:
+            log.warning("JSON parse failed (%s), attempting truncated JSON recovery...", e)
+            scene_dicts = _recover_truncated_json(response_text)
+            if not scene_dicts:
+                log.error("Could not recover any scenes from LLM response on pass %d", pass_num + 1)
+                break
+
+        if not scene_dicts:
+            break
+
+        # Convert to Scene objects
+        for sd in scene_dicts:
+            t_start = float(sd["time_start"])
+            t_end = float(sd["time_end"])
+            order = len(scenes) + 1
+            scene = Scene(
+                id=f"scene_{order:03d}",
+                order=order,
+                time_start=t_start,
+                time_end=t_end,
+                type=SceneType(sd.get("type", "vocal")),
+                lyrics=_lyrics_from_words(lyrics_with_timestamps, t_start, t_end),
+                section=sd.get("section", ""),
+            )
+            scenes.append(scene)
+
+        covered_end = scenes[-1].time_end if scenes else 0.0
+        log.info("Pass %d produced %d scenes, covered to %.1fs", pass_num + 1, len(scene_dicts), covered_end)
+
+        # If we covered the song, we're done
+        if covered_end >= song_duration - 1.0:
+            break
+
+    # Final fallback: if LLM passes didn't cover everything, use rule-based
     if scenes and scenes[-1].time_end < song_duration - 1.0:
         gap_start = scenes[-1].time_end
         gap = song_duration - gap_start
         log.warning(
-            "LLM covered only %.1fs of %.1fs (%.1fs gap) — "
-            "filling remainder with rule-based segmentation",
-            gap_start, song_duration, gap,
+            "LLM covered only %.1fs of %.1fs after %d passes — "
+            "filling %.1fs remainder with rule-based segmentation",
+            gap_start, song_duration, MAX_LLM_PASSES, gap,
         )
-        # Collect words in the uncovered portion
         remaining_words = [
             WordTimestamp(word=w.word, start=w.start - gap_start, end=w.end - gap_start)
             for w in lyrics_with_timestamps
@@ -207,18 +245,18 @@ Max scene duration: {max_scene_seconds}s
             remaining_words, gap, max_scene_seconds=max_scene_seconds,
             engine_constraints=engine_constraints,
         )
-        # Re-offset and renumber the tail scenes
-        next_order = scenes[-1].order + 1
+        next_order = len(scenes) + 1
         for ts in tail.scenes:
             ts.time_start += gap_start
             ts.time_end += gap_start
             ts.order = next_order
             ts.id = f"scene_{next_order:03d}"
-            # Re-derive lyrics with original (non-shifted) word timestamps
             ts.lyrics = _lyrics_from_words(lyrics_with_timestamps, ts.time_start, ts.time_end)
             next_order += 1
         scenes.extend(tail.scenes)
         log.info("Added %d rule-based scenes for uncovered tail", len(tail.scenes))
+    elif not scenes:
+        raise ValueError("LLM segmentation produced no scenes")
 
     # Snap to beat times if available
     if beat_times:
