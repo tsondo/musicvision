@@ -601,6 +601,11 @@ export default function WaveformEditor({
         <span className="waveform-hint">
           Double-click waveform to add markers. Drag to adjust. Ctrl+scroll to zoom.
         </span>
+        {analysis.warnings && analysis.warnings.length > 0 && (
+          <span className="waveform-warning">
+            {analysis.warnings.join(" | ")}
+          </span>
+        )}
         <div className="zoom-control">
           <span className="zoom-label">{zoomLevel === 0 ? "Fit" : `${zoomLevel} px/s`}</span>
           <input

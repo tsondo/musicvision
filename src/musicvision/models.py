@@ -645,6 +645,7 @@ class AnalysisResult(BaseModel):
     word_timestamps: list[dict] = Field(default_factory=list)  # [{word, start, end}]
     vocal_path: str | None = None
     sections: list[SongSection] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class SceneBoundary(BaseModel):

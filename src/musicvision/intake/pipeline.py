@@ -82,6 +82,15 @@ def run_analyze(
         config.song.duration_seconds = duration
         log.info("Duration (detected): %.1fs", duration)
 
+    warnings: list[str] = []
+    if duration > 360:
+        msg = (
+            f"Song is {duration / 60:.1f} minutes — songs over 6 minutes will produce "
+            "many scenes and may take significantly longer to process"
+        )
+        log.warning(msg)
+        warnings.append(msg)
+
     # --- BPM ---
     if config.song.bpm:
         bpm = config.song.bpm
@@ -199,6 +208,7 @@ def run_analyze(
         word_timestamps=word_dicts,
         vocal_path=vocal_rel,
         sections=sections,
+        warnings=warnings,
     )
 
     log.info("Analysis complete: %.1fs, %d BPM, %d beats, %d words, %d sections",

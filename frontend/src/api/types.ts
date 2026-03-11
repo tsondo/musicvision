@@ -246,6 +246,7 @@ export interface AnalysisResult {
   word_timestamps: WordTimestamp[];
   vocal_path: string | null;
   sections: SongSection[];
+  warnings?: string[];
 }
 
 export interface SceneBoundary {

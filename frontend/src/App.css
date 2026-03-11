@@ -1147,6 +1147,14 @@ button:disabled {
   flex: 1;
 }
 
+.waveform-warning {
+  font-size: 11px;
+  color: #f5c542;
+  padding: 2px 8px;
+  background: rgba(245, 197, 66, 0.1);
+  border-radius: 4px;
+}
+
 /* Zoom control */
 .zoom-control {
   display: flex;
