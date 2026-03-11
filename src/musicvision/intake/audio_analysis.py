@@ -89,6 +89,99 @@ def estimate_vocal_activity(
     return regions
 
 
+def detect_sections(
+    audio_path: Path,
+    beat_times: list[float],
+    duration: float,
+    *,
+    min_section_seconds: float = 8.0,
+    max_sections: int = 12,
+) -> list[tuple[str, float]]:
+    """
+    Estimate song structure sections from audio features when no AceStep metadata
+    is available. Uses spectral analysis and energy profiling.
+
+    Returns a list of (section_label, start_time) tuples sorted by time.
+    Labels are heuristic guesses: Intro, Verse, Chorus, Bridge, Outro.
+    """
+    import librosa
+
+    y, sr = librosa.load(str(audio_path), sr=22050)
+
+    # --- Compute self-similarity via chroma features ---
+    hop_length = 512
+    chroma = librosa.feature.chroma_cqt(y=y, sr=sr, hop_length=hop_length)
+    mfcc = librosa.feature.mfcc(y=y, sr=sr, hop_length=hop_length, n_mfcc=13)
+
+    # Stack features for richer representation
+    features = np.vstack([
+        librosa.util.normalize(chroma, axis=1),
+        librosa.util.normalize(mfcc, axis=1),
+    ])
+
+    # --- Structural boundary detection ---
+    # Use checkerboard kernel novelty on the self-similarity matrix
+    try:
+        bounds = librosa.segment.agglomerative(features, max_sections)
+        bound_times = librosa.frames_to_time(bounds, sr=sr, hop_length=hop_length)
+    except Exception:
+        # Fallback: evenly spaced sections
+        n = min(max_sections, max(2, int(duration / 30)))
+        bound_times = np.linspace(0, duration, n + 1)[:-1]
+
+    # Filter out boundaries too close together
+    filtered = [0.0]
+    for t in sorted(float(t) for t in bound_times):
+        if t - filtered[-1] >= min_section_seconds and t < duration - 2.0:
+            filtered.append(t)
+
+    if len(filtered) < 2:
+        filtered = [0.0]
+
+    # --- Compute per-section energy for labeling ---
+    rms = librosa.feature.rms(y=y, hop_length=hop_length)[0]
+    rms_times = librosa.frames_to_time(np.arange(len(rms)), sr=sr, hop_length=hop_length)
+
+    section_energies: list[float] = []
+    for i, start in enumerate(filtered):
+        end = filtered[i + 1] if i + 1 < len(filtered) else duration
+        mask = (rms_times >= start) & (rms_times < end)
+        energy = float(np.mean(rms[mask])) if np.any(mask) else 0.0
+        section_energies.append(energy)
+
+    # --- Heuristic labeling ---
+    if not section_energies:
+        return [("Intro", 0.0)]
+
+    max_energy = max(section_energies) if section_energies else 1.0
+    if max_energy == 0:
+        max_energy = 1.0
+    normalized = [e / max_energy for e in section_energies]
+
+    result: list[tuple[str, float]] = []
+    verse_count = 0
+    chorus_count = 0
+
+    for i, (t, norm_e) in enumerate(zip(filtered, normalized)):
+        if i == 0 and norm_e < 0.5:
+            label = "Intro"
+        elif i == len(filtered) - 1 and norm_e < 0.5:
+            label = "Outro"
+        elif norm_e >= 0.7:
+            chorus_count += 1
+            label = f"Chorus {chorus_count}" if chorus_count > 1 else "Chorus"
+        elif norm_e >= 0.35:
+            verse_count += 1
+            label = f"Verse {verse_count}" if verse_count > 1 else "Verse"
+        else:
+            label = "Bridge"
+
+        result.append((label, round(t, 2)))
+
+    log.info("Auto-detected %d sections from audio features", len(result))
+    return result
+
+
 class VocalSeparator:
     """
     Vocal/instrumental separation using MelBandRoformer via the audio-separator library.

@@ -30,6 +30,7 @@ class VideoResult:
     frames_generated: int
     duration_seconds: float
     metadata: dict = field(default_factory=dict)
+    generated_audio_path: Path | None = None  # LTX-2 generated audio WAV
 
 
 class VideoEngine(ABC):

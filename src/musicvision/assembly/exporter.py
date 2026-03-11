@@ -91,6 +91,8 @@ def export_edl(
         # Comment lines (recognised by DaVinci Resolve for media relinking)
         lines.append(f"* FROM CLIP NAME: {clip_name}")
         lines.append(f"* SCENE: {scene.id}  TYPE: {scene.type.value}  BPM_ALIGNED: true")
+        if scene.generated_audio and scene.audio_mode != "song_only":
+            lines.append(f"* GENERATED_AUDIO: {scene.generated_audio}  MODE: {scene.audio_mode}")
         if scene.lyrics:
             # Truncate long lyrics so the comment stays on one line
             lyrics_preview = scene.lyrics[:60] + ("..." if len(scene.lyrics) > 60 else "")
@@ -162,10 +164,12 @@ def export_fcpxml(
         "height": str(height),
     })
 
-    # One asset per scene
-    asset_id_map: dict[str, str] = {}  # scene_id → asset element id
+    # One asset per scene clip + optional generated audio assets
+    asset_id_map: dict[str, str] = {}  # scene_id → video asset id
+    gen_audio_asset_map: dict[str, str] = {}  # scene_id → generated audio asset id
+    next_id = 2  # r1 is the format
 
-    for i, scene in enumerate(ordered, 2):  # r1 is the format, clips start at r2
+    for scene in ordered:
         if scene.video_clip:
             clip_path = Path(scene.video_clip)
             if not clip_path.is_absolute():
@@ -173,7 +177,8 @@ def export_fcpxml(
         else:
             clip_path = paths.clips_dir / f"{scene.id}_joined.mp4"
 
-        asset_ref = f"r{i}"
+        asset_ref = f"r{next_id}"
+        next_id += 1
         asset_id_map[scene.id] = asset_ref
 
         ET.SubElement(resources, "asset", {
@@ -184,11 +189,34 @@ def export_fcpxml(
             "start": "0s",
             "duration": _rational(scene.duration, fps),
             "hasVideo": "1",
-            "hasAudio": "0",        # HuMo clips are video-only before muxing
+            "hasAudio": "0",
             "audioSources": "0",
             "audioChannels": "0",
             "audioRate": "48000",
         })
+
+        # Generated audio asset (if scene uses it)
+        if scene.generated_audio and scene.audio_mode != "song_only":
+            ga_path = Path(scene.generated_audio)
+            if not ga_path.is_absolute():
+                ga_path = paths.root / ga_path
+            if ga_path.exists():
+                ga_ref = f"r{next_id}"
+                next_id += 1
+                gen_audio_asset_map[scene.id] = ga_ref
+                ET.SubElement(resources, "asset", {
+                    "id": ga_ref,
+                    "name": f"{scene.id}_gen_audio",
+                    "uid": _uid(ga_path),
+                    "src": ga_path.as_uri(),
+                    "start": "0s",
+                    "duration": _rational(scene.duration, fps),
+                    "hasVideo": "0",
+                    "hasAudio": "1",
+                    "audioSources": "1",
+                    "audioChannels": "2",
+                    "audioRate": "48000",
+                })
 
     # Library → Event → Project → Sequence → Spine
     library  = ET.SubElement(root, "library", {"location": paths.root.as_uri()})
@@ -204,16 +232,31 @@ def export_fcpxml(
     })
     spine = ET.SubElement(sequence, "spine")
 
-    # Place each clip on the spine
+    # Place each clip on the spine, with generated audio as attached clips
     timeline_pos = 0.0
     for scene in ordered:
-        ET.SubElement(spine, "clip", {
+        clip_attrs = {
             "name":     scene.id,
             "ref":      asset_id_map[scene.id],
             "offset":   _rational(timeline_pos, fps),
             "duration": _rational(scene.duration, fps),
             "start":    "0s",
-        })
+        }
+
+        if scene.id in gen_audio_asset_map:
+            # Create clip element with an attached audio-only clip inside
+            clip_el = ET.SubElement(spine, "clip", clip_attrs)
+            ET.SubElement(clip_el, "clip", {
+                "name": f"{scene.id}_gen_audio",
+                "ref": gen_audio_asset_map[scene.id],
+                "lane": "1",
+                "offset": _rational(timeline_pos, fps),
+                "duration": _rational(scene.duration, fps),
+                "start": "0s",
+            })
+        else:
+            ET.SubElement(spine, "clip", clip_attrs)
+
         timeline_pos += scene.duration
 
     # --- Serialize ---

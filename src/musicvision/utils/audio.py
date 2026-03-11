@@ -245,6 +245,163 @@ def generate_silence(output: Path, duration: float, sample_rate: int = 16000) ->
     return output
 
 
+def build_mixed_audio(
+    original_audio: Path,
+    scenes: list,
+    project_root: Path,
+    output: Path,
+) -> Path | None:
+    """Build a mixed audio track with per-scene generated audio overlaid on the song.
+
+    For each scene, the audio mode controls what happens:
+      - ``song_only``: original song plays through (default, no processing needed)
+      - ``generated_only``: song is silenced; generated audio plays alone
+      - ``mix``: generated audio layered over ducked song
+
+    If no scene uses generated audio, returns None (caller should use original).
+
+    The mixing is done in a single ffmpeg filter_complex call with volume
+    automation via ``if(between())`` expressions evaluated per-frame.
+
+    Args:
+        original_audio: Path to the full song file.
+        scenes: List of Scene objects (must have audio mixing fields).
+        project_root: Project root for resolving relative paths.
+        output: Where to write the mixed WAV.
+
+    Returns:
+        Path to the mixed audio file, or None if no mixing needed.
+    """
+    from musicvision.models import SceneAudioMode
+
+    # Collect scenes that need audio mixing
+    mix_scenes = []
+    for scene in scenes:
+        if scene.audio_mode == SceneAudioMode.SONG_ONLY:
+            continue
+        if not scene.generated_audio:
+            log.warning(
+                "Scene %s has audio_mode=%s but no generated_audio — treating as song_only",
+                scene.id, scene.audio_mode.value,
+            )
+            continue
+        gen_path = Path(scene.generated_audio)
+        if not gen_path.is_absolute():
+            gen_path = project_root / gen_path
+        if not gen_path.exists():
+            log.warning(
+                "Scene %s generated audio missing: %s — treating as song_only",
+                scene.id, gen_path,
+            )
+            continue
+        mix_scenes.append((scene, gen_path))
+
+    if not mix_scenes:
+        return None
+
+    _check_ffmpeg()
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    # Build ffmpeg filter_complex:
+    # Input 0 = original song
+    # Inputs 1..N = generated audio files (one per mix scene)
+    #
+    # Song volume automation: duck during mix scenes, silence during generated_only
+    # Generated audio: volume + fade in/out, placed at correct time offset
+
+    inputs = ["-i", str(original_audio)]
+    for _, gen_path in mix_scenes:
+        inputs.extend(["-i", str(gen_path)])
+
+    # --- Song volume expression ---
+    # Each scene contributes a volume factor: 1.0 outside, target_vol inside,
+    # with smooth fades at boundaries.  Factors multiply for overlap safety.
+    duck_terms = []
+    for scene, _ in mix_scenes:
+        t0 = scene.time_start
+        t1 = scene.time_end
+        target = 0.0 if scene.audio_mode == SceneAudioMode.GENERATED_ONLY else scene.song_duck_volume
+        fi = max(scene.song_duck_fade_in, 0.001)
+        fo = max(scene.song_duck_fade_out, 0.001)
+        # Fade-in region: lerp 1→target over [t0-fi, t0]
+        # Hold region: target over [t0, t1]
+        # Fade-out region: lerp target→1 over [t1, t1+fo]
+        # Outside: 1.0
+        duck_terms.append(
+            f"if(between(t,{t0:.4f},{t1:.4f}),{target:.4f},"
+            f"if(between(t,{max(0, t0-fi):.4f},{t0:.4f}),"
+            f"1-(1-{target:.4f})*(1-({t0:.4f}-t)/{fi:.4f}),"
+            f"if(between(t,{t1:.4f},{t1+fo:.4f}),"
+            f"{target:.4f}+(1-{target:.4f})*(t-{t1:.4f})/{fo:.4f},1)))"
+        )
+
+    if duck_terms:
+        song_vol_expr = "*".join(duck_terms)
+        song_filter = f"[0:a]volume='{song_vol_expr}':eval=frame[song]"
+    else:
+        song_filter = "[0:a]acopy[song]"
+
+    # --- Generated audio overlay filters ---
+    gen_filters = []
+    gen_labels = []
+    for i, (scene, _) in enumerate(mix_scenes):
+        input_idx = i + 1
+        vol = scene.generated_audio_volume
+        fade_in = scene.audio_fade_in
+        fade_out = scene.audio_fade_out
+        duration = scene.time_end - scene.time_start
+
+        # Apply volume + fades to generated audio
+        af_parts = [f"volume={vol:.4f}"]
+        if fade_in > 0:
+            af_parts.append(f"afade=t=in:d={fade_in:.4f}")
+        if fade_out > 0:
+            af_parts.append(f"afade=t=out:st={max(0, duration - fade_out):.4f}:d={fade_out:.4f}")
+
+        label = f"gen{i}"
+        gen_filters.append(
+            f"[{input_idx}:a]{','.join(af_parts)},"
+            f"adelay={int(scene.time_start * 1000)}|{int(scene.time_start * 1000)},"
+            f"apad=whole_dur=0[{label}]"
+        )
+        gen_labels.append(f"[{label}]")
+
+    # --- Amerge: overlay all generated audio onto the ducked song ---
+    filter_parts = [song_filter] + gen_filters
+
+    if gen_labels:
+        # amix all streams together
+        all_labels = "[song]" + "".join(gen_labels)
+        n_inputs = 1 + len(gen_labels)
+        filter_parts.append(
+            f"{all_labels}amix=inputs={n_inputs}:duration=first:dropout_transition=0[out]"
+        )
+    else:
+        filter_parts.append("[song]acopy[out]")
+
+    filter_complex = ";".join(filter_parts)
+
+    cmd = [
+        "ffmpeg", "-y",
+        *inputs,
+        "-filter_complex", filter_complex,
+        "-map", "[out]",
+        "-c:a", "pcm_s16le",
+        str(output),
+    ]
+
+    log.info("Building mixed audio with %d generated audio overlay(s)", len(mix_scenes))
+    log.debug("ffmpeg filter_complex: %s", filter_complex)
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        log.error("ffmpeg mixed audio failed:\n%s", result.stderr)
+        raise RuntimeError(f"ffmpeg mixed audio failed: {result.stderr[-500:]}")
+
+    log.info("Mixed audio saved: %s", output)
+    return output
+
+
 def convert_to_wav(source: Path, output: Path, sample_rate: int = 16000) -> Path:
     """Convert any audio format to WAV (mono, 16-bit PCM). Used for Whisper input."""
     _check_ffmpeg()

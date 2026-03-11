@@ -7,7 +7,7 @@ from a reference image, text prompt, and optional audio conditioning.
 For MusicVision we:
   - Use LTX2ImageToVideoPipeline (image + text → video + audio)
   - Optionally encode scene audio via audio_vae for motion sync
-  - Discard generated audio — assembly muxes the original song
+  - Decode and save generated audio as .gen_audio.wav alongside the video
   - Save video frames as silent MP4 via ffmpeg raw pipe
 
 Lifecycle:
@@ -219,8 +219,13 @@ class LtxVideoEngine(VideoEngine):
             return_dict=False,
         )
 
-        # Pipeline returns (video_latents, audio_latents) — decode video only
-        video_latents = result[0] if isinstance(result, (tuple, list)) else result
+        # Pipeline returns (video_latents, audio_latents)
+        if isinstance(result, (tuple, list)) and len(result) > 1:
+            video_latents = result[0]
+            raw_audio_latents = result[1]
+        else:
+            video_latents = result[0] if isinstance(result, (tuple, list)) else result
+            raw_audio_latents = None
 
         # Decode video on secondary GPU to avoid OOM on primary
         # Remove offload hooks so they don't pull VAE back to cuda:0
@@ -262,11 +267,22 @@ class LtxVideoEngine(VideoEngine):
         duration = num_frames / self.config.fps
         log.info("LTX-2 clip saved: %s (%.2fs, %d frames)", input.output_path.name, duration, num_frames)
 
+        # Decode and save generated audio
+        generated_audio_path = None
+        if raw_audio_latents is not None and hasattr(self._pipe, "audio_vae"):
+            try:
+                generated_audio_path = self._decode_and_save_audio(
+                    raw_audio_latents, input.output_path,
+                )
+            except Exception:
+                log.warning("Audio decode failed — clip saved without generated audio", exc_info=True)
+
         return VideoResult(
             video_path=input.output_path,
             frames_generated=num_frames,
             duration_seconds=duration,
             metadata={"engine": "ltx_video", "seed": self.config.seed},
+            generated_audio_path=generated_audio_path,
         )
 
     def _encode_audio(self, audio_path: Path, num_frames: int):
@@ -304,6 +320,47 @@ class LtxVideoEngine(VideoEngine):
             latents = audio_vae.encode(waveform.unsqueeze(0)).latent_dist.sample()
 
         return latents
+
+    def _decode_and_save_audio(self, audio_latents, video_path: Path) -> Path | None:
+        """Decode audio latents via audio_vae and save as WAV alongside the video."""
+        import torch
+        import torchaudio
+
+        audio_vae = self._pipe.audio_vae
+        vae_device = self.device_map.encoder_device
+
+        from accelerate.hooks import remove_hook_from_module
+        remove_hook_from_module(audio_vae, recurse=True)
+        audio_vae.to(vae_device)
+
+        audio_latents = audio_latents.to(device=vae_device, dtype=audio_vae.dtype)
+
+        with torch.no_grad():
+            if hasattr(audio_vae, "decode"):
+                waveform = audio_vae.decode(audio_latents).sample
+            elif hasattr(self._pipe, "_decode_audio"):
+                waveform = self._pipe._decode_audio(audio_latents)
+            else:
+                log.warning("No audio decode method found on audio_vae or pipeline")
+                audio_vae.to("cpu")
+                return None
+
+        # waveform shape: (batch, channels, samples) or (channels, samples)
+        if waveform.dim() == 3:
+            waveform = waveform[0]
+
+        waveform = waveform.clamp(-1, 1).cpu()
+        audio_vae.to("cpu")
+        torch.cuda.empty_cache()
+
+        # Save as WAV — .gen_audio.wav suffix
+        audio_path = video_path.with_suffix(".gen_audio.wav")
+        sample_rate = 16000  # LTX-2 audio VAE native rate
+
+        torchaudio.save(str(audio_path), waveform, sample_rate)
+        log.info("Generated audio saved: %s (%.2fs)", audio_path.name, waveform.shape[-1] / sample_rate)
+
+        return audio_path
 
     def unload(self) -> None:
         """Free pipeline and VRAM."""

@@ -15,7 +15,7 @@ import logging
 import re
 from pathlib import Path
 
-from musicvision.intake.audio_analysis import create_separator, detect_bpm, get_beat_times
+from musicvision.intake.audio_analysis import create_separator, detect_bpm, detect_sections, get_beat_times
 from musicvision.intake.segmentation import segment_scenes, segment_scenes_simple
 from musicvision.intake.transcription import (
     TranscriptionResult,
@@ -159,12 +159,23 @@ def run_analyze(
         config.song.lyrics_file = "input/lyrics_whisper.txt"
         log.info("Saved Whisper transcription to %s", lyrics_out.name)
 
-    # --- Parse AceStep sections ---
+    # --- Parse AceStep sections or auto-detect from audio ---
     sections: list[SongSection] = []
     if has_acestep and config.song.acestep.lyrics:
         sections = parse_acestep_sections(config.song.acestep.lyrics, words, duration)
         config.song.sections = sections
+        config.song.sections_source = "acestep"
         log.info("Parsed %d AceStep sections", len(sections))
+    else:
+        # No AceStep metadata — auto-detect sections from audio features
+        try:
+            detected = detect_sections(audio_path, beat_times, duration)
+            sections = [SongSection(name=name, time=t) for name, t in detected]
+            config.song.sections = sections
+            config.song.sections_source = "auto"
+            log.info("Auto-detected %d sections from audio (no AceStep metadata)", len(sections))
+        except Exception:
+            log.warning("Section auto-detection failed; continuing without sections", exc_info=True)
 
     # --- Save word timestamps to disk ---
     word_dicts = [{"word": w.word, "start": w.start, "end": w.end} for w in words]

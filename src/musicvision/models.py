@@ -130,6 +130,13 @@ class VideoEngineType(str, Enum):
     LTX_VIDEO       = "ltx_video"
 
 
+class SceneAudioMode(str, Enum):
+    """Per-scene audio mixing mode for LTX-2 generated audio."""
+    SONG_ONLY      = "song_only"        # Default: original song, no generated audio
+    GENERATED_ONLY = "generated_only"   # Only LTX-2 audio (song silent for this scene)
+    MIX            = "mix"              # Generated audio layered over ducked song
+
+
 class UpscalerType(str, Enum):
     """Selectable video upscaler backend."""
     LTX_SPATIAL  = "ltx_spatial"     # Latent-space upsampler, LTX-2 output only
@@ -352,6 +359,7 @@ class SongInfo(BaseModel):
     acestep: Optional[AceStepMeta] = None  # populated if AceStep JSON was found
     beat_times: list[float] = Field(default_factory=list)
     sections: list[SongSection] = Field(default_factory=list)
+    sections_source: str = ""  # "acestep" or "auto" — empty means not yet set
     analyzed: bool = False  # True after Phase 1 (BPM, Whisper, demucs) completes
 
 
@@ -539,6 +547,16 @@ class Scene(BaseModel):
     video_seed: Optional[int] = None                # seed used for last generation (locked when approved)
     lip_sync: Optional[bool] = None  # None → auto (True for vocal, False for instrumental)
     # TODO: per-scene face mask for multi-person lip sync targeting
+
+    # LTX-2 generated audio mixing
+    generated_audio: Optional[str] = None                          # path to .gen_audio.wav
+    audio_mode: SceneAudioMode = SceneAudioMode.SONG_ONLY
+    generated_audio_volume: float = 0.8       # 0.0–1.0, gen audio loudness
+    song_duck_volume: float = 0.3             # 0.0–1.0, song volume when ducking
+    audio_fade_in: float = 0.15              # seconds, gen audio fade in
+    audio_fade_out: float = 0.15             # seconds, gen audio fade out
+    song_duck_fade_in: float = 0.3           # seconds, song duck ramp down
+    song_duck_fade_out: float = 0.3          # seconds, song duck ramp up
 
     # Sub-clips for long scenes
     sub_clips: list[SubClip] = Field(default_factory=list)

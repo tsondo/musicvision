@@ -274,4 +274,55 @@ class TestSongInfoFields:
         song = SongInfo()
         assert song.beat_times == []
         assert song.sections == []
+        assert song.sections_source == ""
         assert song.analyzed is False
+
+    def test_sections_source_roundtrip(self, tmp_path):
+        from musicvision.models import ProjectConfig
+
+        config = ProjectConfig(
+            song={"audio_file": "test.wav",
+                  "sections": [{"name": "Verse", "time": 0.0}],
+                  "sections_source": "auto"},
+        )
+        path = tmp_path / "project.yaml"
+        config.save(path)
+        loaded = ProjectConfig.load(path)
+        assert loaded.song.sections_source == "auto"
+        assert len(loaded.song.sections) == 1
+
+
+class TestDetectSections:
+    """Test auto section detection from audio features."""
+
+    def test_detect_sections_returns_list(self, tmp_path):
+        """detect_sections returns labeled sections for a simple audio file."""
+        import numpy as np
+        import soundfile as sf
+
+        from musicvision.intake.audio_analysis import detect_sections
+
+        # Create a 30-second synthetic audio with energy variation
+        sr = 22050
+        duration = 30.0
+        t = np.linspace(0, duration, int(sr * duration))
+        # Low energy intro, high energy middle, low energy ending
+        envelope = np.concatenate([
+            np.linspace(0.1, 0.3, int(sr * 10)),
+            np.linspace(0.8, 0.9, int(sr * 10)),
+            np.linspace(0.3, 0.1, int(sr * 10)),
+        ])
+        audio = np.sin(2 * np.pi * 440 * t) * envelope
+
+        audio_path = tmp_path / "test.wav"
+        sf.write(str(audio_path), audio, sr)
+
+        beats = [float(i) for i in range(1, 30)]
+        sections = detect_sections(audio_path, beats, duration, min_section_seconds=5.0)
+
+        assert len(sections) >= 1
+        assert sections[0][1] == 0.0  # first section starts at 0
+        for name, time in sections:
+            assert isinstance(name, str)
+            assert isinstance(time, float)
+            assert 0.0 <= time < duration

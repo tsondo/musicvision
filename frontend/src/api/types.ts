@@ -4,6 +4,7 @@ export type SceneType = "vocal" | "instrumental";
 export type ApprovalStatus = "pending" | "approved" | "rejected";
 export type VideoEngineType = "humo" | "hunyuan_avatar" | "ltx_video";
 export type UpscalerType = "ltx_spatial" | "seedvr2" | "real_esrgan" | "none";
+export type SceneAudioMode = "song_only" | "generated_only" | "mix";
 export type TargetResolution = "720p" | "1080p" | "1440p" | "4k";
 
 export interface SubClip {
@@ -53,6 +54,16 @@ export interface Scene {
   video_seed: number | null;
   lip_sync: boolean | null;
 
+  // LTX-2 generated audio mixing
+  generated_audio: string | null;
+  audio_mode: SceneAudioMode;
+  generated_audio_volume: number;
+  song_duck_volume: number;
+  audio_fade_in: number;
+  audio_fade_out: number;
+  song_duck_fade_in: number;
+  song_duck_fade_out: number;
+
   sub_clips: SubClip[];
 
   characters: string[];
@@ -92,6 +103,14 @@ export interface UpdateSceneRequest {
   video_status?: ApprovalStatus;
   lip_sync?: boolean;
   notes?: string;
+  // LTX-2 generated audio mixing
+  audio_mode?: SceneAudioMode;
+  generated_audio_volume?: number;
+  song_duck_volume?: number;
+  audio_fade_in?: number;
+  audio_fade_out?: number;
+  song_duck_fade_in?: number;
+  song_duck_fade_out?: number;
 }
 
 export type ImageModelType =

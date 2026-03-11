@@ -113,6 +113,14 @@ class UpdateSceneRequest(BaseModel):
     video_status: Optional[ApprovalStatus] = None
     lip_sync: Optional[bool] = None
     notes: Optional[str] = None
+    # LTX-2 generated audio mixing
+    audio_mode: Optional[str] = None
+    generated_audio_volume: Optional[float] = None
+    song_duck_volume: Optional[float] = None
+    audio_fade_in: Optional[float] = None
+    audio_fade_out: Optional[float] = None
+    song_duck_fade_in: Optional[float] = None
+    song_duck_fade_out: Optional[float] = None
 
 
 class GenerateImagesRequest(BaseModel):
@@ -160,6 +168,13 @@ async def open_project(req: OpenProjectRequest):
         raise HTTPException(status_code=404, detail=str(e))
     mount_project_files(project_dir)
     return {"status": "opened", "name": _project.config.name, "directory": req.directory}
+
+
+@app.post("/api/projects/close")
+async def close_project():
+    global _project
+    _project = None
+    return {"status": "closed"}
 
 
 @app.get("/api/projects/config")
@@ -388,6 +403,22 @@ async def update_scene(scene_id: str, req: UpdateSceneRequest):
         scene.lip_sync = req.lip_sync
     if req.notes is not None:
         scene.notes = req.notes
+    # LTX-2 generated audio mixing fields
+    if req.audio_mode is not None:
+        from musicvision.models import SceneAudioMode
+        scene.audio_mode = SceneAudioMode(req.audio_mode)
+    if req.generated_audio_volume is not None:
+        scene.generated_audio_volume = max(0.0, min(1.0, req.generated_audio_volume))
+    if req.song_duck_volume is not None:
+        scene.song_duck_volume = max(0.0, min(1.0, req.song_duck_volume))
+    if req.audio_fade_in is not None:
+        scene.audio_fade_in = max(0.0, min(2.0, req.audio_fade_in))
+    if req.audio_fade_out is not None:
+        scene.audio_fade_out = max(0.0, min(2.0, req.audio_fade_out))
+    if req.song_duck_fade_in is not None:
+        scene.song_duck_fade_in = max(0.0, min(2.0, req.song_duck_fade_in))
+    if req.song_duck_fade_out is not None:
+        scene.song_duck_fade_out = max(0.0, min(2.0, req.song_duck_fade_out))
 
     proj.save_scenes()
     return scene
@@ -616,6 +647,21 @@ async def regenerate_video(scene_id: str, req: RegenerateVideoRequest) -> Scene:
             else:
                 scene.video_clip = f"clips/{scene.id}.mp4"
                 scene.sub_clips = []
+
+            # Persist LTX-2 generated audio path (single-clip only —
+            # scenes with sub-clips don't support generated audio mixing)
+            if len(results) == 1 and results[0].generated_audio_path:
+                gap = results[0].generated_audio_path
+                scene.generated_audio = str(gap.relative_to(proj.paths.root))
+                log.info("Generated audio persisted: %s", scene.generated_audio)
+            elif len(results) > 1 and any(r.generated_audio_path for r in results):
+                log.info(
+                    "Scene %s split into %d sub-clips — generated audio not supported, using song only",
+                    scene.id, len(results),
+                )
+                scene.generated_audio = None
+                from musicvision.models import SceneAudioMode
+                scene.audio_mode = SceneAudioMode.SONG_ONLY
 
             scene.video_status = ApprovalStatus.PENDING
             from musicvision.utils.video import update_scene_resolution
@@ -1092,8 +1138,22 @@ async def generate_videos(req: GenerateVideosRequest):
                             joined = proj.paths.clips_dir / f"{scene.id}_joined.mp4"
                             concat_videos(sub_paths, joined)
                             scene.video_clip = str(joined.relative_to(proj.paths.root))
+                            # Multi-sub-clip scenes cannot use generated audio
+                            if any(r.generated_audio_path for r in results):
+                                from musicvision.models import SceneAudioMode
+                                log.info(
+                                    "Scene %s split into %d sub-clips — forcing song_only audio mode",
+                                    scene.id, len(results),
+                                )
+                                scene.generated_audio = None
+                                scene.audio_mode = SceneAudioMode.SONG_ONLY
                         else:
                             scene.video_clip = f"clips/{scene.id}.mp4"
+                            # Persist generated audio for single-clip LTX-2 scenes
+                            if results[0].generated_audio_path:
+                                gap = results[0].generated_audio_path
+                                scene.generated_audio = str(gap.relative_to(proj.paths.root))
+                                log.info("Generated audio persisted: %s", scene.generated_audio)
 
                         from musicvision.utils.video import update_scene_resolution
                         update_scene_resolution(scene, proj.paths.root)

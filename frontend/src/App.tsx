@@ -1,8 +1,7 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useProject } from "./hooks/useProject";
 import { useScenes } from "./hooks/useScenes";
 import { usePipeline } from "./hooks/usePipeline";
-import { fileUrl } from "./api/client";
 import ProjectOpener from "./components/ProjectOpener";
 import ProjectHeader from "./components/ProjectHeader";
 import PipelineBar from "./components/PipelineBar";
@@ -37,11 +36,27 @@ export default function App() {
   );
 
   const [showWaveformEditor, setShowWaveformEditor] = useState(false);
+  const [suggestedMarkers, setSuggestedMarkers] = useState<number[] | null>(null);
 
   // Auto-show waveform editor when we're at the "scenes" stage and no scenes exist
   const waveformVisible =
     showWaveformEditor ||
     (pipeline.stage === "scenes" && pipeline.analyzed && pipeline.sceneCount === 0);
+
+  // Auto-open waveform editor after analysis completes
+  useEffect(() => {
+    if (pipeline.analyzeStatus === "done" && pipeline.analysisResult) {
+      setShowWaveformEditor(true);
+    }
+  }, [pipeline.analyzeStatus, pipeline.analysisResult]);
+
+  // Extract markers from scenes after auto-segment populates them
+  useEffect(() => {
+    if (pipeline.scenesStatus === "done" && waveformVisible && scenes.length > 0) {
+      const markers = scenes.slice(0, -1).map((s) => s.time_end);
+      setSuggestedMarkers(markers);
+    }
+  }, [pipeline.scenesStatus, waveformVisible, scenes]);
 
   if (state.status === "loading" || (projectLoaded && loading)) {
     return <div className="loading">Loading...</div>;
@@ -91,6 +106,7 @@ export default function App() {
         onUploadAudio={pipeline.uploadAudio}
         onUploadLyrics={pipeline.uploadLyrics}
         onImportAudio={pipeline.importAudio}
+        importMessage={pipeline.importMessage}
         onImportLyrics={pipeline.importLyrics}
         onRunAnalyze={pipeline.runAnalyze}
         onRunIntake={pipeline.runIntake}
@@ -115,8 +131,9 @@ export default function App() {
           }}
           onAutoSegment={(useLlm) => {
             pipeline.runAutoSegment(useLlm);
-            setShowWaveformEditor(false);
           }}
+          videoEngine={state.config.video_engine}
+          suggestedMarkers={suggestedMarkers}
           isRunning={pipeline.isRunning}
         />
       )}

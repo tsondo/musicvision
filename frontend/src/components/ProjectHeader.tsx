@@ -16,9 +16,12 @@ function formatDuration(seconds: number | null): string {
 
 const STAGE_LABELS: Record<PipelineStage, string> = {
   upload: "Upload",
-  intake: "Intake",
+  analyze: "Analyze",
+  scenes: "Scenes",
   images: "Images",
   videos: "Videos",
+  upscale: "Upscale",
+  assembly: "Assembly",
 };
 
 export default function ProjectHeader({ config, scenes, stage, onClose }: Props) {

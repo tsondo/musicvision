@@ -117,7 +117,7 @@ export function useScenes(projectLoaded: boolean) {
 
     const processNext = async () => {
       processingRef.current = true;
-      const item = queue[0];
+      const item = queue[0]!;
       const key = genKey(item.sceneId, item.kind);
 
       // Move from queued to running

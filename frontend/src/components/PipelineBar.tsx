@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import type { StepStatus } from "../hooks/usePipeline";
-import type { AssembleResult, ImageModelType, PipelineStage, RenderMode, SceneBoundary, TargetResolution, VideoEngineType } from "../api/types";
+import type { AssembleResult, ImageModelType, PipelineStage, RenderMode, TargetResolution, VideoEngineType } from "../api/types";
 import FileBrowser from "./FileBrowser";
 
 function progressStyle(done: number, total: number): React.CSSProperties {
@@ -41,6 +41,7 @@ interface Props {
   onUploadAudio: (file: File) => void;
   onUploadLyrics: (file: File) => void;
   onImportAudio: (path: string) => void;
+  importMessage: string | null;
   onImportLyrics: (path: string) => void;
   onRunAnalyze: (opts?: { skipTranscription?: boolean }) => void;
   onRunIntake: (opts?: { useLlm?: boolean; skipTranscription?: boolean }) => void;
@@ -100,9 +101,10 @@ export default function PipelineBar({
   onUploadAudio,
   onUploadLyrics,
   onImportAudio,
+  importMessage,
   onImportLyrics,
   onRunAnalyze,
-  onRunIntake,
+  onRunIntake: _onRunIntake,
   onToggleWaveformEditor,
   showWaveformEditor,
   onGenerateImages,
@@ -195,6 +197,9 @@ export default function PipelineBar({
           >
             {hasLyrics ? "Replace Lyrics" : "Lyrics"}
           </button>
+          {importMessage && (
+            <span className="import-message">{importMessage}</span>
+          )}
         </div>
       </div>
 

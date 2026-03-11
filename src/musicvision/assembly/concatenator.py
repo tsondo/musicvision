@@ -11,7 +11,7 @@ import logging
 from pathlib import Path
 
 from musicvision.models import ApprovalStatus, Scene, SceneList
-from musicvision.utils.audio import concat_videos, get_duration, mux_video_audio
+from musicvision.utils.audio import build_mixed_audio, concat_videos, get_duration, mux_video_audio
 from musicvision.utils.paths import ProjectPaths
 
 log = logging.getLogger(__name__)
@@ -105,12 +105,23 @@ def assemble_rough_cut(
     except Exception as exc:
         log.debug("Could not verify sync: %s", exc)
 
-    output = paths.output_dir / "rough_cut.mp4"
-    mux_video_audio(silent_cut, original_audio, output)
+    # Build mixed audio if any scene uses generated audio overlay
+    mixed_audio = build_mixed_audio(
+        original_audio,
+        ordered,
+        paths.root,
+        paths.output_dir / "_mixed_audio.wav",
+    )
+    final_audio = mixed_audio if mixed_audio else original_audio
 
-    # Clean up intermediate file
+    output = paths.output_dir / "rough_cut.mp4"
+    mux_video_audio(silent_cut, final_audio, output)
+
+    # Clean up intermediate files
     if silent_cut != clip_paths[0] and silent_cut.exists():
         silent_cut.unlink(missing_ok=True)
+    if mixed_audio and mixed_audio.exists():
+        mixed_audio.unlink(missing_ok=True)
 
     log.info("Rough cut saved: %s (%.1fs, %d clips)", output, scenes.total_duration, len(clip_paths))
     return output

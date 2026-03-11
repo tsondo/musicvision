@@ -389,3 +389,59 @@ class TestTimecode:
     def test_scene_clip_filename(self):
         name = scene_clip_filename("scene_001", 0.0, 3.88)
         assert name == "scene_001_00m00s000_00m03s880.mp4"
+
+
+class TestBuildMixedAudio:
+    """Tests for build_mixed_audio() in utils/audio.py."""
+
+    def test_returns_none_when_no_mixing_needed(self, tmp_path):
+        """When all scenes are song_only, returns None (no mixing needed)."""
+        from musicvision.models import Scene, SceneAudioMode
+
+        scenes = [
+            Scene(
+                id="scene_001", order=1, time_start=0.0, time_end=5.0,
+                type="vocal", lyrics="hello", section="Verse 1",
+                audio_mode=SceneAudioMode.SONG_ONLY,
+            ),
+            Scene(
+                id="scene_002", order=2, time_start=5.0, time_end=10.0,
+                type="instrumental", lyrics="", section="Chorus",
+                audio_mode=SceneAudioMode.SONG_ONLY,
+            ),
+        ]
+        from musicvision.utils.audio import build_mixed_audio
+
+        result = build_mixed_audio(
+            tmp_path / "song.wav", scenes, tmp_path, tmp_path / "out.wav",
+        )
+        assert result is None
+
+    def test_returns_none_when_gen_audio_missing(self, tmp_path):
+        """Scene has mix mode but no generated_audio path — treated as song_only."""
+        from musicvision.models import Scene, SceneAudioMode
+
+        scene = Scene(
+            id="scene_001", order=1, time_start=0.0, time_end=5.0,
+            type="vocal", lyrics="hello", section="Verse 1",
+            audio_mode=SceneAudioMode.MIX,
+            generated_audio=None,
+        )
+        from musicvision.utils.audio import build_mixed_audio
+
+        result = build_mixed_audio(
+            tmp_path / "song.wav", [scene], tmp_path, tmp_path / "out.wav",
+        )
+        assert result is None
+
+    def test_scene_audio_mode_defaults(self):
+        """Scene audio_mode defaults to song_only."""
+        from musicvision.models import Scene, SceneAudioMode
+
+        scene = Scene(
+            id="scene_001", order=1, time_start=0.0, time_end=5.0,
+            type="vocal", lyrics="hello", section="Verse 1",
+        )
+        assert scene.audio_mode == SceneAudioMode.SONG_ONLY
+        assert scene.generated_audio_volume == 0.8
+        assert scene.song_duck_volume == 0.3

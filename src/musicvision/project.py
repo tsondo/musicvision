@@ -194,6 +194,28 @@ class ProjectService:
         if meta.caption:
             log.info("AceStep caption available for style sheet: %s", meta.caption[:80])
 
+        # If already analyzed with auto sections, upgrade to AceStep sections
+        if self.config.song.analyzed and meta.lyrics and self.config.song.sections_source != "acestep":
+            try:
+                from musicvision.intake.pipeline import parse_acestep_sections
+                from musicvision.intake.transcription import WordTimestamp
+
+                ts_path = self.paths.input_dir / "word_timestamps.json"
+                words: list[WordTimestamp] = []
+                if ts_path.exists():
+                    import json as _json
+                    raw = _json.loads(ts_path.read_text(encoding="utf-8"))
+                    words = [WordTimestamp(word=w["word"], start=w["start"], end=w["end"]) for w in raw]
+
+                dur = self.config.song.duration_seconds or 0.0
+                sections = parse_acestep_sections(meta.lyrics, words, dur)
+                if sections:
+                    self.config.song.sections = sections
+                    self.config.song.sections_source = "acestep"
+                    log.info("Upgraded %d auto sections → AceStep sections", len(sections))
+            except Exception:
+                log.warning("Failed to re-parse sections from AceStep lyrics", exc_info=True)
+
         log.info(
             "AceStep metadata: BPM=%s, key=%s, duration=%ss, instrumental=%s",
             meta.bpm, meta.keyscale, meta.duration, meta.instrumental,

@@ -5,6 +5,7 @@ import type {
   RegenerateImageRequest,
   RegenerateVideoRequest,
   Scene,
+  SceneAudioMode,
   UpdateSceneRequest,
   VideoEngineType,
 } from "../api/types";
@@ -455,6 +456,108 @@ export default function SceneRow({
           </label>
         )}
       </div>
+
+      {/* Audio mixing controls — shown when scene has generated audio */}
+      {scene.generated_audio && (
+        <div className="cell cell-audio-mix">
+          <div className="audio-mix-header">
+            <span className="audio-mix-label">Audio Mix</span>
+            {scene.audio_segment && scene.generated_audio && (
+              <button
+                className="btn-audio btn-preview-gen"
+                title="Preview generated audio"
+                onClick={() => {
+                  const a = new Audio(fileUrl(scene.generated_audio!));
+                  a.play();
+                }}
+              >
+                Gen &#9654;
+              </button>
+            )}
+          </div>
+          <select
+            value={scene.audio_mode}
+            onChange={(e) =>
+              onUpdate(scene.id, { audio_mode: e.target.value as SceneAudioMode })
+            }
+          >
+            <option value="song_only">Song Only</option>
+            <option value="generated_only">Generated Only</option>
+            <option value="mix">Mix</option>
+          </select>
+
+          {scene.audio_mode !== "song_only" && (
+            <div className="audio-mix-sliders">
+              <label>
+                Gen Vol
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  value={scene.generated_audio_volume}
+                  onChange={(e) =>
+                    onUpdate(scene.id, {
+                      generated_audio_volume: Number(e.target.value),
+                    })
+                  }
+                />
+                <span>{Math.round(scene.generated_audio_volume * 100)}%</span>
+              </label>
+
+              {scene.audio_mode === "mix" && (
+                <label>
+                  Song Duck
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value={scene.song_duck_volume}
+                    onChange={(e) =>
+                      onUpdate(scene.id, {
+                        song_duck_volume: Number(e.target.value),
+                      })
+                    }
+                  />
+                  <span>{Math.round(scene.song_duck_volume * 100)}%</span>
+                </label>
+              )}
+
+              <div className="fade-controls">
+                <label>
+                  Fade In
+                  <input
+                    type="number"
+                    min="0"
+                    max="2"
+                    step="0.05"
+                    value={scene.audio_fade_in}
+                    onChange={(e) =>
+                      onUpdate(scene.id, { audio_fade_in: Number(e.target.value) })
+                    }
+                  />
+                  s
+                </label>
+                <label>
+                  Fade Out
+                  <input
+                    type="number"
+                    min="0"
+                    max="2"
+                    step="0.05"
+                    value={scene.audio_fade_out}
+                    onChange={(e) =>
+                      onUpdate(scene.id, { audio_fade_out: Number(e.target.value) })
+                    }
+                  />
+                  s
+                </label>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {regenError && <div className="row-error">{regenError}</div>}
     </div>

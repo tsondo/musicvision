@@ -244,6 +244,13 @@ body {
   align-items: center;
 }
 
+.import-message {
+  width: 100%;
+  font-size: 11px;
+  color: var(--green, #4caf50);
+  padding-top: 2px;
+}
+
 .queue-progress {
   width: 100%;
   padding: 4px 12px 2px;
@@ -769,6 +776,81 @@ button:disabled {
 }
 
 /* Row error */
+/* Audio mixing controls */
+.cell-audio-mix {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  background: var(--bg-2);
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+.audio-mix-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.audio-mix-label {
+  font-weight: 600;
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+.btn-preview-gen {
+  font-size: 10px;
+  padding: 2px 6px;
+}
+.cell-audio-mix select {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.audio-mix-sliders {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.audio-mix-sliders label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+.audio-mix-sliders input[type="range"] {
+  width: 80px;
+  accent-color: var(--accent);
+}
+.audio-mix-sliders span {
+  min-width: 36px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.fade-controls {
+  display: flex;
+  gap: 8px;
+}
+.fade-controls label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.fade-controls input[type="number"] {
+  width: 48px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
 .row-error {
   grid-column: 1 / -1;
   color: var(--red);
@@ -1062,12 +1144,120 @@ button:disabled {
 .waveform-hint {
   font-size: 11px;
   color: var(--text-muted);
+  flex: 1;
 }
 
+/* Zoom control */
+.zoom-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.zoom-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 52px;
+  text-align: right;
+}
+
+.zoom-control input[type="range"] {
+  width: 100px;
+  height: 4px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* Minimap */
+.minimap-container {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  margin-bottom: 2px;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+/* Timeline scroll area (section + lyrics lanes) */
+.timeline-scroll {
+  overflow-x: hidden;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+}
+
+/* Section lane */
+.section-lane {
+  position: relative;
+  height: 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.section-block {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  padding-left: 6px;
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.section-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-dim);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+
+/* Lyrics lane */
+.lyrics-lane {
+  position: relative;
+  height: 22px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.lyric-word {
+  position: absolute;
+  top: 3px;
+  font-size: 11px;
+  font-family: var(--font);
+  white-space: nowrap;
+  padding: 1px 2px;
+  border-radius: 2px;
+  transition: background 0.05s;
+  cursor: default;
+  user-select: none;
+}
+
+.lyric-active {
+  background: var(--accent);
+  color: #fff !important;
+  font-weight: 600;
+}
+
+.lyric-gap {
+  position: absolute;
+  top: 50%;
+  height: 2px;
+  background: rgba(245, 197, 66, 0.4);
+  border-radius: 1px;
+  min-width: 4px;
+  pointer-events: none;
+}
+
+/* Waveform container */
 .waveform-container {
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 0 0 4px 4px;
   padding: 4px;
   min-height: 136px;
 }
@@ -1083,6 +1273,7 @@ button:disabled {
   text-overflow: ellipsis;
 }
 
+/* Transport controls */
 .waveform-controls {
   display: flex;
   align-items: center;
@@ -1161,9 +1352,25 @@ button:disabled {
   background: rgba(91, 138, 245, 0.1);
 }
 
+.scene-table tr.has-warning {
+  border-left: 3px solid #f5c542;
+}
+
 .scene-section-cell {
   color: var(--text);
   font-weight: 500;
+}
+
+/* Scene warnings */
+.scene-warning {
+  font-size: 11px;
+  color: #f5c542;
+}
+
+.scene-warning-error {
+  font-size: 11px;
+  color: #f5555b;
+  font-weight: 600;
 }
 
 .btn-delete-marker {
