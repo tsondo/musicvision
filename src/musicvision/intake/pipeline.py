@@ -219,6 +219,10 @@ def create_scenes_from_boundaries(
     """
     Create scenes from user-provided boundaries. Slices audio per scene.
 
+    Lyrics are always populated from word timestamps (Whisper transcription),
+    never from AceStep metadata — the transcription is the ground truth for
+    what was actually sung.
+
     Args:
         project: The project to process
         boundaries: Scene time ranges from the waveform editor
@@ -233,6 +237,13 @@ def create_scenes_from_boundaries(
 
     beat_times = config.song.beat_times
 
+    # Load word timestamps for lyrics population
+    words: list[WordTimestamp] = []
+    ts_path = paths.input_dir / "word_timestamps.json"
+    if ts_path.exists():
+        raw = json.loads(ts_path.read_text(encoding="utf-8"))
+        words = [WordTimestamp(word=w["word"], start=w["start"], end=w["end"]) for w in raw]
+
     scenes: list[Scene] = []
     for i, b in enumerate(boundaries):
         t_start = b.time_start
@@ -242,6 +253,9 @@ def create_scenes_from_boundaries(
             t_start = _snap_to_beat(t_start, beat_times)
             t_end = _snap_to_beat(t_end, beat_times)
 
+        # Derive lyrics from word timestamps (ground truth)
+        lyrics = _lyrics_from_words(words, t_start, t_end)
+
         scene_id = f"scene_{i + 1:03d}"
         scene = Scene(
             id=scene_id,
@@ -249,7 +263,7 @@ def create_scenes_from_boundaries(
             time_start=t_start,
             time_end=t_end,
             type=b.type,
-            lyrics=b.lyrics,
+            lyrics=lyrics,
             section=b.section,
         )
         scenes.append(scene)
@@ -428,6 +442,23 @@ def parse_acestep_sections(
             sections.append(SongSection(name=name, time=round(t, 2)))
 
     return sections
+
+
+def _lyrics_from_words(
+    words: list[WordTimestamp],
+    time_start: float,
+    time_end: float,
+) -> str:
+    """Extract lyrics from word timestamps within a time range.
+
+    A word is included if its midpoint falls within [time_start, time_end].
+    """
+    scene_words = []
+    for w in words:
+        mid = (w.start + w.end) / 2
+        if time_start <= mid <= time_end:
+            scene_words.append(w.word)
+    return " ".join(scene_words)
 
 
 def _slice_scenes(

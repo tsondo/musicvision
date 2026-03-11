@@ -116,20 +116,22 @@ def segment_scenes(
     if engine_constraints:
         system_prompt += _engine_constraint_prompt(engine_constraints)
 
-    # Build the user message — prefer AceStep lyrics (section markers) over
-    # approximate word timestamps to save tokens for vLLM context windows.
+    # Build the user message — always use Whisper word timestamps as the
+    # canonical lyrics source (AceStep text may not match what was actually sung).
     user_message = f"""Song duration: {song_duration:.1f} seconds
 BPM: {bpm or 'unknown'}
 Min scene duration: {min_scene_seconds}s
 Max scene duration: {max_scene_seconds}s
 """
 
+    lyrics_text = _format_lyrics_for_llm(lyrics_with_timestamps)
+    user_message += f"\nLyrics with timestamps:\n{lyrics_text}\n"
+
+    # Pass AceStep section markers as structural hints (not as lyrics source)
     if acestep_lyrics:
-        # AceStep lyrics have section markers — better for the LLM, skip timestamps
-        user_message += f"\nLyrics with section markers:\n{acestep_lyrics}\n"
-    else:
-        lyrics_text = _format_lyrics_for_llm(lyrics_with_timestamps)
-        user_message += f"\nLyrics with timestamps:\n{lyrics_text}\n"
+        section_markers = _extract_section_markers(acestep_lyrics)
+        if section_markers:
+            user_message += f"\nSection structure hints (from metadata, for boundary guidance only):\n{section_markers}\n"
 
     user_message += "\nPlease segment this song into scenes for a music video."
 
@@ -164,16 +166,19 @@ Max scene duration: {max_scene_seconds}s
             log.error("Response was: %s", response_text[:500])
             raise ValueError(f"LLM returned invalid JSON: {e}")
 
-    # Convert to Scene objects
+    # Convert to Scene objects — populate lyrics from word timestamps (ground truth)
     scenes = []
     for sd in scene_dicts:
+        t_start = float(sd["time_start"])
+        t_end = float(sd["time_end"])
         scene = Scene(
             id=sd["id"],
             order=sd["order"],
-            time_start=float(sd["time_start"]),
-            time_end=float(sd["time_end"]),
+            time_start=t_start,
+            time_end=t_end,
             type=SceneType(sd.get("type", "vocal")),
-            lyrics=sd.get("lyrics", ""),
+            lyrics=_lyrics_from_words(lyrics_with_timestamps, t_start, t_end),
+            section=sd.get("section", ""),
         )
         scenes.append(scene)
 
@@ -364,6 +369,50 @@ def _format_lyrics_for_llm(words: list[WordTimestamp]) -> str:
         lines.append(f"[{line_start:.2f}s - {last_end:.2f}s] {line_text}")
 
     return "\n".join(lines)
+
+
+def _lyrics_from_words(
+    words: list[WordTimestamp],
+    time_start: float,
+    time_end: float,
+) -> str:
+    """Extract lyrics text from word timestamps that fall within a time range.
+
+    A word is included if its midpoint falls within [time_start, time_end].
+    This is the canonical source of lyrics — derived from Whisper transcription,
+    not from AceStep metadata.
+    """
+    scene_words = []
+    for w in words:
+        mid = (w.start + w.end) / 2
+        if time_start <= mid <= time_end:
+            scene_words.append(w.word)
+    return " ".join(scene_words)
+
+
+def _extract_section_markers(acestep_lyrics: str) -> str:
+    """Extract only section marker lines from AceStep lyrics.
+
+    Returns lines like:
+      (Verse 1) at ~line 3
+      (Chorus) at ~line 8
+    These are structural hints for the LLM, not lyrics content.
+    """
+    import re
+
+    pattern = re.compile(r"^\s*\(([^)]+)\)\s*$")
+    lines = acestep_lyrics.split("\n")
+    markers: list[str] = []
+    content_line_count = 0
+
+    for line in lines:
+        m = pattern.match(line)
+        if m:
+            markers.append(f"({m.group(1)}) — after ~{content_line_count} lyric lines")
+        elif line.strip():
+            content_line_count += 1
+
+    return "\n".join(markers)
 
 
 def _snap_to_beats(

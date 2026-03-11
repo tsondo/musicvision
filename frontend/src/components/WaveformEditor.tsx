@@ -490,12 +490,23 @@ export default function WaveformEditor({
   };
 
   const handleConfirm = () => {
+    // Populate lyrics from word timestamps (ground truth from Whisper)
+    const getSceneLyrics = (start: number, end: number): string => {
+      return analysis.word_timestamps
+        .filter((w) => {
+          const mid = (w.start + w.end) / 2;
+          return mid >= start && mid <= end;
+        })
+        .map((w) => w.word)
+        .join(" ");
+    };
+
     const boundaries: SceneBoundary[] = derivedScenes.map((s) => ({
       time_start: s.start,
       time_end: s.end,
       section: s.section,
       type: s.type,
-      lyrics: "",
+      lyrics: getSceneLyrics(s.start, s.end),
     }));
     onConfirm(boundaries, snapToBeats);
   };
