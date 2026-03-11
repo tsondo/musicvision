@@ -855,8 +855,8 @@ export default function WaveformEditor({
         />
       )}
 
-      {/* Scene table with warnings */}
-      {derivedScenes.length > 0 && (
+      {/* Scene table with warnings — hidden when lyrics mapper is open */}
+      {!showLyricsEditor && derivedScenes.length > 0 && (
         <div className="waveform-scenes">
           <table className="scene-table">
             <thead>
