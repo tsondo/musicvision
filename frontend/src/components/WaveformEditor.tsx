@@ -18,7 +18,7 @@ import RegionsPlugin, { type Region } from "wavesurfer.js/dist/plugins/regions.j
 import Minimap from "wavesurfer.js/dist/plugins/minimap.js";
 import type { AnalysisResult, SceneBoundary, SceneType, SongSection, VideoEngineType } from "../api/types";
 import { fileUrl, getSegmentMarkers, saveSegmentMarkers, getLyricsAssignments, saveLyricsAssignments } from "../api/client";
-import LyricsLineEditor from "./LyricsLineEditor";
+import LyricsMapper from "./LyricsLineEditor";
 
 /* ------------------------------------------------------------------ */
 /*  Props                                                              */
@@ -837,16 +837,17 @@ export default function WaveformEditor({
             onClick={() => setShowLyricsEditor((v) => !v)}
             title="Assign lyrics lines to scenes manually"
           >
-            Lyrics Editor
+            Lyrics Mapper
           </button>
         </div>
       </div>
 
       {/* Lyrics line editor — manual assignment of lyrics to scenes */}
       {showLyricsEditor && derivedScenes.length > 0 && (
-        <LyricsLineEditor
+        <LyricsMapper
           assignments={lyricsAssignments}
           scenes={derivedScenes.map((s) => ({ start: s.start, end: s.end, section: s.section }))}
+          audioUrl={audioUrl}
           onChange={(updated) => {
             setLyricsAssignments(updated);
             saveLyricsAssignments(updated).catch(() => {});

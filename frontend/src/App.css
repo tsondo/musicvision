@@ -1488,20 +1488,20 @@ button:disabled {
   border-color: var(--accent) !important;
 }
 
-/* ---- Lyrics Line Editor ---- */
+/* ---- Lyrics Mapper (two-column layout) ---- */
 
-.lyrics-line-editor {
+.lyrics-mapper {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 8px 12px;
   margin-top: 8px;
-  max-height: 320px;
   display: flex;
   flex-direction: column;
+  max-height: 420px;
 }
 
-.lyrics-editor-header {
+.lyrics-mapper-header {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1514,7 +1514,18 @@ button:disabled {
   font-weight: 600;
   font-size: 0.85rem;
   color: var(--text);
+}
+
+.lyrics-mapper-active-label {
+  font-size: 0.8rem;
+  color: var(--accent);
+  font-weight: 500;
   flex: 1;
+}
+
+.lyrics-mapper-actions {
+  display: flex;
+  gap: 6px;
 }
 
 .lyrics-editor-empty {
@@ -1523,87 +1534,136 @@ button:disabled {
   padding: 12px 0;
 }
 
-.lyrics-editor-list {
-  overflow-y: auto;
+.lyrics-mapper-columns {
+  display: flex;
+  gap: 12px;
   flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
-.lyrics-editor-row {
+/* Left: scene list */
+.lyrics-mapper-scenes {
+  width: 220px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  padding-right: 8px;
+}
+
+.lyrics-mapper-scene {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  transition: background 0.1s;
+}
+
+.lyrics-mapper-scene:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.lyrics-mapper-scene.active {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--text);
+}
+
+.lyrics-mapper-scene-num {
+  font-weight: 700;
+  font-size: 0.85rem;
+  min-width: 18px;
+}
+
+.lyrics-mapper-scene-time {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.lyrics-mapper-scene-section {
+  font-size: 0.7rem;
+  color: var(--accent);
+  opacity: 0.7;
+}
+
+.lyrics-mapper-scene-count {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  margin-left: auto;
+  opacity: 0.7;
+}
+
+/* Right: lyrics list */
+.lyrics-mapper-lyrics {
+  flex: 1;
+  overflow-y: auto;
+  min-width: 0;
+}
+
+.lyrics-mapper-hint {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  padding: 20px 0;
+  text-align: center;
+}
+
+.lyrics-mapper-section-header {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--accent);
+  opacity: 0.7;
+  padding: 8px 0 2px;
+}
+
+.lyrics-mapper-line {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 3px 0;
-  border-bottom: 1px solid var(--border-dim, rgba(255,255,255,0.05));
-}
-
-.lyrics-editor-row:last-child {
-  border-bottom: none;
-}
-
-.lyrics-editor-line {
-  flex: 1;
-  min-width: 0;
+  padding: 3px 4px;
+  border-radius: 3px;
+  cursor: pointer;
   font-size: 0.82rem;
   color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  transition: background 0.1s;
 }
 
-.lyrics-editor-scenes {
+.lyrics-mapper-line:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.lyrics-mapper-line.checked {
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.lyrics-mapper-line input[type="checkbox"] {
+  flex-shrink: 0;
+  accent-color: var(--accent);
+}
+
+.lyrics-mapper-line-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.lyrics-mapper-other-badges {
   display: flex;
   gap: 2px;
   flex-shrink: 0;
 }
 
-.lyrics-scene-btn {
-  width: 22px;
-  height: 22px;
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  background: transparent;
-  color: var(--text-dim);
-  font-size: 0.7rem;
-  cursor: pointer;
-  padding: 0;
-  display: flex;
+.lyrics-mapper-badge {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-}
-
-.lyrics-scene-btn:hover {
-  border-color: var(--accent);
-  color: var(--text);
-}
-
-.lyrics-scene-btn.active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
-}
-
-.lyrics-editor-section-header {
-  border-bottom: none !important;
-  padding-top: 8px !important;
-}
-
-.lyrics-editor-section-label {
-  font-size: 0.78rem;
-  font-weight: 600;
-  color: var(--accent);
-  opacity: 0.7;
-  letter-spacing: 0.02em;
-}
-
-.lyrics-editor-scene-header {
-  border-bottom: 1px solid var(--border) !important;
-  padding-bottom: 4px !important;
-}
-
-.lyrics-scene-col-header {
-  width: 22px;
-  text-align: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-dim);
   font-size: 0.65rem;
   font-weight: 600;
-  color: var(--text-dim);
 }
