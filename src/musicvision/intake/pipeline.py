@@ -287,8 +287,9 @@ def create_scenes_from_boundaries(
             t_end = _snap_to_beat(t_end, beat_times)
 
         # Lyrics: manual assignments > word timestamps > BPM estimation
-        if manual_lyrics is not None and i in manual_lyrics:
-            lyrics = manual_lyrics[i]
+        if manual_lyrics is not None:
+            # Manual mode: use assignment if present, empty string if not
+            lyrics = manual_lyrics.get(i, "")
         else:
             lyrics = _lyrics_from_words(words, t_start, t_end) if words else ""
             if not lyrics and lyrics_text:
