@@ -740,35 +740,9 @@ export default function WaveformEditor({
           </div>
         )}
 
-        {/* Lyrics lane */}
-        {processedWords.length > 0 && (
-          <div className="lyrics-lane" style={{ width: totalWidth }}>
-            {processedWords.map((pw, i) => (
-              <span
-                key={i}
-                className={`lyric-word ${i === activeWordIndex ? "lyric-active" : ""}`}
-                style={{
-                  left: timeToPixels(pw.start),
-                  color: sectionTextColor(sections, pw.sectionIndex),
-                }}
-                title={`${formatTime(pw.start)} – ${formatTime(pw.end)}`}
-              >
-                {pw.word}
-              </span>
-            ))}
-            {gaps.map((g, i) => (
-              <div
-                key={`gap-${i}`}
-                className="lyric-gap"
-                style={{
-                  left: timeToPixels(g.start),
-                  width: Math.max(4, timeToPixels(g.duration)),
-                }}
-                title={`Gap: ${g.duration.toFixed(2)}s — safe cut point`}
-              />
-            ))}
-          </div>
-        )}
+        {/* Lyrics lane hidden — Whisper word timestamps don't align well
+            enough with the waveform to be useful for segment placement.
+            TODO: revisit if we get better alignment (e.g. forced alignment). */}
       </div>
 
       {/* Waveform */}
