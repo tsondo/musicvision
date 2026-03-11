@@ -105,6 +105,7 @@ export interface ProjectConfig {
 }
 
 export interface UpdateSceneRequest {
+  lyrics?: string;
   image_prompt_user_override?: string;
   video_prompt_user_override?: string;
   image_status?: ApprovalStatus;

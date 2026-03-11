@@ -1,10 +1,9 @@
 /**
  * LyricsLineEditor — Manual assignment of lyrics lines to scenes.
  *
- * Shows each lyrics line with a multi-select dropdown to assign it to one
- * or more scenes. Lines are parsed from the lyrics file (section markers
- * like "(Verse 1)" are excluded). Assignments are persisted and passed
- * to the backend on scene creation to skip Whisper transcription.
+ * Shows each lyrics line with toggle buttons to assign it to one or more
+ * scenes. Section headers (e.g. [intro], (Verse 1)) are shown as visual
+ * separators but are not assignable. Scene column headers show time ranges.
  */
 
 import { useCallback } from "react";
@@ -12,15 +11,32 @@ import { useCallback } from "react";
 interface LyricsAssignment {
   line: string;
   scene_indices: number[];
+  is_header?: boolean;
+}
+
+interface SceneInfo {
+  start: number;
+  end: number;
+  section: string;
 }
 
 interface Props {
   assignments: LyricsAssignment[];
-  sceneCount: number;
+  scenes: SceneInfo[];
   onChange: (assignments: LyricsAssignment[]) => void;
 }
 
-export default function LyricsLineEditor({ assignments, sceneCount, onChange }: Props) {
+const HEADER_PATTERN = /^\s*[\[\(].*[\]\)]\s*$/;
+
+function formatTime(s: number): string {
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${m}:${sec.toFixed(0).padStart(2, "0")}`;
+}
+
+export default function LyricsLineEditor({ assignments, scenes, onChange }: Props) {
+  const sceneCount = scenes.length;
+
   const toggleScene = useCallback(
     (lineIdx: number, sceneIdx: number) => {
       const updated = assignments.map((a, i) => {
@@ -39,11 +55,16 @@ export default function LyricsLineEditor({ assignments, sceneCount, onChange }: 
   );
 
   const autoPopulate = useCallback(() => {
-    if (assignments.length === 0 || sceneCount === 0) return;
-    // Distribute lines roughly evenly across scenes
-    const linesPerScene = Math.max(1, Math.ceil(assignments.length / sceneCount));
-    const updated = assignments.map((a, i) => {
-      const sceneIdx = Math.min(Math.floor(i / linesPerScene), sceneCount - 1);
+    const assignable = assignments.filter((a) => !a.is_header && !HEADER_PATTERN.test(a.line));
+    if (assignable.length === 0 || sceneCount === 0) return;
+    const linesPerScene = Math.max(1, Math.ceil(assignable.length / sceneCount));
+    let assignableIdx = 0;
+    const updated = assignments.map((a) => {
+      if (a.is_header || HEADER_PATTERN.test(a.line)) {
+        return { ...a, scene_indices: [] };
+      }
+      const sceneIdx = Math.min(Math.floor(assignableIdx / linesPerScene), sceneCount - 1);
+      assignableIdx++;
       return { ...a, scene_indices: [sceneIdx] };
     });
     onChange(updated);
@@ -61,7 +82,6 @@ export default function LyricsLineEditor({ assignments, sceneCount, onChange }: 
     );
   }
 
-  // Build scene labels
   const sceneOptions = Array.from({ length: sceneCount }, (_, i) => i);
 
   return (
@@ -75,29 +95,55 @@ export default function LyricsLineEditor({ assignments, sceneCount, onChange }: 
           Clear
         </button>
       </div>
+
+      {/* Scene column headers */}
+      <div className="lyrics-editor-row lyrics-editor-scene-header">
+        <span className="lyrics-editor-line" />
+        <div className="lyrics-editor-scenes">
+          {sceneOptions.map((i) => {
+            const s = scenes[i];
+            return (
+              <div key={i} className="lyrics-scene-col-header" title={s ? `${formatTime(s.start)}–${formatTime(s.end)}${s.section ? ` (${s.section})` : ""}` : ""}>
+                {i + 1}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       <div className="lyrics-editor-list">
-        {assignments.map((a, lineIdx) => (
-          <div key={lineIdx} className="lyrics-editor-row">
-            <span className="lyrics-editor-line" title={a.line}>
-              {a.line}
-            </span>
-            <div className="lyrics-editor-scenes">
-              {sceneOptions.map((sceneIdx) => {
-                const active = a.scene_indices.includes(sceneIdx);
-                return (
-                  <button
-                    key={sceneIdx}
-                    className={`lyrics-scene-btn ${active ? "active" : ""}`}
-                    onClick={() => toggleScene(lineIdx, sceneIdx)}
-                    title={`Scene ${sceneIdx + 1}`}
-                  >
-                    {sceneIdx + 1}
-                  </button>
-                );
-              })}
+        {assignments.map((a, lineIdx) => {
+          const isHeader = a.is_header || HEADER_PATTERN.test(a.line);
+          if (isHeader) {
+            return (
+              <div key={lineIdx} className="lyrics-editor-row lyrics-editor-section-header">
+                <span className="lyrics-editor-section-label">{a.line}</span>
+              </div>
+            );
+          }
+          return (
+            <div key={lineIdx} className="lyrics-editor-row">
+              <span className="lyrics-editor-line" title={a.line}>
+                {a.line}
+              </span>
+              <div className="lyrics-editor-scenes">
+                {sceneOptions.map((sceneIdx) => {
+                  const active = a.scene_indices.includes(sceneIdx);
+                  return (
+                    <button
+                      key={sceneIdx}
+                      className={`lyrics-scene-btn ${active ? "active" : ""}`}
+                      onClick={() => toggleScene(lineIdx, sceneIdx)}
+                      title={`Scene ${sceneIdx + 1}`}
+                    >
+                      {sceneIdx + 1}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

@@ -107,6 +107,7 @@ class OpenProjectRequest(BaseModel):
 
 
 class UpdateSceneRequest(BaseModel):
+    lyrics: Optional[str] = None
     image_prompt_user_override: Optional[str] = None
     video_prompt_user_override: Optional[str] = None
     image_status: Optional[ApprovalStatus] = None
@@ -244,7 +245,7 @@ async def get_lyrics_assignments():
     if path.exists():
         return _json.loads(path.read_text())
 
-    # Auto-populate: parse lyrics into lines (skip section markers)
+    # Auto-populate: parse lyrics into lines, mark section headers
     import re
     assignments: list[dict] = []
     lyrics_path = (
@@ -256,9 +257,10 @@ async def get_lyrics_assignments():
         lyrics_text = lyrics_path.read_text(encoding="utf-8")
         for line in lyrics_text.split("\n"):
             stripped = line.strip()
-            if not stripped or re.match(r"^\s*\([^)]+\)\s*$", stripped):
+            if not stripped:
                 continue
-            assignments.append({"line": stripped, "scene_indices": []})
+            is_header = bool(re.match(r"^\s*[\[\(].*[\]\)]\s*$", stripped))
+            assignments.append({"line": stripped, "scene_indices": [], "is_header": is_header})
 
     return {"assignments": assignments}
 
@@ -466,6 +468,8 @@ async def update_scene(scene_id: str, req: UpdateSceneRequest):
     if not scene:
         raise HTTPException(status_code=404, detail=f"Scene {scene_id} not found")
 
+    if req.lyrics is not None:
+        scene.lyrics = req.lyrics
     if req.image_prompt_user_override is not None:
         scene.image_prompt_user_override = req.image_prompt_user_override
     if req.video_prompt_user_override is not None:

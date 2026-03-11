@@ -846,7 +846,7 @@ export default function WaveformEditor({
       {showLyricsEditor && derivedScenes.length > 0 && (
         <LyricsLineEditor
           assignments={lyricsAssignments}
-          sceneCount={derivedScenes.length}
+          scenes={derivedScenes.map((s) => ({ start: s.start, end: s.end, section: s.section }))}
           onChange={(updated) => {
             setLyricsAssignments(updated);
             saveLyricsAssignments(updated).catch(() => {});

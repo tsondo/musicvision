@@ -46,6 +46,7 @@ export default function SceneRow({
   const effectiveVideoPrompt =
     scene.video_prompt_user_override || scene.video_prompt || "";
 
+  const [lyrics, setLyrics] = useState(scene.lyrics || "");
   const [imagePrompt, setImagePrompt] = useState(effectiveImagePrompt);
   const [videoPrompt, setVideoPrompt] = useState(effectiveVideoPrompt);
   const [imageModel, setImageModel] = useState<ImageModelType>("z-image-turbo");
@@ -84,15 +85,17 @@ export default function SceneRow({
     setImgVersion(Date.now());
   }
 
-  // Sync prompt state when scene changes externally
-  const lastPromptRef = useRef({ img: effectiveImagePrompt, vid: effectiveVideoPrompt });
+  // Sync state when scene changes externally
+  const lastPromptRef = useRef({ img: effectiveImagePrompt, vid: effectiveVideoPrompt, lyr: scene.lyrics || "" });
   if (
     lastPromptRef.current.img !== effectiveImagePrompt ||
-    lastPromptRef.current.vid !== effectiveVideoPrompt
+    lastPromptRef.current.vid !== effectiveVideoPrompt ||
+    lastPromptRef.current.lyr !== (scene.lyrics || "")
   ) {
-    lastPromptRef.current = { img: effectiveImagePrompt, vid: effectiveVideoPrompt };
+    lastPromptRef.current = { img: effectiveImagePrompt, vid: effectiveVideoPrompt, lyr: scene.lyrics || "" };
     if (imagePrompt !== effectiveImagePrompt) setImagePrompt(effectiveImagePrompt);
     if (videoPrompt !== effectiveVideoPrompt) setVideoPrompt(effectiveVideoPrompt);
+    if (lyrics !== (scene.lyrics || "")) setLyrics(scene.lyrics || "");
   }
 
   // Debounced auto-save for prompts (1s after last keystroke)
@@ -100,6 +103,7 @@ export default function SceneRow({
   const vidDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [imgSaved, setImgSaved] = useState(true);
   const [vidSaved, setVidSaved] = useState(true);
+  const [lyrSaved, setLyrSaved] = useState(true);
 
   const saveImagePrompt = useCallback(() => {
     if (imgDebounceRef.current) clearTimeout(imgDebounceRef.current);
@@ -162,6 +166,20 @@ export default function SceneRow({
     }, 1000);
     return () => clearTimeout(timer);
   }, [videoPrompt]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const lyricsRef = useRef(lyrics);
+  lyricsRef.current = lyrics;
+  useEffect(() => {
+    if (lyrSaved) return;
+    const timer = setTimeout(() => {
+      if (lyricsRef.current !== (scene.lyrics || "")) {
+        onUpdate(scene.id, { lyrics: lyricsRef.current }).then(() => setLyrSaved(true));
+      } else {
+        setLyrSaved(true);
+      }
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [lyrics]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleRegenImage = async () => {
     setRegenError(null);
@@ -340,11 +358,18 @@ export default function SceneRow({
 
       {/* Source (lyrics) */}
       <div className="cell cell-source">
-        {scene.type === "vocal" && scene.lyrics ? (
-          <div className="lyrics-text">{scene.lyrics}</div>
-        ) : (
-          <div className="instrumental-label">Instrumental</div>
-        )}
+        <textarea
+          value={lyrics}
+          onChange={(e) => { setLyrics(e.target.value); setLyrSaved(false); }}
+          onBlur={() => {
+            if (!lyrSaved && lyrics !== (scene.lyrics || "")) {
+              onUpdate(scene.id, { lyrics }).then(() => setLyrSaved(true));
+            }
+          }}
+          placeholder={scene.type === "instrumental" ? "Instrumental" : "Lyrics..."}
+          rows={2}
+        />
+        {!lyrSaved && <span className="save-indicator">saving...</span>}
       </div>
 
       {/* Generate image controls */}
