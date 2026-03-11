@@ -1198,6 +1198,14 @@ button:disabled {
   flex: 1;
 }
 
+.scenes-message {
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 4px 24px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+}
+
 .waveform-warning {
   font-size: 11px;
   color: #f5c542;

@@ -749,12 +749,16 @@ async def create_scenes(req: CreateScenesRequest):
     proj = get_project()
 
     def _run() -> dict:
-        scene_list = create_scenes_from_boundaries(
+        scene_list, lyrics_source = create_scenes_from_boundaries(
             project=proj,
             boundaries=req.boundaries,
             snap_to_beats=req.snap_to_beats,
         )
-        return {"status": "complete", "scene_count": len(scene_list.scenes)}
+        return {
+            "status": "complete",
+            "scene_count": len(scene_list.scenes),
+            "lyrics_source": lyrics_source,
+        }
 
     return await asyncio.to_thread(_run)
 

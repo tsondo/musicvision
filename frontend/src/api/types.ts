@@ -140,9 +140,12 @@ export interface RegenerateVideoRequest {
   render_mode?: RenderMode;
 }
 
+export type LyricsSource = "per_scene_whisper" | "word_timestamps" | "bpm_estimate";
+
 export interface IntakeResult {
   status: string;
   scene_count: number;
+  lyrics_source?: LyricsSource;
 }
 
 export interface GenerateImagesRequest {

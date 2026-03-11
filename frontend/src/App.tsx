@@ -139,6 +139,9 @@ export default function App() {
           onClearScenes={clearScenes}
         />
       )}
+      {pipeline.scenesMessage && (
+        <div className="scenes-message">{pipeline.scenesMessage}</div>
+      )}
 
       <main>
         <Storyboard

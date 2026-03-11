@@ -15,7 +15,7 @@ import {
   assemblePreview as apiAssemble,
   ApiError,
 } from "../api/client";
-import type { AnalysisResult, AssembleResult, BatchGenResult, ImageModelType, PipelineStage, ProjectConfig, RenderMode, Scene, SceneBoundary, TargetResolution, UpscalerType, VideoEngineType } from "../api/types";
+import type { AnalysisResult, AssembleResult, BatchGenResult, ImageModelType, LyricsSource, PipelineStage, ProjectConfig, RenderMode, Scene, SceneBoundary, TargetResolution, UpscalerType, VideoEngineType } from "../api/types";
 
 export type StepStatus = "idle" | "running" | "done" | "error";
 
@@ -246,15 +246,25 @@ export function usePipeline(
     }
   }, [config?.song.analyzed, analysisResult, loadAnalysis]);
 
+  const [scenesMessage, setScenesMessage] = useState<string>("");
+
   // Phase 2: Create scenes from manual boundaries
   const confirmScenes = useCallback(
     async (boundaries: SceneBoundary[], snapToBeats: boolean) => {
       setScenesStatus("running");
+      setScenesMessage("");
       setError(null);
       try {
-        await apiCreateScenes(boundaries, snapToBeats);
+        const result = await apiCreateScenes(boundaries, snapToBeats);
         await reloadScenes();
         setScenesStatus("done");
+        const sourceLabels: Record<LyricsSource, string> = {
+          per_scene_whisper: "Lyrics from per-scene Whisper transcription",
+          word_timestamps: "Lyrics from word timestamps (may drift on vocals)",
+          bpm_estimate: "Lyrics estimated from BPM (approximate)",
+        };
+        const src = result.lyrics_source as LyricsSource | undefined;
+        setScenesMessage(src ? sourceLabels[src] ?? "" : "");
       } catch (err) {
         const msg = err instanceof ApiError ? err.detail : String(err);
         setError(msg);
@@ -451,6 +461,7 @@ export function usePipeline(
     importLyrics,
     runAnalyze,
     confirmScenes,
+    scenesMessage,
     runAutoSegment,
     runIntake,
     generateImages,

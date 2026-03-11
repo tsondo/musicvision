@@ -296,21 +296,23 @@ def create_scenes_from_boundaries(
     _slice_scenes(scene_list, audio_path, paths)
 
     # Transcribe each scene's audio slice for accurate lyrics
+    lyrics_source = "bpm_estimate" if not words else "word_timestamps"
     if device is None:
         device = _detect_whisper_device()
     try:
         _transcribe_scene_slices(scene_list.scenes, paths, device=device)
+        lyrics_source = "per_scene_whisper"
     except Exception as exc:
-        log.warning("Per-scene transcription failed, keeping word-timestamp lyrics: %s", exc)
+        log.warning("Per-scene transcription failed, keeping fallback lyrics: %s", exc)
 
     # Save
     project.scenes = scene_list
     project.save_scenes()
 
-    log.info("Created %d scenes from manual boundaries (%.1fs total)",
-             len(scenes), scene_list.total_duration)
+    log.info("Created %d scenes from manual boundaries (%.1fs total, lyrics: %s)",
+             len(scenes), scene_list.total_duration, lyrics_source)
 
-    return scene_list
+    return scene_list, lyrics_source
 
 
 # ---------------------------------------------------------------------------
