@@ -146,22 +146,25 @@ function sceneWarnings(sceneDuration: number, engineKey: string): string[] {
   const c = ENGINE_CONSTRAINTS[engineKey];
   if (!c) return warnings;
 
-  // Check sub-clip split using the same logic as backend compute_subclip_frames:
-  // If naive ceil split leaves a remainder below min, try fewer clips.
+  // Mirror backend compute_subclip_frames: equal redistribution across n clips
   const totalFrames = Math.round(sceneDuration * c.fps);
   if (totalFrames > c.maxFrames) {
     let n = Math.ceil(totalFrames / c.maxFrames);
     const remainder = totalFrames - (n - 1) * c.maxFrames;
-    if (remainder > 0 && remainder < c.minFrames && n > 1) {
-      // Try reducing clip count (backend redistribution)
+
+    // If naive last clip is too small, try fewer clips (backend does the same)
+    if (remainder < c.minFrames && n > 1) {
       const candidate = n - 1;
       if (candidate > 0 && Math.ceil(totalFrames / candidate) <= c.maxFrames) {
-        n = candidate; // redistribution works — no warning needed
-      } else {
-        // Can't redistribute — genuinely problematic duration
-        const remainderSec = (remainder / c.fps).toFixed(1);
-        warnings.push(`Last sub-clip ${remainderSec}s (below ${c.name} min ${c.minSeconds.toFixed(1)}s)`);
+        n = candidate;
       }
+    }
+
+    // Backend distributes evenly: base = floor(total/n), smallest clip = base
+    const base = Math.floor(totalFrames / n);
+    if (base < c.minFrames) {
+      const baseSec = (base / c.fps).toFixed(1);
+      warnings.push(`Sub-clip ${baseSec}s (below ${c.name} min ${c.minSeconds.toFixed(1)}s)`);
     }
   }
 
