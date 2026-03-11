@@ -207,17 +207,23 @@ export default function WaveformEditor({
   const engineKey = videoEngine ?? "hunyuan_avatar";
 
   // ---- Load persisted markers and lyrics assignments on mount ----
+  // loadedRef gates auto-save — must only be set AFTER load completes
   const loadedRef = useRef(false);
+  const loadFiredRef = useRef(false);
   useEffect(() => {
-    if (loadedRef.current) return;
-    loadedRef.current = true;
+    if (loadFiredRef.current) return;
+    loadFiredRef.current = true;
     getSegmentMarkers()
       .then((data) => {
         if (data.markers && data.markers.length > 0) {
           setMarkers(data.markers);
         }
+        // Enable auto-save only after load is done
+        loadedRef.current = true;
       })
-      .catch(() => {}); // no saved markers yet
+      .catch(() => {
+        loadedRef.current = true;
+      });
     getLyricsAssignments()
       .then((data) => {
         if (data.assignments && data.assignments.length > 0) {

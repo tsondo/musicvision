@@ -205,16 +205,20 @@ async def get_segment_markers():
     proj = get_project()
     path = proj.paths.input_dir / "segment_markers.json"
     if path.exists():
-        return _json.loads(path.read_text())
+        data = _json.loads(path.read_text())
+        if data.get("markers"):  # skip empty marker files (race condition artifact)
+            return data
 
-    # No marker file — derive from existing scenes if available
-    scene_list = proj.scenes
-    if scene_list and scene_list.scenes:
-        scenes = sorted(scene_list.scenes, key=lambda s: s.time_start)
+    # No marker file (or empty) — derive from existing scenes if available
+    scenes = proj.scenes.scenes
+    log.info("segment-markers: no file, deriving from %d scenes (path=%s)", len(scenes), proj.paths.scenes_file)
+    if scenes:
+        scenes_sorted = sorted(scenes, key=lambda s: s.time_start)
         # Markers are the boundaries between scenes (exclude song start/end)
-        markers = [s.time_end for s in scenes[:-1]]
+        markers = [s.time_end for s in scenes_sorted[:-1]]
         # Persist so it's available next time without re-deriving
         data = {"markers": markers}
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(_json.dumps(data, indent=2))
         return data
 
