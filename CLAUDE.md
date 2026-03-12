@@ -62,9 +62,11 @@ frontend/                    # React + Vite scene review GUI
 Two machines on the same LAN:
 
 **Inference workstation** (where this repo runs):
-- GPU0: RTX 5090 32GB — runs DiT (FLUX diffusion, HuMo generation)
-- GPU1: RTX 4080 16GB — offloads T5, VAE, Whisper, audio separator
+- **Primary GPU**: RTX 5090 32 GB — runs DiT (FLUX diffusion, HuMo/LTX-2 transformer)
+- **Secondary GPU**: RTX 4080 16 GB — offloads T5, CLIP, VAE, Whisper, audio separator
 - OS: Windows + WSL (Fedora also used for dev)
+
+> **CUDA index note:** The 4080 is `cuda:0` and the 5090 is `cuda:1` in `nvidia-smi` order. This does NOT matter for MusicVision — `gpu.py` auto-detects GPUs by VRAM and assigns the highest-VRAM GPU as primary regardless of CUDA index. Do not hardcode CUDA indices anywhere in pipeline code.
 
 **vLLM server** (separate LAN machine):
 - GPU: RTX 3090 Ti 24GB

@@ -17,9 +17,9 @@ The pipeline segments audio for **video generation only** — each scene's slice
 ## System Requirements
 
 ### Inference Workstation (image + video generation)
-- **Primary GPU (GPU0)**: NVIDIA RTX 5090 (32GB VRAM) — runs DiT for FLUX, HuMo, or LTX-Video 2
-- **Secondary GPU (GPU1)**: NVIDIA RTX 4080 (16GB VRAM) — offloads text encoders, VAE, Whisper, audio separator
-- **Multi-GPU Strategy**: Proven in ComfyUI. DiT on GPU0 (5090), everything else on GPU1 (4080). This allows running large models at full quality while keeping encoders and VAE on the secondary GPU.
+- **Primary GPU**: NVIDIA RTX 5090 (32 GB VRAM) — runs DiT for FLUX, HuMo, or LTX-Video 2
+- **Secondary GPU**: NVIDIA RTX 4080 (16 GB VRAM) — offloads text encoders (T5-XXL, CLIP), VAE, Whisper, audio separator
+- **Multi-GPU Strategy**: Proven in ComfyUI. DiT on the 5090, everything else on the 4080. The GPU with the most VRAM is automatically selected as primary by `gpu.py`, regardless of CUDA index (the 4080 is `cuda:0`, the 5090 is `cuda:1` — this does not affect pipeline behavior).
 - **Model Swapping**: FLUX and video engines run in different pipeline stages (not simultaneously). Within each stage, model components are split across both GPUs. Weights fully unloaded between stages.
 
 ### Local LLM Server (optional, for prompt generation)
@@ -29,10 +29,10 @@ The pipeline segments audio for **video generation only** — each scene's slice
 - **Not required**: Claude API (default) or auto-template fallback work without this machine
 
 ### General
-- **Storage**: ~50GB for model weights (FLUX + video engine + Whisper + VAE + audio separator). Additional space for project assets.
+- **Storage**: ~50 GB for model weights (FLUX + video engine + Whisper + VAE + audio separator). Additional space for project assets.
 - **Python**: 3.11+ (HuMo requirement)
-- **CUDA**: 12.4+ with flash_attn 2.6.3
-- **Key dependency pins**: `torch==2.10.0` (CUDA 12.8, required for RTX 5090 sm_120), `flash_attn==2.6.3`
+- **CUDA**: 12.8+ with PyTorch 2.10.0+cu128 (required for RTX 5090 sm_120/Blackwell support)
+- **Key dependency pins**: `torch==2.10.0`; `flash_attn` may be dropped in favor of native SDPA
 
 ## Pipeline Architecture
 

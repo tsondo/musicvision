@@ -168,8 +168,10 @@ dit:
 ```
 
 **MusicVision two-GPU split (RTX 5090 + RTX 4080):**
-- GPU 0 (RTX 5090, 32 GB): DiT/UNet computation
-- GPU 1 (RTX 4080, 16 GB): T5 text encoder, VAE, Whisper encoder — all smaller models fit comfortably at 16 GB
+- **Primary GPU** (RTX 5090, 32 GB): DiT/UNet computation
+- **Secondary GPU** (RTX 4080, 16 GB): T5 text encoder, VAE, Whisper encoder — all smaller models fit comfortably at 16 GB
+
+> **Note:** On the dev workstation, the 4080 is `cuda:0` and the 5090 is `cuda:1`. MusicVision's `gpu.py` auto-assigns the highest-VRAM GPU as primary regardless of CUDA index — do not hardcode device indices.
 
 For single-GPU setups, use `fp8_scaled` or a GGUF tier with `block_swap_count > 0` to stay within VRAM.
 

@@ -104,14 +104,14 @@ cd frontend && npm install && npm run dev        # React UI at http://localhost:
 
 | Component | Minimum | Recommended |
 |-----------|---------|-------------|
-| **Primary GPU (GPU0)** | 20 GB VRAM | RTX 5090 32 GB |
-| **Secondary GPU (GPU1)** | 12 GB VRAM | RTX 4080 16 GB |
+| **Primary GPU** | 20 GB VRAM | RTX 5090 32 GB |
+| **Secondary GPU** | 12 GB VRAM | RTX 4080 16 GB |
 | **RAM** | 32 GB | 64 GB |
 | **Storage** | 100 GB SSD | 500 GB NVMe |
 | **CUDA** | 12.8+ | 12.8+ |
 | **PyTorch** | 2.6+ | 2.10.x |
 
-GPU0 runs DiT/UNet inference (FLUX, video engines). GPU1 handles text encoders, VAE, Whisper, and audio separator. Models are fully unloaded between stages — FLUX and video engines never run simultaneously.
+The primary GPU runs DiT/UNet inference (FLUX, video engines). The secondary GPU handles text encoders, VAE, Whisper, and audio separator. GPU roles are assigned automatically by VRAM — the highest-VRAM GPU becomes primary regardless of CUDA index. Models are fully unloaded between stages — FLUX and video engines never run simultaneously.
 
 A single-GPU setup works if the card has ≥32 GB VRAM. The two-GPU split is a consumer hardware optimization, not a requirement.
 
