@@ -6,7 +6,7 @@ This Commercial License Agreement ("Agreement") is entered into between **Todd G
 
 This Agreement covers only the MusicVision source code, tooling, and proprietary components authored by Licensor. It does **not** grant any rights to third-party model weights, checkpoints, or dependencies, which are governed by their own respective licenses. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for details.
 
-**Important:** Some upstream models used by MusicVision (notably FLUX.1-dev and HunyuanVideo-Avatar) have their own non-commercial or restricted licenses. A MusicVision commercial license does not override those restrictions. Licensees are responsible for ensuring compliance with all applicable upstream licenses. See the Commercial Use Summary in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for guidance.
+**Important:** Some upstream models used by MusicVision (notably FLUX.1-dev) have their own non-commercial restrictions, and others (notably LTX-Video 2) have revenue-threshold restrictions. A MusicVision commercial license does not override those restrictions. Licensees are responsible for ensuring compliance with all applicable upstream licenses. See the Commercial Use Summary in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for guidance.
 
 ## License Tiers
 

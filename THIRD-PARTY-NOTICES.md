@@ -29,9 +29,8 @@ MusicVision does not distribute model weights. Weights are downloaded by the use
 
 | Model | Author | License | Commercial Use | Notes |
 |-------|--------|---------|----------------|-------|
-| [HunyuanVideo-Avatar](https://github.com/tencent/HunyuanVideo) | Tencent | [Tencent Hunyuan Community License](https://github.com/Tencent/HunyuanVideo/blob/main/LICENSE.txt) | Restricted — see license | Audio-driven video with lip sync. License permits non-commercial and limited commercial use; review terms carefully. |
 | [HuMo](https://github.com/Phantom-video/HuMo) | ByteDance / Phantom-video | Apache 2.0 | **Yes** | Audio-conditioned video (TIA mode). Built on Wan2.1-T2V-1.3B. |
-| [LTX-Video 2](https://github.com/Lightricks/LTX-Video) | Lightricks | [LTXV License](https://github.com/Lightricks/LTX-Video/blob/main/LICENSE) | Restricted — see license | Joint audio+video DiT. Review license for commercial terms. |
+| [LTX-Video 2](https://github.com/Lightricks/LTX-2) | Lightricks | [LTX-2 Community License](https://github.com/Lightricks/LTX-2/blob/main/LICENSE) | Conditional — free under $10M ARR | Joint audio+video DiT. Free for academic research and commercial use by companies with less than $10M annual recurring revenue. Organizations above that threshold must obtain a separate commercial license from Lightricks. |
 
 ### Image Generation
 
@@ -47,7 +46,7 @@ MusicVision does not distribute model weights. Weights are downloaded by the use
 |-------|--------|---------|----------------|-------|
 | [SeedVR2](https://github.com/ByteDance/SeedVR2) | ByteDance | Apache 2.0 | **Yes** | Face-aware video upscaling. |
 | [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) | Xintao Wang et al. | BSD 3-Clause | **Yes** | Frame-by-frame super-resolution. |
-| [LTX Spatial Upsampler](https://github.com/Lightricks/LTX-Video) | Lightricks | See LTX-Video license | Restricted — see license | Latent-space upsampler for LTX-2 output. |
+| [LTX Spatial Upsampler](https://github.com/Lightricks/LTX-2) | Lightricks | [LTX-2 Community License](https://github.com/Lightricks/LTX-2/blob/main/LICENSE) | Conditional — free under $10M ARR | Latent-space upsampler for LTX-2 output. Same license terms as LTX-Video 2. |
 
 ### Audio & Text
 
@@ -99,8 +98,7 @@ These are standard open-source dependencies installed into the user's environmen
 If you hold a MusicVision commercial license, you must **independently** ensure that every upstream model and library you use permits commercial use. The following models have known non-commercial or restricted licenses:
 
 - **FLUX.1-dev** — non-commercial only. Use FLUX.1-schnell (Apache 2.0) instead.
-- **HunyuanVideo-Avatar** — Tencent Hunyuan Community License. Review terms before commercial deployment.
-- **LTX-Video 2** — Lightricks license. Review terms before commercial deployment.
+- **LTX-Video 2 / LTX Spatial Upsampler** — LTX-2 Community License. Free for academic research and commercial use by companies under $10M ARR. Companies above $10M ARR must obtain a commercial license from Lightricks.
 
 All other models and libraries listed above are under permissive licenses (Apache 2.0, MIT, BSD) that generally allow commercial use, but users should verify current license terms at the upstream repositories before commercial deployment.
 
