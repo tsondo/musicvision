@@ -228,14 +228,14 @@ class HumoConfig(BaseModel):
             quality = HumoQuality(quality)
         presets: dict[HumoQuality, dict] = {
             HumoQuality.PREVIEW: dict(
-                tier=HumoTier.FP8_SCALED, resolution="384p", denoising_steps=6,
+                tier=HumoTier.FP8_SCALED, resolution="480p", denoising_steps=6,
                 shift=1.5, scale_t=1.0, scale_a=1.0, lora="lightx2v_i2v_480p",
             ),
             HumoQuality.DRAFT: dict(
                 tier=HumoTier.FP8_SCALED, resolution="480p", denoising_steps=20,
             ),
             HumoQuality.FAST: dict(
-                tier=HumoTier.FP8_SCALED, resolution="384p", denoising_steps=6,
+                tier=HumoTier.FP8_SCALED, resolution="480p", denoising_steps=6,
                 shift=1.5, scale_t=1.0, scale_a=1.0, lora="lightx2v_i2v_480p",
             ),
             HumoQuality.FINAL: dict(
