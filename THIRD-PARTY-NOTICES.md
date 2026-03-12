@@ -88,7 +88,7 @@ These are standard open-source dependencies installed into the user's environmen
 
 | Tool | License | Notes |
 |------|---------|-------|
-| [ffmpeg](https://ffmpeg.org/) | LGPL 2.1+ / GPL 2+ | Audio slicing, video concatenation, muxing. License depends on build configuration. |
+| [ffmpeg](https://ffmpeg.org/) | LGPL 2.1+ / GPL 2+ | Audio slicing, video concatenation, muxing. License depends on build configuration — most Linux/Homebrew builds include GPL-licensed codecs (x264, x265). Statically linking or bundling ffmpeg with these codecs triggers GPL copyleft obligations. Commercial users should verify their ffmpeg build's license with `ffmpeg -L`. |
 | [vLLM](https://github.com/vllm-project/vllm) | Apache 2.0 | Local LLM serving (optional). |
 
 ---
