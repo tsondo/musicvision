@@ -510,6 +510,29 @@ export default function SceneRow({
             <option value="narrative">Narrative</option>
           </select>
         )}
+        {videoEngine === "humo" && (
+          <div className="sigma-shift-row">
+            <label title="Lower = better lip sync, higher = more dynamic motion">
+              Sigma shift
+            </label>
+            <input
+              type="range"
+              min={4}
+              max={8}
+              step={0.5}
+              value={scene.sigma_shift ?? 5}
+              onChange={(e) => {
+                const val = parseFloat(e.target.value);
+                onUpdate(scene.id, { sigma_shift: val });
+              }}
+            />
+            <span className="sigma-shift-value">{scene.sigma_shift ?? 5}</span>
+            <span className="sigma-shift-labels">
+              <span>Lip sync</span>
+              <span>Motion</span>
+            </span>
+          </div>
+        )}
         <div className="seed-row">
           <label>Seed</label>
           <input

@@ -865,6 +865,41 @@ button:disabled {
   max-width: 80px;
 }
 
+.sigma-shift-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.sigma-shift-row label {
+  font-size: 11px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.sigma-shift-row input[type="range"] {
+  flex: 1;
+  min-width: 80px;
+  accent-color: var(--accent);
+}
+
+.sigma-shift-value {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  min-width: 20px;
+  text-align: right;
+}
+
+.sigma-shift-labels {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  font-size: 9px;
+  color: var(--text-dim);
+  padding: 0 2px;
+}
+
 .approved-toggle {
   margin-top: 6px;
   padding: 4px 8px;

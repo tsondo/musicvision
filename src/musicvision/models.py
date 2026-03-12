@@ -536,6 +536,7 @@ class Scene(BaseModel):
     video_seed: Optional[int] = None                # seed used for last generation (locked when approved)
     lip_sync: Optional[bool] = None  # None → auto (depends on video_type + treatment)
     treatment: Optional[SceneTreatment] = None  # None → auto from video_type
+    sigma_shift: Optional[float] = None  # None → use project default (HumoConfig.shift)
     # TODO: per-scene face mask for multi-person lip sync targeting
 
     # LTX-2 generated audio mixing

@@ -56,6 +56,7 @@ export interface Scene {
   video_seed: number | null;
   lip_sync: boolean | null;
   treatment: SceneTreatment | null;
+  sigma_shift: number | null;
 
   // LTX-2 generated audio mixing
   generated_audio: string | null;
@@ -118,6 +119,7 @@ export interface UpdateSceneRequest {
   lip_sync?: boolean;
   treatment?: SceneTreatment | "";
   video_engine?: VideoEngineType;
+  sigma_shift?: number;
   notes?: string;
   // LTX-2 generated audio mixing
   audio_mode?: SceneAudioMode;

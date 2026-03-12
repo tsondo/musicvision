@@ -115,6 +115,7 @@ class UpdateSceneRequest(BaseModel):
     lip_sync: Optional[bool] = None
     treatment: Optional[str] = None
     video_engine: Optional[str] = None
+    sigma_shift: Optional[float] = None
     notes: Optional[str] = None
     # LTX-2 generated audio mixing
     audio_mode: Optional[str] = None
@@ -497,6 +498,8 @@ async def update_scene(scene_id: str, req: UpdateSceneRequest):
     if req.video_engine is not None:
         from musicvision.models import VideoEngineType
         scene.video_engine = VideoEngineType(req.video_engine)
+    if req.sigma_shift is not None:
+        scene.sigma_shift = max(4.0, min(8.0, req.sigma_shift))
     if req.notes is not None:
         scene.notes = req.notes
     # LTX-2 generated audio mixing fields
@@ -712,6 +715,8 @@ async def regenerate_video(scene_id: str, req: RegenerateVideoRequest) -> Scene:
         from musicvision.utils.gpu import detect_devices
 
         config = proj.config.humo.model_copy()
+        if scene.sigma_shift is not None:
+            config.shift = scene.sigma_shift
         device_map = detect_devices()
         engine = create_video_engine(config, device_map=device_map, engine_type=engine_type)
 
@@ -1294,6 +1299,8 @@ async def generate_videos(req: GenerateVideosRequest):
     # --- Run generation in a thread so the event loop stays responsive ---
     import asyncio
 
+    _humo_default_shift = proj.config.humo.shift
+
     def _run_generation() -> dict:
         generated: list[str] = []
         failed: list[dict] = []
@@ -1347,6 +1354,11 @@ async def generate_videos(req: GenerateVideosRequest):
                             proj.config.ltx_video.seed = scene_seed
                         else:
                             proj.config.humo.seed = scene_seed
+                            # Apply per-scene sigma shift override
+                            if scene.sigma_shift is not None:
+                                proj.config.humo.shift = scene.sigma_shift
+                            else:
+                                proj.config.humo.shift = _humo_default_shift
 
                         ref_image = proj.resolve_path(scene.reference_image)
                         segment = _resolve_scene_audio(proj, scene, audio_path)
