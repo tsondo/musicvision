@@ -6,7 +6,7 @@ This Commercial License Agreement ("Agreement") is entered into between **Todd G
 
 This Agreement covers only the MusicVision source code, tooling, and proprietary components authored by Licensor. It does **not** grant any rights to third-party model weights, checkpoints, or dependencies, which are governed by their own respective licenses. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for details.
 
-**Important:** Some upstream models used by MusicVision (notably FLUX.1-dev) have their own non-commercial restrictions. A MusicVision commercial license does not override those restrictions. Licensees are responsible for ensuring compliance with all applicable upstream licenses. FLUX.1-schnell (Apache 2.0) is available as a commercially-permissive alternative to FLUX.1-dev.
+**Important:** Some upstream models used by MusicVision (notably FLUX.1-dev and HunyuanVideo-Avatar) have their own non-commercial or restricted licenses. A MusicVision commercial license does not override those restrictions. Licensees are responsible for ensuring compliance with all applicable upstream licenses. See the Commercial Use Summary in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for guidance.
 
 ## License Tiers
 
@@ -14,7 +14,7 @@ This Agreement covers only the MusicVision source code, tooling, and proprietary
 
 Non-commercial use is governed by the [PolyForm Noncommercial License 1.0.0](LICENSE). No separate agreement is needed.
 
-### Commercial — $2,000/year
+### Commercial
 
 For individuals, startups, and small teams using MusicVision in a revenue-generating product or service.
 
@@ -24,7 +24,7 @@ For individuals, startups, and small teams using MusicVision in a revenue-genera
 - Use in cloud/on-prem deployments
 - Updates and bug fixes during the license term
 
-### Enterprise — $10,000/year
+### Enterprise
 
 Everything in Commercial, plus:
 
@@ -32,13 +32,15 @@ Everything in Commercial, plus:
 - Priority support and faster response times
 - Optional custom terms
 
-### OEM / Custom — $25,000+
+### OEM / Custom
 
 For hardware vendors, DAW companies, cloud platforms, or large-scale integrations.
 
 - Full redistribution rights for MusicVision source code
 - Dedicated support and custom SLAs
 - Long-term licensing options
+
+**Pricing for all commercial tiers is determined on a per-customer basis. Contact tsondo@gmail.com to discuss licensing.**
 
 ## 1. Grant of License
 
@@ -49,8 +51,8 @@ Upon payment of applicable fees, Licensor grants Licensee a **non-exclusive**, *
 Fees are specified in the executed order.
 
 - Payment terms: **Net 30**
-- Fees are **non-refundable**
-- Late payments accrue **1.5% monthly interest** or the maximum allowed by law
+- Fees are **non-refundable** after the first 30 days of the initial license term. Licensees may request a full refund within 30 days of the initial Effective Date if MusicVision does not meet their needs.
+- Late payments accrue **1.0% monthly interest** or the maximum allowed by law, whichever is lower
 
 ## 3. Term
 
@@ -76,7 +78,7 @@ MusicVision source code and proprietary components remain the sole property of L
 
 ## 7. Contributions
 
-If Licensee contributes code to MusicVision (via pull request or otherwise), Licensee agrees to the terms of the [Developer Certificate of Origin](CONTRIBUTING.md) and grants Licensor a perpetual, irrevocable, worldwide, royalty-free license to use, modify, sublicense, and distribute the contribution under any license, including commercial licenses.
+If Licensee contributes code to MusicVision (via pull request or otherwise), the contribution is governed by the MusicVision Contributor License Agreement. See [CLA.md](CLA.md) for full terms. By submitting a contribution, Licensee agrees to the CLA and grants Licensor a perpetual, irrevocable, worldwide, royalty-free license to use, modify, sublicense, and distribute the contribution under any license, including commercial licenses.
 
 ## 8. Termination
 

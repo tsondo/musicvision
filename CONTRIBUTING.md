@@ -1,53 +1,39 @@
 # Contributing to MusicVision
 
-Contributions are welcome! By contributing to MusicVision, you agree to the terms below.
+Thank you for considering contributing to MusicVision! We welcome bug reports, feature suggestions, documentation improvements, and code contributions.
 
-## Developer Certificate of Origin (DCO)
+## Contributor License Agreement
 
-MusicVision uses a dual-license model (PolyForm Noncommercial + Commercial). To ensure that contributions can be distributed under both licenses, all contributors must certify their submissions under the [Developer Certificate of Origin v1.1](https://developercertificate.org/):
+By submitting a pull request, you agree to the terms of the [MusicVision Contributor License Agreement (CLA)](CLA.md). This grants the project maintainer the right to distribute your contribution under any license, including the project's PolyForm Noncommercial license and commercial licenses. Please read the CLA before submitting.
 
-> Developer Certificate of Origin v1.1
->
-> By making a contribution to this project, I certify that:
->
-> (a) The contribution was created in whole or in part by me and I have the right to submit it under the open source license indicated in the file; or
->
-> (b) The contribution is based upon previous work that, to the best of my knowledge, is covered under an appropriate open source license and I have the right under that license to submit that work with modifications, whether created in whole or in part by me, under the same open source license (unless I am permitted to submit under a different license), as indicated in the file; or
->
-> (c) The contribution was provided directly to me by some other person who certified (a), (b) or (c) and I have not modified it.
->
-> (d) I understand and agree that this project and the contribution are public and that a record of the contribution (including all personal information I submit with it, including my sign-off) is maintained indefinitely and may be redistributed consistent with this project or the open source license(s) involved.
+If you are contributing on behalf of your employer, ensure you have authorization. Contact tsondo@gmail.com for corporate CLA arrangements.
 
-### How to sign off
+## Getting Started
 
-Add a `Signed-off-by` line to your commit messages:
+1. Fork the repository
+2. Create a feature branch from `main`
+3. Make your changes
+4. Run the test suite: `pytest tests/`
+5. Submit a pull request
 
-```
-Signed-off-by: Your Name <your.email@example.com>
-```
+## Code Style
 
-You can do this automatically with `git commit -s`.
+- Python 3.11+
+- Every module must include `from __future__ import annotations` (required by Pydantic v2 `model_rebuild()`)
+- Type hints on all public function signatures
+- Docstrings on all public classes and functions
+- Format with `ruff format`; lint with `ruff check`
 
-### License grant for dual licensing
+## Pipeline Architecture
 
-By submitting a contribution with a DCO sign-off, you additionally grant the project maintainer (Todd Green) a perpetual, irrevocable, worldwide, royalty-free license to use, modify, sublicense, and distribute your contribution under any license, including commercial licenses. This grant is necessary for the dual-license model to work — without it, commercial licenses could not cover contributed code.
+Keep all pipeline logic in the core modules (`intake/`, `imaging/`, `video/`, `assembly/`). The `ui/` and `api/` layers should only call into these — never put generation logic, file management, or config handling directly in UI or API code.
 
-If you are not comfortable with this grant, you are still free to use MusicVision under the PolyForm Noncommercial license, but please do not submit contributions.
+## Reporting Issues
 
-## Guidelines
+- Use GitHub Issues
+- Include your GPU model, VRAM, CUDA version, and `torch.__version__`
+- For inference bugs, include the full traceback and your project config (with API keys redacted)
 
-- Run `pytest tests/ -v --tb=short` before submitting a PR
-- Run `ruff check src/ tests/` and fix any lint errors
-- Follow the coding conventions in [CLAUDE.md](CLAUDE.md)
-- Add tests for new functionality
-- Keep PRs focused — one feature or fix per PR
+## License
 
-## What to contribute
-
-- Bug fixes
-- New engine integrations
-- Documentation improvements
-- Test coverage
-- Performance improvements
-
-For larger features, please open an issue first to discuss the approach.
+Your contributions will be licensed under the same terms as the project: [PolyForm Noncommercial License 1.0.0](LICENSE) for the open-source release, with the option for the maintainer to include contributions in commercial releases per the CLA.
