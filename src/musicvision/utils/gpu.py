@@ -394,9 +394,11 @@ def set_video_power_limit(device_map: DeviceMap, watts: float = 450) -> bool:
         return True
 
     log.warning(
-        "Could not set GPU %d power limit to %dW (permission denied). "
-        "To enable, add to /etc/sudoers: %s ALL=(ALL) NOPASSWD: /usr/bin/nvidia-smi",
-        gpu_index, int(watts), _get_username(),
+        "Could not set GPU %d power limit to %dW. "
+        "On native Linux, add to /etc/sudoers: %s ALL=(ALL) NOPASSWD: $(which nvidia-smi). "
+        "On WSL, nvidia-smi -pl is blocked by the host driver — set the power limit "
+        "from Windows (e.g. nvidia-smi -i <gpu> -pl %d in an admin PowerShell).",
+        gpu_index, int(watts), _get_username(), int(watts),
     )
     return False
 
