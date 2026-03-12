@@ -517,16 +517,16 @@ export default function SceneRow({
             </label>
             <input
               type="range"
-              min={4}
+              min={1}
               max={8}
               step={0.5}
-              value={scene.sigma_shift ?? 5}
+              value={scene.sigma_shift ?? 1.5}
               onChange={(e) => {
                 const val = parseFloat(e.target.value);
                 onUpdate(scene.id, { sigma_shift: val });
               }}
             />
-            <span className="sigma-shift-value">{scene.sigma_shift ?? 5}</span>
+            <span className="sigma-shift-value">{scene.sigma_shift ?? 1.5}</span>
             <span className="sigma-shift-labels">
               <span>Lip sync</span>
               <span>Motion</span>
