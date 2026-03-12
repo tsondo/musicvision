@@ -1,189 +1,113 @@
-# MusicVision Licensing & Pricing
+# MusicVision Commercial License Agreement
 
-MusicVision uses a hybrid licensing model designed to support hobbyists, researchers, indie developers, and commercial teams. Non‑commercial use is free under the PolyForm Noncommercial License 1.0.0 (see LICENSE). Commercial and enterprise use require a paid license as described below.
+This Commercial License Agreement ("Agreement") is entered into between **Todd Green** ("Licensor") and the entity or individual identified in the executed order ("Licensee").
 
-MusicVision integrates third‑party models and weights (HuMo/ByteDance, FLUX/Black Forest Labs, T5/Google, Whisper/OpenAI, etc.) that are governed by their own respective licenses. This agreement covers only the MusicVision source code, tooling, and proprietary components. Users are responsible for complying with upstream model licenses independently.
+## Scope
 
----
+This Agreement covers only the MusicVision source code, tooling, and proprietary components authored by Licensor. It does **not** grant any rights to third-party model weights, checkpoints, or dependencies, which are governed by their own respective licenses. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for details.
+
+**Important:** Some upstream models used by MusicVision (notably FLUX.1-dev) have their own non-commercial restrictions. A MusicVision commercial license does not override those restrictions. Licensees are responsible for ensuring compliance with all applicable upstream licenses. FLUX.1-schnell (Apache 2.0) is available as a commercially-permissive alternative to FLUX.1-dev.
 
 ## License Tiers
 
-### Non‑Commercial License — Free
-For personal, academic, research, and hobby use. No revenue may be generated from products or services using MusicVision.
+### Non-Commercial — Free
 
-Rights included:
-- Use MusicVision locally
-- Modify for personal or research use
-- Publish non‑commercial results
+Non-commercial use is governed by the [PolyForm Noncommercial License 1.0.0](LICENSE). No separate agreement is needed.
 
-Restrictions:
-- No commercial distribution
-- No integration into paid products or services
+### Commercial — $2,000/year
 
----
+For individuals, startups, and small teams using MusicVision in a revenue-generating product or service.
 
-### Commercial License — $2,000/year
-For individuals, startups, and small teams using MusicVision in a revenue‑generating product or service.
-
-Rights included:
-- Commercial use
+- Commercial use of MusicVision source code and tooling
 - Internal modification
-- Distribution as part of a commercial product
-- Use in cloud/on‑prem deployments
-- Access to updates and bug fixes
+- Distribution as an integrated component of Licensee's product
+- Use in cloud/on-prem deployments
+- Updates and bug fixes during the license term
 
-Restrictions:
-- No sublicensing
-- No redistribution of MusicVision source code or proprietary components
-- No competing products built on top of MusicVision
-- Third‑party model weights (HuMo, FLUX, T5, Whisper, etc.) are subject to their respective upstream licenses and are not covered by this agreement
-
----
-
-### Enterprise License — $10,000/year
-For companies requiring scale, support, or redistribution rights.
+### Enterprise — $10,000/year
 
 Everything in Commercial, plus:
-- Priority support
-- Faster response times
-- Multi‑deployment rights
-- Internal redistribution across teams
+
+- Multi-team internal use and multi-deployment rights
+- Priority support and faster response times
 - Optional custom terms
 
----
+### OEM / Custom — $25,000+
 
-### OEM / Custom Licensing — $25,000+
 For hardware vendors, DAW companies, cloud platforms, or large-scale integrations.
 
-Includes:
-- Full redistribution rights
-- Source‑level access (optional)
-- Dedicated support
-- Custom SLAs
-- Long‑term licensing options
-
-Contact: **tsondo@gmail.com**
-
----
-
-## How to Purchase
-Submit the Order Form below to initiate licensing. Invoices are issued with **Net 30** payment terms.
-
----
-
-# MusicVision Commercial Order Form
-
-**MusicVision Commercial License — Order Form**
-
-**Company Name:** ___________________________________________
-
-**Contact Name:** ___________________________________________
-
-**Email:** _________________________________________________
-
-**Address:** _______________________________________________
-
-**License Tier (select one):**
-- ☐ Commercial License — $2,000/year
-- ☐ Enterprise License — $10,000/year
-- ☐ OEM / Custom — Contact for quote
-
-**Intended Product or Service:**
-_____________________________________________________________
-
-**Number of Deployments (if applicable):**
-_____________________________________________________________
-
-**Effective Date:** __________________________________________
-
-**Payment Method:**
-- ☐ Bank transfer
-- ☐ Credit card
-- ☐ Other: ________________________________________________
-
-**Signature (Licensee):** ____________________________________
-**Date:** ___________________
-
-**Signature (Licensor):** ____________________________________
-**Date:** ___________________
-
----
-
-# MusicVision Commercial License Agreement
-
-This Commercial License Agreement (“Agreement”) is entered into between the MusicVision project owner identified in the Order Form (“Licensor”) and the entity or individual identified in the Order Form (“Licensee”).
+- Full redistribution rights for MusicVision source code
+- Dedicated support and custom SLAs
+- Long-term licensing options
 
 ## 1. Grant of License
-Upon payment of applicable fees, Licensor grants Licensee a **non‑exclusive**, **worldwide**, **non‑transferable**, **non‑sublicensable** license to:
 
-- Use MusicVision in a commercial product or service
-- Modify MusicVision for internal commercial use
-- Distribute MusicVision only as an integrated component of Licensee’s product
-- Receive updates and bug fixes during the license term
+Upon payment of applicable fees, Licensor grants Licensee a **non-exclusive**, **worldwide**, **non-transferable**, **non-sublicensable** license to use MusicVision source code and tooling in accordance with the selected tier. No rights are granted except those expressly stated.
 
-No rights are granted except those expressly stated.
+## 2. Fees and Payment
 
-## 2. License Scope
-The license tier selected in the Order Form determines permitted usage:
-
-- **Commercial License ($2,000/year):** single organization, unlimited internal users, distribution as part of one commercial product.
-- **Enterprise License ($10,000/year):** multi‑team internal use, multi‑deployment rights, priority support.
-- **OEM / Custom ($25,000+):** redistribution rights, large‑scale integration, optional source access.
-
-Any use outside the selected tier requires a separate license.
-
-## 3. Fees and Payment
-Fees are specified in the Order Form.
+Fees are specified in the executed order.
 
 - Payment terms: **Net 30**
-- Fees are **non‑refundable**
+- Fees are **non-refundable**
 - Late payments accrue **1.5% monthly interest** or the maximum allowed by law
 
-## 4. Term
-This Agreement begins on the Effective Date and continues for **one (1) year**, automatically renewing unless either party provides 30 days’ written notice.
+## 3. Term
 
-## 5. Restrictions
+This Agreement begins on the Effective Date and continues for **one (1) year**, automatically renewing unless either party provides 30 days' written notice before the renewal date.
+
+## 4. Restrictions
+
 Licensee may not:
 
-- Sublicense or resell MusicVision
-- Redistribute MusicVision source code or proprietary components
-- Remove copyright notices
-- Use MusicVision to build a directly competing product
+- Sublicense, resell, or transfer this license
+- Redistribute MusicVision source code as a standalone product
+- Remove or alter copyright notices or license headers
+- Use MusicVision source code as the primary basis for a product that directly replicates MusicVision's core functionality (an AI music video generation pipeline). Integration into a larger product with substantial independent value is permitted.
 - Exceed the scope of the selected license tier
 
-## 6. Intellectual Property
-MusicVision source code and proprietary components remain the sole property of Licensor. No ownership rights are transferred. Third‑party model weights and dependencies are governed by their respective upstream licenses.
+## 5. Third-Party Components
 
-## 7. Termination
+MusicVision integrates third-party AI models and libraries that are **not owned by Licensor** and are **not covered by this Agreement**. Licensee is solely responsible for obtaining any necessary rights or licenses for third-party components. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for a list of known third-party components and their licenses.
+
+## 6. Intellectual Property
+
+MusicVision source code and proprietary components remain the sole property of Licensor. No ownership rights are transferred. This Agreement does not grant any rights to third-party intellectual property.
+
+## 7. Contributions
+
+If Licensee contributes code to MusicVision (via pull request or otherwise), Licensee agrees to the terms of the [Developer Certificate of Origin](CONTRIBUTING.md) and grants Licensor a perpetual, irrevocable, worldwide, royalty-free license to use, modify, sublicense, and distribute the contribution under any license, including commercial licenses.
+
+## 8. Termination
+
 Licensor may terminate this Agreement if Licensee:
 
-- Fails to pay fees within 45 days
-- Materially breaches this Agreement and fails to cure within 30 days
-- Becomes insolvent or enters bankruptcy
+- Fails to pay fees within 45 days of the due date
+- Materially breaches this Agreement and fails to cure within 30 days of written notice
+- Becomes insolvent or enters bankruptcy proceedings
 
-Upon termination, Licensee must cease all use and destroy all copies.
+Upon termination, Licensee must cease all use and destroy all copies of MusicVision source code.
 
-## 8. Warranty and Support
-MusicVision is provided **“as is”**.
+## 9. Warranty Disclaimer
 
-Support levels depend on license tier:
+MusicVision is provided **"as is"** without warranty of any kind. Support levels depend on the license tier:
 
-- Commercial: updates + reasonable‑effort bug fixes
-- Enterprise: priority support + faster response times
-- OEM: custom SLA
+- Commercial: updates and reasonable-effort bug fixes
+- Enterprise: priority support and faster response times
+- OEM: custom SLA as agreed in writing
 
-## 9. Limitation of Liability
-Licensor’s total liability is limited to **fees paid in the preceding 12 months**. Neither party is liable for indirect or consequential damages.
+## 10. Limitation of Liability
 
-## 10. Governing Law
+Licensor's total aggregate liability under this Agreement is limited to **fees paid by Licensee in the preceding 12 months**. Neither party is liable for indirect, incidental, special, or consequential damages.
+
+## 11. Governing Law
+
 This Agreement is governed by the laws of **Delaware, USA**, unless otherwise agreed in writing.
 
-## 11. Entire Agreement
-This Agreement and the Order Form constitute the entire agreement between the parties.
+## 12. Entire Agreement
+
+This Agreement and the executed order constitute the entire agreement between the parties regarding the subject matter herein.
 
 ---
 
-**Licensor:** ___________________________ Date: ____________
-**Licensee:** ___________________________ Date: ____________
-**Title:** ___________________________
-**Company:** ___________________________
+**To purchase a commercial license, contact: tsondo@gmail.com**

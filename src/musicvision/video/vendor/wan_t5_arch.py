@@ -1,5 +1,7 @@
 # Vendored from Wan-AI/Wan2.1: wan/modules/t5.py
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
+# Licensed under the Apache License, Version 2.0
+# https://www.apache.org/licenses/LICENSE-2.0
 #
 # Custom UMT5-XXL implementation used by Wan-AI checkpoints.
 # Key naming: token_embedding, blocks.N.{norm1,attn,norm2,ffn,pos_embedding}, norm

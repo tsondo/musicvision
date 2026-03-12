@@ -1,5 +1,7 @@
 # Vendored from Wan-AI/Wan2.1: wan/modules/tokenizers.py
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
+# Licensed under the Apache License, Version 2.0
+# https://www.apache.org/licenses/LICENSE-2.0
 import html
 import string
 

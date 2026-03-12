@@ -1,6 +1,6 @@
 <p align="center"><img src="MusicVision.png" alt="MusicVision — AI Music Video Generator" width="480"></p>
 
-<h3 align="center">Open-Source AI Music Video Generator for Consumer GPUs</h3>
+<h3 align="center">Source-Available AI Music Video Generator for Consumer GPUs</h3>
 
 <p align="center">
   Turn any song into a lip-synced music video using AI — fully local, no cloud APIs required.
@@ -14,7 +14,7 @@
 
 ## What Is MusicVision?
 
-MusicVision is an open-source Python pipeline that generates AI music videos from a song file and a character reference image. It segments your song into scenes, generates a storyboard, renders lip-synced video clips, upscales them, and assembles a rough cut ready for editing in DaVinci Resolve.
+MusicVision is a source-available Python pipeline that generates AI music videos from a song file and a character reference image. It segments your song into scenes, generates a storyboard, renders lip-synced video clips, upscales them, and assembles a rough cut ready for editing in DaVinci Resolve.
 
 ```
 song.wav + lyrics.txt + reference.png
@@ -321,4 +321,6 @@ MusicVision occupies a unique niche: end-to-end music video generation running f
 
 ## License
 
-[PolyForm Noncommercial License 1.0.0](LICENSE) — free for personal, academic, and research use. Commercial licenses available; see [LICENSE-COMMERCIAL](LICENSE-COMMERCIAL) for details.
+MusicVision source code is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE) — free for personal, academic, and research use. Commercial licenses are available; see [LICENSE-COMMERCIAL](LICENSE-COMMERCIAL) for details.
+
+MusicVision integrates third-party AI models that have their own licenses. Some models (notably FLUX.1-dev) restrict commercial use independently of MusicVision's license. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for details. Users are responsible for complying with all applicable upstream licenses.

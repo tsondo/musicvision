@@ -1,6 +1,10 @@
 """
 Vendored HuMo DiT architecture from Phantom-video/HuMo.
 
+Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
+Licensed under the Apache License, Version 2.0
+https://www.apache.org/licenses/LICENSE-2.0
+
 Sources:
   - humo/models/wan_modules/model_humo.py (DiT model + blocks)
   - humo/models/wan_modules/attention.py  (flash attention / SDPA fallback)

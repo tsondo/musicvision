@@ -1,5 +1,7 @@
 # Vendored from Wan-AI/Wan2.1: wan/modules/vae.py
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
+# Licensed under the Apache License, Version 2.0
+# https://www.apache.org/licenses/LICENSE-2.0
 #
 # 3D causal Video VAE for Wan2.1 / HuMo video generation.
 # Architecture: dim=96, z_dim=16, dim_mult=[1,2,4,4], RMS_norm, CausalConv3d.
