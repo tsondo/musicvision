@@ -26,9 +26,9 @@ Everything runs locally on consumer NVIDIA GPUs. No cloud services, no per-minut
 ### Key Features
 
 - **Lip-synced video generation** — characters sing along to the music with accurate mouth movements, facial expressions, and body motion driven by the audio
-- **Multiple AI video engines** — HunyuanVideo-Avatar (lip sync), LTX-Video 2 (cinematic), HuMo (audio-reactive)
+- **Multiple AI video engines** — HuMo (audio-reactive lip sync), LTX-Video 2 (cinematic)
 - **Multiple image engines** — Z-Image (ungated, fast) and FLUX (LoRA support for character consistency)
-- **Three upscalers** — SeedVR2 (faces), LTX Spatial (latent-space), Real-ESRGAN (fast preview)
+- **Three upscalers** — SeedVR2 (pixel-space), LTX Spatial (latent-space), Real-ESRGAN (fast preview)
 - **Frame-accurate audio sync** — integer frame math eliminates drift; original uncut audio in final assembly
 - **Sub-clip chaining** — scenes longer than the engine's max clip length are automatically split with visual continuity (last frame → next reference image)
 - **Professional export** — rough cut MP4, EDL, and FCPXML 1.10 for DaVinci Resolve
@@ -51,9 +51,9 @@ MusicVision wraps multiple AI models into a five-stage pipeline with user review
 
 2. **Image Generation & Storyboard** — Z-Image or FLUX generates a reference image for each scene. Users review the storyboard grid and regenerate individual scenes until satisfied.
 
-3. **Video Generation** — HunyuanVideo-Avatar, LTX-Video 2, or HuMo renders each scene. Long scenes are split into sub-clips with visual continuity chaining. Each engine has draft and production presets.
+3. **Video Generation** — HuMo or LTX-Video 2 renders each scene. Long scenes are split into sub-clips with visual continuity chaining. Each engine has draft and production presets.
 
-4. **Upscaling** — Per-engine upscaler selection: LTX Spatial for LTX-2 output (latent-space), SeedVR2 for HVA/HuMo (pixel-space face detail), Real-ESRGAN for fast preview. Configurable target resolution (720p–4K, default 1080p).
+4. **Upscaling** — Per-engine upscaler selection: LTX Spatial for LTX-2 output (latent-space), SeedVR2 for HuMo (pixel-space), Real-ESRGAN for fast preview. Configurable target resolution (720p–4K, default 1080p).
 
 5. **Assembly & Export** — Clips concatenated with the original uncut audio, exported as MP4 + EDL + FCPXML for DaVinci Resolve. Assembly enforces a duration assertion within one frame tolerance.
 
@@ -61,9 +61,10 @@ MusicVision wraps multiple AI models into a five-stage pipeline with user review
 
 | Engine | Lip Sync | Audio Input | Max Clip | Resolution | Best For |
 |--------|----------|-------------|----------|------------|----------|
-| **HunyuanVideo-Avatar** | Native | Full mix | 5.16s (129 frames @ 25fps) | 320p–704p | Singing scenes, character performance |
+| **HuMo** | Native | Full mix (TIA mode) | 3.88s (97 frames @ 25fps) | Up to 720p | Audio-reactive motion, lip sync |
 | **LTX-Video 2** | Post-process | Audio+video unified | Configurable | Up to 720p | Cinematic scenes, non-vocal |
-| **HuMo** | Native | Full mix (TIA mode) | 3.88s (97 frames @ 25fps) | Up to 720p | Audio-reactive motion |
+
+> **Note:** HunyuanVideo-Avatar (HVA) was previously supported but was deprecated and removed in commit 35cda2a (2026-03-11).
 
 ---
 
@@ -85,7 +86,7 @@ musicvision import-audio --project ./my-video --audio song.wav --lyrics lyrics.t
 # 4. Run the pipeline
 musicvision intake --project ./my-video --skip-transcription
 musicvision generate-images --project ./my-video --model z-image-turbo
-musicvision generate-video --project ./my-video --engine hunyuan_avatar
+musicvision generate-video --project ./my-video --engine humo
 musicvision upscale --project ./my-video --resolution 1080p
 musicvision assemble --project ./my-video
 # → my-video/output/rough_cut.mp4
@@ -177,7 +178,6 @@ Copy `.env.example` to `.env` and configure:
 | `OPENAI_BASE_URL` | If using vLLM | e.g. `http://192.168.1.100:8000/v1` |
 | `OPENAI_MODEL` | If using vLLM | e.g. `Qwen/Qwen2.5-32B-Instruct-AWQ` |
 | `MUSICVISION_WEIGHTS_DIR` | No | Override model cache dir (default: `~/.cache/musicvision/weights`) |
-| `HVA_REPO_DIR` | For HunyuanVideo-Avatar | Path to cloned HVA repo |
 | `SEEDVR2_REPO_DIR` | For SeedVR2 upscaler | Path to cloned SeedVR repo |
 
 ---
@@ -219,7 +219,7 @@ The API server also provides Swagger UI at `http://localhost:8000/docs` for dire
 | `musicvision download-weights --tier TIER [--token TOKEN]` | Download model weights |
 
 **Image models:** `flux-dev`, `flux-schnell`, `z-image`, `z-image-turbo`
-**Video engines:** `hunyuan_avatar`, `ltx_video`, `humo`
+**Video engines:** `humo`, `ltx_video`
 **Upscalers:** `ltx_spatial`, `seedvr2`, `real_esrgan`
 **Resolutions:** `720p`, `1080p`, `1440p`, `4k`
 
@@ -249,7 +249,7 @@ All intermediate artifacts are saved. You can re-enter the pipeline at any stage
 ## Testing
 
 ```bash
-# Unit tests — ~257 tests, no GPU, < 10 seconds
+# Unit tests — ~227 tests, no GPU, < 10 seconds
 uv run pytest tests/ -v
 
 # LLM prompt tests (requires vLLM server)
@@ -260,9 +260,6 @@ python scripts/test_image_gen.py
 
 # GPU video generation (HuMo)
 python scripts/test_gpu_pipeline.py --tier fp8_scaled --steps 6
-
-# HunyuanVideo-Avatar standalone
-python scripts/test_hva_standalone.py
 ```
 
 See [TESTING.md](docs/TESTING.md) for the full test strategy.
@@ -291,22 +288,21 @@ MusicVision occupies a unique niche: end-to-end music video generation running f
 
 | Capability | MusicVision | ViMax | LTX-2 (model) | Music2Video |
 |---|---|---|---|---|
-| Lip-synced video from audio | Yes (HVA) | No | Yes (built-in) | No (VQGAN) |
+| Lip-synced video from audio | Yes (HuMo) | No | Yes (built-in) | No (VQGAN) |
 | Scene segmentation from lyrics | Yes | Yes (from scripts) | No | Partial |
 | Runs fully local | Yes | No (cloud APIs) | Partial (28 GB+) | Yes |
 | Consumer dual-GPU support | Yes | N/A | No | No |
 | Sub-clip chaining for continuity | Yes | No | No | No |
 | DaVinci Resolve export (FCPXML) | Yes | No | No | No |
-| Multiple engine backends | Yes (3 engines) | Yes (cloud) | Single model | Single model |
+| Multiple engine backends | Yes (2 engines) | Yes (cloud) | Single model | Single model |
 | Storyboard GUI with per-scene control | Yes (React) | Yes | No | No |
 
 ---
 
 ## Built With
 
-- [HunyuanVideo-Avatar](https://github.com/tencent/HunyuanVideo) (Tencent) — audio-driven video generation with lip sync
-- [LTX-Video 2](https://github.com/Lightricks/LTX-Video) (Lightricks) — unified audio+video generation
 - [HuMo](https://github.com/Phantom-video/HuMo) (ByteDance) — audio-conditioned video with TIA mode
+- [LTX-Video 2](https://github.com/Lightricks/LTX-Video) (Lightricks) — unified audio+video generation
 - [FLUX](https://github.com/black-forest-labs/flux) (Black Forest Labs) — text-to-image with LoRA support
 - [Z-Image](https://huggingface.co/Tongyi-MAI/Z-Image-Turbo) (Tongyi) — fast ungated image generation
 - [SeedVR2](https://github.com/ByteDance/SeedVR2) (ByteDance) — face-aware video upscaling

@@ -80,17 +80,11 @@ def _select_strategy(free_gb: float, config: ImageGenConfig) -> str:
 
 The `_load_bf16_no_offload()` method already exists and is used when `dit_device == encoder_device` (single GPU). Verify this path is taken on cloud instances.
 
-**Also applies to video engines**: Check that `hunyuan_avatar_engine.py` and `humo_engine.py` don't apply unnecessary offload or quantization when running on a single 80GB GPU.
+**Also applies to video engines**: Check that `humo_engine.py` and `ltx_video_engine.py` don't apply unnecessary offload or quantization when running on a single 80GB GPU.
 
-### 3. HVA engine — single-GPU mode
+### 3. SeedVR2 upscaler — single-GPU mode
 
-HunyuanVideo-Avatar currently launches as a subprocess that may assume dual-GPU. Verify the wrapper script respects the device map. On a single 80GB GPU, everything (DiT, VAE, text encoders) should land on `cuda:0` with no CPU offload.
-
-Check `scripts/hva_wrapper.py` and ensure it reads the device from the JSON input rather than hardcoding GPU indices.
-
-### 4. SeedVR2 upscaler — single-GPU mode
-
-Same concern as HVA. SeedVR2 runs as a subprocess. Verify it works on a single-GPU system where `cuda:0` is the only device.
+SeedVR2 runs as a subprocess. Verify it works on a single-GPU system where `cuda:0` is the only device.
 
 ---
 
@@ -174,7 +168,7 @@ huggingface-cli download Zheng-Peng-Fei/Z-Image-turbo --local-dir "$DIR/z-image-
 echo "Downloading Whisper large-v3..."
 huggingface-cli download openai/whisper-large-v3 --local-dir "$DIR/whisper-large-v3"
 
-# HVA, HuMo, LTX-2, SeedVR2 weights — add as needed
+# HuMo, LTX-2, SeedVR2 weights — add as needed
 # These may require HUGGINGFACE_TOKEN for gated repos
 
 echo "Weights downloaded to $DIR"
@@ -287,7 +281,7 @@ Expected per-scene times on A100 80GB (rough estimates, verify empirically):
 | Stage | A100 80GB | RTX 5090 32GB (current) |
 |-------|-----------|------------------------|
 | FLUX image gen (1280×720) | ~8s | ~12s |
-| HVA video gen (5s clip, 720p) | ~45s | ~60s |
+| HuMo video gen (3.88s clip, 480p) | ~3.5min | ~4.5min |
 | SeedVR2 upscale (720p → 1080p) | ~30s | ~40s |
 | LTX-2 video gen (10s clip) | ~20s | ~30s |
 
@@ -299,7 +293,7 @@ These are estimates. The A100's advantage is primarily memory bandwidth (2TB/s v
 
 1. **`gpu.py` fixes** — recommend_tier single-GPU FP16, test with CUDA_VISIBLE_DEVICES=0
 2. **`flux_engine.py` verification** — confirm no-offload path on high-VRAM single GPU
-3. **HVA/SeedVR2 subprocess verification** — single-GPU mode works
+3. **SeedVR2 subprocess verification** — single-GPU mode works
 4. **Dockerfile** — build and test locally with `--gpus all`
 5. **Weight download script** — verify all weights download correctly
 6. **Cloud test** — rent A100 80GB, run end-to-end, collect benchmarks

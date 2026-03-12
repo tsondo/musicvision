@@ -40,7 +40,6 @@ Import from the API types or hardcode the current values for display purposes:
 
 ```
 humo:            max 97 frames @ 25fps  = 3.88s max,  1.00s min
-hunyuan_avatar:  max 129 frames @ 25fps = 5.16s max,  1.32s min
 ltx_video:       max 257 frames @ 24fps = 10.71s max, 0.375s min
 ```
 
@@ -499,7 +498,6 @@ const ENGINE_CONSTRAINTS: Record<string, {
   minSeconds: number;
 }> = {
   humo: { name: "HuMo", maxFrames: 97, minFrames: 25, fps: 25, maxSeconds: 3.88, minSeconds: 1.0 },
-  hunyuan_avatar: { name: "HVA", maxFrames: 129, minFrames: 33, fps: 25, maxSeconds: 5.16, minSeconds: 1.32 },
   ltx_video: { name: "LTX-2", maxFrames: 257, minFrames: 9, fps: 24, maxSeconds: 10.71, minSeconds: 0.375 },
 };
 ```

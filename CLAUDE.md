@@ -4,7 +4,7 @@ Context file for Claude Code sessions. Read this before making changes.
 
 ## What This Is
 
-MusicVision is an AI music video production pipeline: song → scenes → storyboard → video. It wraps HuMo (ByteDance) for video generation and FLUX for reference image generation into an iterative, user-controlled workflow with LLM-assisted prompt generation.
+MusicVision is an AI music video production pipeline: song → scenes → storyboard → video. It wraps HuMo (ByteDance) and LTX-Video 2 (Lightricks) for video generation and FLUX for reference image generation into an iterative, user-controlled workflow with LLM-assisted prompt generation.
 
 ## Repo Structure
 
@@ -24,15 +24,16 @@ src/musicvision/
 │   ├── flux_engine.py       # FLUX inference wrapper
 │   └── storyboard.py        # Storyboard management
 ├── video/
-│   ├── prompt_generator.py  # LLM-assisted HuMo video prompts
+│   ├── prompt_generator.py  # LLM-assisted video prompts
 │   ├── humo_engine.py       # HuMo TIA inference wrapper
+│   ├── ltx_video_engine.py  # LTX-Video 2 inference wrapper
 │   └── scene_manager.py     # Scene review/regeneration
 ├── upscaling/
 │   ├── base.py              # UpscaleEngine ABC + dataclasses
 │   ├── factory.py           # Dispatch on UpscalerType → engine
 │   ├── pipeline.py          # Orchestrator: group by engine, upscale, update scenes
 │   ├── realesrgan_engine.py # Real-ESRGAN frame-by-frame upscaler
-│   ├── seedvr2_engine.py    # SeedVR2 subprocess bridge (like HVA)
+│   ├── seedvr2_engine.py    # SeedVR2 subprocess bridge
 │   └── ltx_spatial_engine.py # LTX Spatial Upsampler (diffusers in-process)
 ├── assembly/
 │   ├── concatenator.py      # ffmpeg clip joining + audio sync (prefers upscaled clips)
@@ -90,8 +91,6 @@ Key env vars (see .env.example for full list):
 Weight location env vars (for team setups with shared storage):
 - `MUSICVISION_WEIGHTS_DIR` — HuMo weights (default: `~/.cache/musicvision/weights`)
 - `HF_HOME` — HuggingFace hub cache for FLUX/Z-Image (default: `~/.cache/huggingface`)
-- `HVA_REPO_DIR` — HunyuanVideo-Avatar repo path (no default, must be set)
-- `HVA_VENV_PYTHON` — HVA venv python (auto-derived from `HVA_REPO_DIR/.venv/bin/python`)
 - `SEEDVR2_REPO_DIR` — SeedVR2 repo path (no default, must be set for SeedVR2 upscaler)
 - `SEEDVR2_VENV_PYTHON` — SeedVR2 venv python (auto-derived from `SEEDVR2_REPO_DIR/.venv/bin/python`)
 
@@ -108,7 +107,7 @@ PyTorch: 2.10.0+cu128 (upgraded for RTX 5090 sm_120 support). Do not downgrade.
 - All pipeline logic in core modules (intake/, imaging/, video/, assembly/). UI and API are thin layers that call into these — never put generation logic in api.py or UI code.
 - GPU-heavy and long-running API endpoints must run their sync work in a background thread via `asyncio.to_thread()` so the FastAPI event loop stays responsive for polling and other requests. Any endpoint that calls into GPU inference (intake, image generation, video generation) is a candidate for this pattern.
 - Always guard `import torch` behind try/except or function scope — unit tests must not require torch
-- Subprocess engines (HVA, SeedVR2) must capture and log both stdout and stderr
+- Subprocess engines (SeedVR2) must capture and log both stdout and stderr
 - Any new engine must register in `engine_registry.py` ENGINES dict — this is the single source of truth
 - Model loading and unloading must be symmetric — if `load()` moves weights to GPU, `unload()` must free them completely and verifiably
 - Never hardcode resolution, frame count, or FPS — always read from engine constraints
@@ -142,7 +141,7 @@ When video/image generation produces bad output (noise, black frames, artifacts)
 3. **Isolate the variable**: Change ONE thing at a time (tier, resolution, steps, prompt, reference image)
 4. **Compare against ComfyUI when possible**: If a ComfyUI workflow produces good output with the same model/settings, diff the parameters systematically (sigma schedule, CFG values, sampler, input scaling)
 5. **VRAM pressure**: OOM mid-inference can produce partial/corrupt output without raising an exception. Check `torch.cuda.memory_allocated()` after generation.
-6. **Subprocess engines (HVA, SeedVR2)**: Check stderr first — the subprocess may fail silently from the caller's perspective. Parse return codes.
+6. **Subprocess engines (SeedVR2)**: Check stderr first — the subprocess may fail silently from the caller's perspective. Parse return codes.
 7. **Known gotchas** (see FIXLOG.md):
    - Timestep must be scaled ×1000 for HuMo
    - Sigma shift 8.0 (not 5.0) matches ComfyUI
@@ -154,7 +153,7 @@ When video/image generation produces bad output (noise, black frames, artifacts)
 - **Silent dtype mismatch**: Model expects bf16 input but receives fp32 → runs but produces garbage. Always verify `tensor.dtype` at engine boundaries.
 - **Stale model on GPU**: Previous stage's model wasn't fully unloaded → OOM on next stage. Verify with `torch.cuda.memory_allocated()` after `engine.unload()`.
 - **Audio/video length mismatch in assembly**: Almost always caused by seconds-based math instead of frame-based. All duration math must go through `engine_registry.py`.
-- **Subprocess engine env contamination**: HVA and SeedVR2 run in their own venvs. Don't let MusicVision's env vars (especially `CUDA_VISIBLE_DEVICES`) leak unintentionally.
+- **Subprocess engine env contamination**: SeedVR2 runs in its own venv. Don't let MusicVision's env vars (especially `CUDA_VISIBLE_DEVICES`) leak unintentionally.
 - **LoRA swap without full unload**: Some engines cache LoRA weights. Call `engine.unload()` + `engine.load()` when switching LoRAs, not just swapping the path.
 
 ## Testing
@@ -165,7 +164,7 @@ Two-layer strategy. See docs/TESTING.md for full details.
 ```bash
 python -m pytest tests/ -v --tb=short
 ```
-No GPU, no network, fast (<10s). Run after every code change. Currently ~250 tests.
+No GPU, no network, fast (<10s). Run after every code change. Currently ~227 tests.
 
 Test files:
 - `test_core.py` — project config, scene models, style sheet, ProjectService lifecycle
@@ -173,7 +172,7 @@ Test files:
 - `test_image_engine.py` — FLUX engine config, prompt generator, batch prompt parsing
 - `test_video_engine.py` — HuMo engine config, video prompt construction, sub-clip splitting
 - `test_engine_registry.py` — engine constraints, frame math, sub-clip computation
-- `test_hunyuan_avatar_engine.py` — HVA config, factory dispatch, engine lifecycle, scene splitting
+- `test_ltx_video_engine.py` — LTX-Video 2 engine config, factory dispatch, scene splitting
 - `test_upscaler.py` — upscaler enums, config auto-selection, factory, pipeline orchestrator, Scene/SubClip fields
 
 ### Integration tests (scripts/)
@@ -195,7 +194,7 @@ Run manually. Each has different hardware requirements — see docs/TESTING.md a
 - FLUX and HuMo run sequentially (different stages), never simultaneously. Models fully unloaded between stages.
 - GPU0 (5090) runs DiT/UNet. GPU1 (4080) runs encoders/VAE. This split is managed by `utils/gpu.py`.
 - VRAM tier system: fp16, fp8_scaled, gguf_q8, gguf_q6, gguf_q4, preview. `recommend_tier()` auto-selects based on available VRAM.
-- Upscaling: per-engine strategy — LTX-2 → LTX Spatial (latent-space), HVA/HuMo → SeedVR2 (pixel-space), preview → Real-ESRGAN or NONE. Assembly prefers upscaled clips.
+- Upscaling: per-engine strategy — LTX-2 → LTX Spatial (latent-space), HuMo → SeedVR2 (pixel-space), preview → Real-ESRGAN or NONE. Assembly prefers upscaled clips.
 
 ## Project Data Flow
 
@@ -203,7 +202,7 @@ Run manually. Each has different hardware requirements — see docs/TESTING.md a
 Song audio + lyrics
   → Stage 1: Intake (BPM, vocal sep, Whisper, LLM segmentation) → scenes.json
   → Stage 2: Imaging (LLM prompts, FLUX generation) → images/
-  → Stage 3: Video (LLM prompts, HuMo/HVA/LTX generation) → clips/
+  → Stage 3: Video (LLM prompts, HuMo/LTX generation) → clips/
   → Stage 4: Upscale (per-engine upscaler selection) → clips_upscaled/
   → Stage 5: Assembly (ffmpeg concat, audio sync) → output/rough_cut.mp4 + FCPXML/EDL
 ```
@@ -242,7 +241,7 @@ musicvision create ./test_output/2026-03-01_1400_my_test --name "My Video"
 musicvision import-audio --project ./test_output/2026-03-01_1400_my_test --audio song.wav --lyrics lyrics.txt
 musicvision intake --project ./test_output/2026-03-01_1400_my_test --skip-transcription
 musicvision generate-images --project ./test_output/2026-03-01_1400_my_test --model z-image-turbo
-musicvision generate-video --project ./test_output/2026-03-01_1400_my_test --engine hunyuan_avatar
+musicvision generate-video --project ./test_output/2026-03-01_1400_my_test --engine humo
 musicvision upscale --project ./test_output/2026-03-01_1400_my_test --resolution 1080p
 musicvision assemble --project ./test_output/2026-03-01_1400_my_test
 ```

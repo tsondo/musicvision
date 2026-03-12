@@ -2,7 +2,9 @@
 
 ## Overview
 
-MusicVision is a music video production pipeline that combines open-source AI tools to turn a song (audio + lyrics) into a complete music video. It wraps multiple video generation backends (HunyuanVideo-Avatar, HuMo, LTX-Video 2) and FLUX for reference image generation into an iterative, user-controlled workflow.
+MusicVision is a music video production pipeline that combines open-source AI tools to turn a song (audio + lyrics) into a complete music video. It wraps multiple video generation backends (HuMo, LTX-Video 2) and FLUX for reference image generation into an iterative, user-controlled workflow.
+
+> **Note:** HunyuanVideo-Avatar (HVA) was previously supported as a third video engine but was deprecated and removed in commit 35cda2a (2026-03-11). References to HVA in historical context are preserved for documentation purposes.
 
 ### Core Principle: Segment for Video, Assemble with Original Audio
 
@@ -15,7 +17,7 @@ The pipeline segments audio for **video generation only** — each scene's slice
 ## System Requirements
 
 ### Inference Workstation (image + video generation)
-- **Primary GPU (GPU0)**: NVIDIA RTX 5090 (32GB VRAM) — runs DiT for FLUX, HunyuanVideo-Avatar, or HuMo
+- **Primary GPU (GPU0)**: NVIDIA RTX 5090 (32GB VRAM) — runs DiT for FLUX, HuMo, or LTX-Video 2
 - **Secondary GPU (GPU1)**: NVIDIA RTX 4080 (16GB VRAM) — offloads text encoders, VAE, Whisper, audio separator
 - **Multi-GPU Strategy**: Proven in ComfyUI. DiT on GPU0 (5090), everything else on GPU1 (4080). This allows running large models at full quality while keeping encoders and VAE on the secondary GPU.
 - **Model Swapping**: FLUX and video engines run in different pipeline stages (not simultaneously). Within each stage, model components are split across both GPUs. Weights fully unloaded between stages.
@@ -42,9 +44,9 @@ The pipeline segments audio for **video generation only** — each scene's slice
 │  INTAKE &    │  IMAGE GEN &  │  VIDEO GEN         │  UPSCALE         │  ASSEMBLY &      │
 │  SEGMENTATION│  STORYBOARD   │  (selectable)      │  (per-engine)    │  EXPORT          │
 ├──────────────┼───────────────┼────────────────────┼──────────────────┼──────────────────┤
-│ Whisper      │ FLUX          │ HunyuanVideo-Avatar│ LTX Spatial      │ ffmpeg           │
-│ ffmpeg       │ Z-Image       │ HuMo TIA           │ SeedVR2          │ FCPXML/EDL gen   │
-│ LLM (Claude) │ (LoRA)        │ LTX-Video 2        │ Real-ESRGAN      │                  │
+│ Whisper      │ FLUX          │ HuMo TIA           │ LTX Spatial      │ ffmpeg           │
+│ ffmpeg       │ Z-Image       │ LTX-Video 2        │ SeedVR2          │ FCPXML/EDL gen   │
+│ LLM (Claude) │ (LoRA)        │                    │ Real-ESRGAN      │                  │
 └──────────────┴───────────────┴────────────────────┴──────────────────┴──────────────────┘
 ```
 
@@ -56,7 +58,6 @@ Each video engine has fixed frame constraints that govern the entire pipeline:
 |--------|-----------|-----|-------------|-----------|-------|
 | HuMo 17B | 97 | 25 | 3.88s | 25 (1.0s) | TIA mode (text+image+audio) |
 | HuMo 1.7B | 97 | 25 | 3.88s | 25 (1.0s) | Preview/iteration |
-| HunyuanVideo-Avatar | 129 | 25 | 5.16s | 33 (1.32s) | Audio-driven lip sync, subprocess engine |
 | LTX-Video 2 | 257 | 24 | 10.71s | 9 (0.375s) | Joint audio+video generation |
 
 **The active engine's constraints are injected into segmentation and sub-clip splitting.** The pipeline must never assume a fixed max duration — always read from the engine config.
@@ -65,7 +66,6 @@ Each video engine has fixed frame constraints that govern the entire pipeline:
 # Engine constraint constants — single source of truth
 ENGINE_CONSTRAINTS = {
     "humo":              {"max_frames": 97,  "fps": 25, "min_frames": 25},
-    "hunyuan_avatar":    {"max_frames": 129, "fps": 25, "min_frames": 33},
     "ltx_video":         {"max_frames": 257, "fps": 24, "min_frames": 9},
 }
 ```
@@ -80,9 +80,9 @@ GPU0 — RTX 5090 (32 GB)          GPU1 — RTX 4080 (16 GB)
 │   FP8:  ~12 GB          │       │ Whisper          ~1.5 GB│
 ├─────────────────────────┤       │ Audio separator  ~0.5 GB│
 │ Stage 3 (one at a time):│       │                         │
-│  HunyuanVideo-Avatar    │       │ Total: ~12-13 GB        │
-│   bf16 + cpu_offload    │       │ Headroom: ~3-4 GB       │
-│  HuMo 17B               │       └─────────────────────────┘
+│  HuMo 17B               │       │ Total: ~12-13 GB        │
+│                         │       │ Headroom: ~3-4 GB       │
+│                         │       └─────────────────────────┘
 │   fp8:  ~18 GB          │
 │   gguf: 11–18.5 GB      │
 │  HuMo 1.7B (preview)    │
@@ -181,15 +181,13 @@ Scene: 200 frames (8.0s)
   Result: [67, 67, 66] — all within [25, 97] ✓
 ```
 
-**Example (HunyuanVideo-Avatar, max=129 frames, min=33 frames):**
+**Example (LTX-Video 2, max=257 frames, min=9 frames):**
 
 ```
-Scene: 150 frames (6.0s)
-  ceil(150/129) = 2 sub-clips
-  remainder = 150 - 129 = 21 frames → below min (33)
-  Reduce to n=1: 150 > max (129), can't use 1 clip
-  Stay at n=2 with equal distribution: 150//2 = 75 each
-  Result: [75, 75] — all within [33, 129] ✓
+Scene: 500 frames (20.83s)
+  ceil(500/257) = 2 sub-clips
+  remainder = 500 - 257 = 243 frames → above min (9) ✓
+  Result: [250, 250] — equal distribution, all within [9, 257] ✓
 ```
 
 ### Sub-Clip Audio Slicing
@@ -340,7 +338,7 @@ def assemble_rough_cut(scenes, paths, original_audio, approved_only=True):
    - Vocal-separated versions also sliced (for Whisper only — see critical note below)
    - **Sub-clip audio is NOT sliced at this stage** — it happens in Stage 3 after `compute_subclip_frames()` determines the exact frame counts
 
-> **⚠️ Critical: The video engine receives the full audio mix, not isolated vocals.** The vocal stem is used *only* to improve Whisper transcription accuracy. HuMo and HunyuanVideo-Avatar were trained on mixed audio — feeding isolated vocals degrades A/V sync. Audio segments in `segments/` are always full-mix; `segments_vocal/` is consumed only by the transcription step.
+> **⚠️ Critical: The video engine receives the full audio mix, not isolated vocals.** The vocal stem is used *only* to improve Whisper transcription accuracy. Video engines were trained on mixed audio — feeding isolated vocals degrades A/V sync. Audio segments in `segments/` are always full-mix; `segments_vocal/` is consumed only by the transcription step.
 
 ### Outputs
 - `project.yaml` (initial)
@@ -384,8 +382,7 @@ The active video engine is set in `project.yaml` → `video_engine`. All engines
 
 | Engine | Strengths | When to Use |
 |--------|----------|-------------|
-| HunyuanVideo-Avatar | Audio-driven lip sync, full-body animation, excellent quality | Default for most projects (primary engine) |
-| HuMo TIA | Audio-conditioned with dual CFG, character preservation | When audio reactivity is critical (back burner) |
+| HuMo TIA | Audio-conditioned with dual CFG, character preservation, lip sync | Default for most projects |
 | LTX-Video 2 | Joint audio+video generation, cinematic | Cinematic/instrumental scenes, long clips (up to 10.7s) |
 
 ### Process
@@ -438,14 +435,13 @@ The active video engine is set in `project.yaml` → `video_engine`. All engines
 
 ### Purpose
 
-Video clips from different engines come out at different resolutions (HVA: 704×1024, LTX-2: 768×512, HuMo: 1280×720 — or lower in preview mode). The upscaling stage enhances quality and normalizes resolution before assembly.
+Video clips from different engines come out at different resolutions (LTX-2: 768×512, HuMo: 1280×720 — or lower in preview mode). The upscaling stage enhances quality and normalizes resolution before assembly.
 
 ### Per-Engine Upscaler Strategy
 
 | Video Engine | Default Upscaler | Type | VRAM |
 |---|---|---|---|
 | LTX-Video 2 | LTX Spatial Upsampler | Latent-space, temporally aware | ~12 GB |
-| HunyuanVideo-Avatar | SeedVR2 | Pixel-space one-step diffusion | ~16 GB (FP8) |
 | HuMo | SeedVR2 | Pixel-space one-step diffusion | ~16 GB (FP8) |
 | (preview mode) | NONE or Real-ESRGAN | Frame-by-frame / skip | ~2-4 GB |
 
@@ -513,7 +509,7 @@ song:
     caption: null
     lyrics: null
 
-video_engine: "hunyuan_avatar"  # hunyuan_avatar | humo | ltx_video
+video_engine: "humo"            # humo | ltx_video
 
 humo:
   tier: "fp8_scaled"
@@ -527,14 +523,6 @@ humo:
   sub_clip_continuity: true
   lora: null
   seed: null
-
-hunyuan:
-  checkpoint: "bf16"
-  image_size: 704
-  sample_n_frames: 129
-  infer_steps: 30
-  cfg_scale: 7.5
-  cpu_offload: true
 
 image_gen:
   model: "flux-dev"
@@ -581,7 +569,7 @@ vocal_separation:
       "video_prompt_user_override": null,
       "video_clip": "clips/scene_001.mp4",
       "video_status": "pending",
-      "video_engine": "hunyuan_avatar",    // hunyuan_avatar | humo | ltx_video
+      "video_engine": "humo",              // humo | ltx_video
 
       "sub_clips": [],
 
@@ -622,7 +610,7 @@ vocal_separation:
       "video_prompt_user_override": null,
       "video_clip": null,
       "video_status": "pending",
-      "video_engine": "hunyuan_avatar",    // hunyuan_avatar | humo | ltx_video
+      "video_engine": "humo",              // humo | ltx_video
 
       "sub_clips": [
         "clips/sub/scene_005_a.mp4",
@@ -740,7 +728,6 @@ src/musicvision/
 │   ├── base.py                    # Abstract video engine interface
 │   ├── factory.py                 # Engine factory dispatch
 │   ├── humo_engine.py             # HuMo TIA inference wrapper
-│   ├── hunyuan_avatar_engine.py   # HunyuanVideo-Avatar subprocess wrapper
 │   └── ltx_video_engine.py        # LTX-Video 2 inference wrapper
 ├── upscaling/
 │   ├── base.py                    # UpscaleEngine ABC + dataclasses
@@ -792,7 +779,6 @@ class EngineConstraints:
 
 ENGINES = {
     "humo":             EngineConstraints("HuMo",                max_frames=97,  min_frames=25, fps=25),
-    "hunyuan_avatar":   EngineConstraints("HunyuanVideo-Avatar", max_frames=129, min_frames=33, fps=25),
     "ltx_video":        EngineConstraints("LTX-Video 2",        max_frames=257, min_frames=9,  fps=24),
 }
 

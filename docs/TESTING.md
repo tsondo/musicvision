@@ -20,7 +20,7 @@ MusicVision uses a two-layer test strategy: fast unit tests that run anywhere, a
 | `test_image_engine.py` | FLUX + Z-Image engine config, factory dispatch, prompt generator, batch prompt parsing |
 | `test_video_engine.py` | HuMo engine config, video prompt construction, sub-clip splitting logic |
 | `test_engine_registry.py` | Engine constraints, frame math, sub-clip computation |
-| `test_hunyuan_avatar_engine.py` | HVA config, VideoEngineType enum, factory dispatch, engine lifecycle, scene splitting |
+| ~~`test_hunyuan_avatar_engine.py`~~ | ~~HVA config~~ — **removed** (HVA engine deprecated and removed 2026-03-11, commit 35cda2a) |
 | `test_upscaler.py` | Upscaler enums, UpscalerConfig defaults + auto-selection, factory dispatch, pipeline orchestrator (mock engine), Scene/SubClip upscaled_clip fields, YAML roundtrip |
 | `test_ltx_video_engine.py` | LTX-Video 2 engine config, factory dispatch, scene splitting |
 | `test_oom_resilience.py` | OOM recovery, pre-flight VRAM checks, graceful degradation |
@@ -41,7 +41,7 @@ MusicVision uses a two-layer test strategy: fast unit tests that run anywhere, a
 | `test_image_gen.py` | Z-Image-Turbo + FLUX-schnell GPU image generation (2 images each, man + woman) | GPU + `HUGGINGFACE_TOKEN` for FLUX |
 | `test_gpu_pipeline.py` | Full 4-phase HuMo GPU integration test (model loading, single clip, sub-clip splitting, assembly) | GPU + HuMo weights. See `MUSICVISION_GPU_TEST.md`. |
 | `test_humo_inference.py` | Isolated HuMo checkpoint loading and inference smoke test | GPU + HuMo weights |
-| `test_hva_standalone.py` | HunyuanVideo-Avatar standalone inference test | GPU + HVA repo/weights |
+| ~~`test_hva_standalone.py`~~ | ~~HunyuanVideo-Avatar standalone inference test~~ — **removed** (HVA deprecated 2026-03-11) | — |
 | `test_humo_480p.py` | HuMo 480p resolution inference test | GPU + HuMo weights |
 | `test_humo_720p.py` | HuMo 720p resolution inference test | GPU + HuMo weights |
 | `test_vllm_prompts.py` | All three LLM prompt paths (segmentation, image prompts, video prompts, batch consistency) against a running vLLM server | vLLM server running on LAN with Qwen2.5-32B-AWQ |
@@ -59,7 +59,7 @@ musicvision import-audio --project ./test_storyboard --audio /path/to/song.wav -
 musicvision intake --project ./test_storyboard --skip-transcription
 musicvision info ./test_storyboard
 musicvision generate-images --project ./test_storyboard --model z-image-turbo
-musicvision generate-video --project ./test_storyboard --engine hunyuan_avatar
+musicvision generate-video --project ./test_storyboard --engine humo
 musicvision upscale --project ./test_storyboard --resolution 1080p
 musicvision assemble --project ./test_storyboard
 # → test_storyboard/output/rough_cut.mp4
@@ -69,7 +69,7 @@ musicvision assemble --project ./test_storyboard
 
 ## Recommended Test Workflow
 
-1. **After code changes:** `python -m pytest tests/ -v --tb=short` (~257 tests, <10 seconds)
+1. **After code changes:** `python -m pytest tests/ -v --tb=short` (~227 tests, <10 seconds)
 2. **After LLM prompt changes:** run pytest, then `python scripts/test_vllm_prompts.py`
 3. **After image engine changes:** `python scripts/test_image_gen.py`
 4. **After HuMo/video changes:** `python scripts/test_gpu_pipeline.py`
