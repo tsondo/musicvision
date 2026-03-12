@@ -65,10 +65,10 @@ Two machines on the same LAN:
 - GPU1: RTX 4080 16GB — offloads T5, VAE, Whisper, audio separator
 - OS: Windows + WSL (Fedora also used for dev)
 
-**vLLM server** (192.168.1.137):
+**vLLM server** (separate LAN machine):
 - GPU: RTX 3090 Ti 24GB
 - Model: Qwen2.5-32B-Instruct-AWQ via vLLM
-- Serves OpenAI-compatible API at http://192.168.1.137:8000/v1
+- Serves OpenAI-compatible API (see `OPENAI_BASE_URL` in `.env`)
 - Running 24/7, no per-token cost
 
 ## Environment Setup
@@ -82,7 +82,7 @@ cp .env.example .env
 
 Key env vars (see .env.example for full list):
 - `LLM_BACKEND` — `anthropic` (default) or `openai` (for vLLM)
-- `OPENAI_BASE_URL` — `http://192.168.1.137:8000/v1` (when using vLLM)
+- `OPENAI_BASE_URL` — vLLM server URL, e.g. `http://<lan-ip>:8000/v1`
 - `OPENAI_MODEL` — `qwen32b` (the --served-model-name on vLLM)
 - `HUGGINGFACE_TOKEN` — required for HuMo DiT weights and FLUX.1-dev
 - `ANTHROPIC_API_KEY` — only if using Claude API instead of vLLM
