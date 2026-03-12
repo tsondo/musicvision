@@ -1,6 +1,8 @@
 # MusicVision Licensing & Pricing
 
-MusicVision uses a hybrid licensing model designed to support hobbyists, researchers, indie developers, and commercial teams. Non‑commercial use is free. Commercial and enterprise use require a paid license.
+MusicVision uses a hybrid licensing model designed to support hobbyists, researchers, indie developers, and commercial teams. Non‑commercial use is free under the PolyForm Noncommercial License 1.0.0 (see LICENSE). Commercial and enterprise use require a paid license as described below.
+
+MusicVision integrates third‑party models and weights (HuMo/ByteDance, FLUX/Black Forest Labs, T5/Google, Whisper/OpenAI, etc.) that are governed by their own respective licenses. This agreement covers only the MusicVision source code, tooling, and proprietary components. Users are responsible for complying with upstream model licenses independently.
 
 ---
 
@@ -32,8 +34,9 @@ Rights included:
 
 Restrictions:
 - No sublicensing
-- No redistribution of the standalone model or weights
+- No redistribution of MusicVision source code or proprietary components
 - No competing products built on top of MusicVision
+- Third‑party model weights (HuMo, FLUX, T5, Whisper, etc.) are subject to their respective upstream licenses and are not covered by this agreement
 
 ---
 
@@ -108,7 +111,7 @@ _____________________________________________________________
 
 # MusicVision Commercial License Agreement
 
-This Commercial License Agreement (“Agreement”) is entered into between **[LICENSOR NAME]** (“Licensor”) and the entity or individual identified in the Order Form (“Licensee”).
+This Commercial License Agreement (“Agreement”) is entered into between the MusicVision project owner identified in the Order Form (“Licensor”) and the entity or individual identified in the Order Form (“Licensee”).
 
 ## 1. Grant of License
 Upon payment of applicable fees, Licensor grants Licensee a **non‑exclusive**, **worldwide**, **non‑transferable**, **non‑sublicensable** license to:
@@ -143,13 +146,13 @@ This Agreement begins on the Effective Date and continues for **one (1) year**, 
 Licensee may not:
 
 - Sublicense or resell MusicVision
-- Redistribute the standalone model, weights, or source code
+- Redistribute MusicVision source code or proprietary components
 - Remove copyright notices
 - Use MusicVision to build a directly competing product
 - Exceed the scope of the selected license tier
 
 ## 6. Intellectual Property
-MusicVision remains the sole property of Licensor. No ownership rights are transferred.
+MusicVision source code and proprietary components remain the sole property of Licensor. No ownership rights are transferred. Third‑party model weights and dependencies are governed by their respective upstream licenses.
 
 ## 7. Termination
 Licensor may terminate this Agreement if Licensee:
