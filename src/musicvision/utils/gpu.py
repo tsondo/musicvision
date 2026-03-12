@@ -355,20 +355,51 @@ def _get_default_power_limit(gpu_index: int) -> float | None:
 def _set_power_limit(gpu_index: int, watts: float) -> bool:
     """Set the power limit (watts) for a GPU via nvidia-smi.
 
-    Tries without sudo first, then with sudo. Returns True on success.
+    Tries in order: direct, sudo -n, then Windows host via powershell.exe
+    (for WSL environments where the NVIDIA driver runs on the host).
+    Returns True on success.
     """
+    watts_int = int(watts)
+
+    # Try direct and sudo -n first (native Linux)
     for cmd_prefix in ([], ["sudo", "-n"]):
         try:
             result = subprocess.run(
-                [*cmd_prefix, "nvidia-smi", "-i", str(gpu_index), "-pl", str(int(watts))],
+                [*cmd_prefix, "nvidia-smi", "-i", str(gpu_index), "-pl", str(watts_int)],
                 capture_output=True, text=True, timeout=5,
             )
             if result.returncode == 0:
-                log.info("GPU %d power limit set to %dW", gpu_index, int(watts))
+                log.info("GPU %d power limit set to %dW", gpu_index, watts_int)
                 return True
         except (FileNotFoundError, subprocess.TimeoutExpired):
             pass
+
+    # WSL: escalate through Windows UAC via powershell.exe -Verb RunAs
+    if _is_wsl():
+        try:
+            result = subprocess.run(
+                [
+                    "powershell.exe", "-Command",
+                    f"Start-Process nvidia-smi -ArgumentList '-i {gpu_index} -pl {watts_int}' -Verb RunAs -Wait",
+                ],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode == 0:
+                log.info("GPU %d power limit set to %dW (via Windows UAC)", gpu_index, watts_int)
+                return True
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+
     return False
+
+
+def _is_wsl() -> bool:
+    """Detect if running under WSL."""
+    try:
+        with open("/proc/version", "r") as f:
+            return "microsoft" in f.read().lower()
+    except OSError:
+        return False
 
 
 def set_video_power_limit(device_map: DeviceMap, watts: float = 450) -> bool:
@@ -396,9 +427,9 @@ def set_video_power_limit(device_map: DeviceMap, watts: float = 450) -> bool:
     log.warning(
         "Could not set GPU %d power limit to %dW. "
         "On native Linux, add to /etc/sudoers: %s ALL=(ALL) NOPASSWD: $(which nvidia-smi). "
-        "On WSL, nvidia-smi -pl is blocked by the host driver — set the power limit "
-        "from Windows (e.g. nvidia-smi -i <gpu> -pl %d in an admin PowerShell).",
-        gpu_index, int(watts), _get_username(), int(watts),
+        "On WSL, approve the Windows UAC prompt when it appears, or set the power limit "
+        "manually from an admin PowerShell: nvidia-smi -i %d -pl %d",
+        gpu_index, int(watts), _get_username(), gpu_index, int(watts),
     )
     return False
 
