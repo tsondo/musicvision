@@ -517,8 +517,8 @@ export default function SceneRow({
             </label>
             <input
               type="range"
-              min={1}
-              max={8}
+              min={0.5}
+              max={4}
               step={0.5}
               value={scene.sigma_shift ?? 1.5}
               onChange={(e) => {

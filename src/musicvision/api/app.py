@@ -499,7 +499,7 @@ async def update_scene(scene_id: str, req: UpdateSceneRequest):
         from musicvision.models import VideoEngineType
         scene.video_engine = VideoEngineType(req.video_engine)
     if req.sigma_shift is not None:
-        scene.sigma_shift = max(1.0, min(8.0, req.sigma_shift))
+        scene.sigma_shift = max(0.5, min(4.0, req.sigma_shift))
     if req.notes is not None:
         scene.notes = req.notes
     # LTX-2 generated audio mixing fields
