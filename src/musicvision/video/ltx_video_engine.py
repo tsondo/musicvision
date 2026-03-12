@@ -98,6 +98,9 @@ class LtxVideoEngine(VideoEngine):
 
     def load(self) -> None:
         """Load LTX-2 pipeline from HuggingFace and apply offloading."""
+        from musicvision.utils.gpu import set_video_power_limit
+        set_video_power_limit(self.device_map)
+
         import torch
 
         try:
@@ -373,6 +376,9 @@ class LtxVideoEngine(VideoEngine):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         gc.collect()
+
+        from musicvision.utils.gpu import restore_power_limit
+        restore_power_limit(self.device_map)
         log.info("LTX-Video 2 unloaded")
 
     def generate_scene(

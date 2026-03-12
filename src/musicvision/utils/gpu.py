@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
+import subprocess
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -320,3 +321,111 @@ def vram_info() -> list[dict]:
             "compute_capability": f"{props.major}.{props.minor}",
         })
     return result
+
+
+# ---------------------------------------------------------------------------
+# GPU power limit management
+# ---------------------------------------------------------------------------
+
+# Cache the default power limit per GPU index so we can restore it later.
+_default_power_limits: dict[int, float] = {}
+
+
+def _get_default_power_limit(gpu_index: int) -> float | None:
+    """Query the default power limit (watts) for a GPU via nvidia-smi.
+
+    Returns None if nvidia-smi is unavailable or the query fails.
+    """
+    if gpu_index in _default_power_limits:
+        return _default_power_limits[gpu_index]
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "-i", str(gpu_index), "--query-gpu=power.default_limit", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            watts = float(result.stdout.strip())
+            _default_power_limits[gpu_index] = watts
+            return watts
+    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError) as exc:
+        log.debug("Could not query default power limit for GPU %d: %s", gpu_index, exc)
+    return None
+
+
+def _set_power_limit(gpu_index: int, watts: float) -> bool:
+    """Set the power limit (watts) for a GPU via nvidia-smi.
+
+    Tries without sudo first, then with sudo. Returns True on success.
+    """
+    for cmd_prefix in ([], ["sudo", "-n"]):
+        try:
+            result = subprocess.run(
+                [*cmd_prefix, "nvidia-smi", "-i", str(gpu_index), "-pl", str(int(watts))],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                log.info("GPU %d power limit set to %dW", gpu_index, int(watts))
+                return True
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+    return False
+
+
+def set_video_power_limit(device_map: DeviceMap, watts: float = 450) -> bool:
+    """Lower the primary GPU power limit for video generation.
+
+    Reads and caches the default power limit first so it can be restored later.
+    Returns True if the power limit was successfully applied.
+    """
+    gpu_index = _device_to_index(device_map.dit_device)
+    if gpu_index is None:
+        return False
+
+    default = _get_default_power_limit(gpu_index)
+    if default is None:
+        log.warning("Could not read default power limit for GPU %d — skipping power cap", gpu_index)
+        return False
+
+    if watts >= default:
+        log.debug("Requested power limit %dW >= default %dW — no change needed", int(watts), int(default))
+        return True
+
+    if _set_power_limit(gpu_index, watts):
+        return True
+
+    log.warning(
+        "Could not set GPU %d power limit to %dW (permission denied). "
+        "To enable, add to /etc/sudoers: %s ALL=(ALL) NOPASSWD: /usr/bin/nvidia-smi",
+        gpu_index, int(watts), _get_username(),
+    )
+    return False
+
+
+def restore_power_limit(device_map: DeviceMap) -> bool:
+    """Restore the primary GPU to its default power limit.
+
+    Uses the cached default from the most recent ``set_video_power_limit`` call.
+    Returns True if successfully restored (or no change was needed).
+    """
+    gpu_index = _device_to_index(device_map.dit_device)
+    if gpu_index is None:
+        return False
+
+    default = _default_power_limits.get(gpu_index)
+    if default is None:
+        return True  # never changed, nothing to restore
+
+    return _set_power_limit(gpu_index, default)
+
+
+def _device_to_index(device: "torch.device") -> int | None:
+    """Extract the CUDA index from a torch device, or None if not CUDA."""
+    if device.type != "cuda":
+        return None
+    return device.index if device.index is not None else 0
+
+
+def _get_username() -> str:
+    """Get the current username for sudoers hint."""
+    import os
+    return os.environ.get("USER", os.environ.get("USERNAME", "your_user"))

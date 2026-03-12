@@ -197,6 +197,9 @@ class HumoEngine:
                     f"or run: musicvision download-weights --tier {tier.value}"
                 )
 
+        from musicvision.utils.gpu import set_video_power_limit
+        set_video_power_limit(self.device_map)
+
         loader = get_loader(tier)
         log.info(
             "Loading HuMo engine (%s, block_swap=%d, %s)…",
@@ -223,8 +226,9 @@ class HumoEngine:
                 del obj
         del self._bundle
         self._bundle = None
-        from musicvision.utils.gpu import clear_vram
+        from musicvision.utils.gpu import clear_vram, restore_power_limit
         clear_vram()
+        restore_power_limit(self.device_map)
         log.info("HuMo engine unloaded")
 
     # ------------------------------------------------------------------
