@@ -10,8 +10,14 @@ name = "musicvision"
 version = "0.1.0"
 description = "AI music video production pipeline: song → scenes → storyboard → video"
 requires-python = ">=3.11"
+<<<<<<< HEAD
 license = { text = "LicenseRef-PolyForm-Noncommercial-1.0.0" }
 license-files = ["LICENSE", "LICENSE-COMMERCIAL", "THIRD-PARTY-NOTICES.md", "CLA.md"]
+=======
+license = { text = "PolyForm Noncommercial License 1.0.0" }
+authors = [{ name = "Tsondo", email = "info@tsondo.com" }]
+maintainers = [{ name = "Tsondo", email = "dev@tsondo.com" }]
+>>>>>>> 61a9390 (email added)
 
 dependencies = [
     # --- Core ---

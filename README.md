@@ -315,6 +315,13 @@ MusicVision occupies a unique niche: end-to-end music video generation running f
 
 ---
 
+## Contact
+
+- **General inquiries:** [info@tsondo.com](mailto:info@tsondo.com)
+- **Contributors:** [dev@tsondo.com](mailto:dev@tsondo.com)
+
+---
+
 ## License
 
 MusicVision source code is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE) — free for personal, academic, and research use. Commercial licenses are available; see [LICENSE-COMMERCIAL](LICENSE-COMMERCIAL) for details.
