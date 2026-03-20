@@ -1,6 +1,6 @@
 # MusicVision — Future Plans
 
-**Last updated:** 2026-03-11
+**Last updated:** 2026-03-20
 
 ---
 
@@ -66,13 +66,11 @@ Pipeline flow: Video engine generates scene → isolated vocals via Kim_Vocal_2 
 
 ### Frontend Refinements
 
-React storyboard is implemented with scene grid, preview panel, per-scene approval/regeneration, and engine selection. Remaining work:
+React storyboard is implemented with scene grid, preview panel, per-scene approval/regeneration, engine selection, waveform editor with scene boundary visualization, lyrics line editor/mapper, video concept field, and per-scene sigma shift slider. Remaining work:
 
-- **Waveform display** with scene boundary visualization and editing
 - **Drag-to-reorder scenes** and renumber
 - **Assembly & export controls** in the UI
 - **Per-scene lip sync mode toggle** (off / in_process / post)
-- **Per-scene engine assignment** in the UI (backend supports it, UI doesn't expose it yet)
 
 ### Progress & Reliability
 
@@ -85,43 +83,45 @@ React storyboard is implemented with scene grid, preview panel, per-scene approv
 - **Scene transitions** — hard cuts only today. Future: AI-generated transitions, crossfades, dissolves between scenes.
 - **Batch parallelism** — scenes generate sequentially. Future: concurrent generation across multiple GPUs or cloud workers.
 
+### SD.Next as Alternative Image Backend
+
+**Status:** Evaluated (2026-03-20). Not a drop-in replacement, but a viable alternative backend.
+
+The SD.Next project (`~/projects/sdnext`) exposes a full REST API (`/sdapi/v1/txt2img`, model management, LoRA, ControlNet, IP-Adapter) with FLUX support. It could be wrapped as an `SDNextEngine` implementing the existing `ImageEngine` ABC, adding it alongside `FluxEngine` and `ZImageEngine` via the factory.
+
+**Where it adds value over the current in-process FLUX engine:**
+- **ControlNet / IP-Adapter** — reference-image-guided generation for character consistency without LoRA training
+- **Platform breadth** — MPS, ROCm, Intel Arc, ONNX handled by SD.Next, not us
+- **Decoupled VRAM** — runs as a separate server process; image generation doesn't compete with MusicVision's video model loading
+
+**Trade-offs:**
+- Service dependency (SD.Next server must be running)
+- Coarser VRAM control (SD.Next manages its own memory; less deterministic for the FLUX→HuMo unload handoff)
+- LoRA mapping needs adaptation (SD.Next uses `extra_networks`, not MusicVision's two-level project+scene LoRA system)
+
+**Implementation effort:** ~150–200 lines for an `SDNextEngine` adapter. Add `ImageModel.SDNEXT` to the enum, dispatch in factory.py. Not a priority until ControlNet/IP-Adapter consistency features are needed.
+
 ---
 
 ## Platform Expansion
 
 ### Cloud CUDA (A100 / H100 / H200)
 
-**Status:** Planned, ~2h effort. Mostly works today.
+**Status:** ✅ Implemented. Single ≥48 GB GPU → FP16 tier. No-offload FLUX path for high-VRAM cards.
 
-Two gaps:
-- `recommend_tier()` in `gpu.py` doesn't offer FP16 for single high-VRAM GPUs (≥48 GB) — needs a single-GPU FP16 threshold (`primary_gb >= 48` bypass for the `n_gpus >= 2` guard)
-- FLUX in `flux_engine.py` applies unnecessary CPU offload on 80 GB+ cards — needs a no-offload high-VRAM path (`_load_bf16_no_offload` when single GPU has ≥28 GB free)
-
-Single-GPU configs are simpler than the consumer two-GPU split — no model splitting needed. Future: Dockerfile + weight caching strategy for cold starts. FSDP multi-GPU sharding for FP16Loader (~8–12 hours, deferred).
+Remaining: Dockerfile + weight caching strategy for cold starts. FSDP multi-GPU sharding for FP16Loader (~8–12 hours, deferred).
 
 ### Apple Silicon MPS (M-series Mac)
 
-**Status:** Planned, ~9–12h effort. Does not work today.
+**Status:** ✅ Implemented (PLATFORM_SUPPORT branch, merged to main). Awaiting Mac contributor smoke test.
 
-Blocking issues:
-- RoPE uses float64/complex128 in `vendor/wan_dit_arch.py` — MPS has no float64 or complex128 support. Fix: downcast to float32/complex64 (Stage 1), with real-valued rotation fallback (Stage 2) if complex64 multiply fails on MPS
-- FP8 (`torch.float8_e4m3fn`) cannot be placed on MPS devices — must be blocked in `model_loader.py`
-- `optimum-quanto` quantization kernels are CUDA-only — no FLUX quantization on MPS
+All blocking issues resolved: RoPE float32 downcast, FP8 blocked on MPS, device-aware autocast/seeding/cache clearing, `psutil` RAM detection for FLUX, T5 FP16 on MPS. Preview tier (1.7B HuMo) is the target for M-series.
 
-Preview tier (1.7B HuMo) is the initial target. Key files needing changes:
-- `gpu.py` — MPS detection in `detect_devices()`, RAM-based `recommend_tier()`, device-agnostic `clear_vram()`
-- `vendor/wan_dit_arch.py` — RoPE float32 downcast, device-aware `_AmpCompat` autocast
-- `model_loader.py` — block FP8 on MPS, T5 FP16 instead of BF16 (M1/M2 lack BF16 tensor cores)
-- `flux_engine.py` — MPS memory detection via `psutil`, no-quantization path
-- `humo_engine.py` — device-aware RNG seeding
-
-Three common patterns applied across all files: device-agnostic cache clearing (`torch.mps.empty_cache()`), device-aware RNG seeding (`torch.mps.manual_seed()`), device-aware autocast (`contextlib.nullcontext()` on non-CUDA).
-
-GGUF tiers on ≥32 GB RAM deferred to Phase 2 (after preview smoke test). MLX would offer 1.5–2x better throughput than MPS+PyTorch but requires a full inference stack rewrite (~3–5 weeks) — out of scope.
+Remaining: GGUF tiers on ≥32 GB RAM (Phase 2, after preview smoke test). MLX rewrite (~3–5 weeks) out of scope.
 
 ### GPU Power Profiling
 
-Benchmark different power limits on RTX 5090 to find the optimal power/performance/thermal tradeoff for sustained batch rendering. Early data: 450W / 80C gives ~6% speed gain over 400W with acceptable thermals. Goal: recommended power profile in docs and optionally auto-set via `nvidia-smi -pl` at engine startup.
+**Status:** ✅ Implemented. Per-engine power limit management in `humo_engine.py` and `ltx_video_engine.py`. PowerShell and bash launchers with GPU power cap support. WSL `nvidia-smi -pl` requires Windows UAC elevation (documented).
 
 ### Dependency Simplification
 
@@ -201,6 +201,67 @@ class ConsistencyEngine:
 
 This allows swapping underlying tech (LoRA → IP-Adapter → future methods) without changing pipeline code.
 
+### Asset Library
+
+Beyond character LoRAs, the consistency system needs a broader **asset library** that organizes all reusable generation assets by type. Each asset is a named entry with metadata, a file path, and conditions for when it should be applied.
+
+#### Camera Motion LoRAs
+
+Video engines (HuMo, LTX-2, and future models) can use motion-specific LoRAs to produce controlled camera movements that are difficult to achieve through prompting alone. These apply at the video generation stage, not the image stage.
+
+| Motion Type | Description | Use Case |
+|-------------|-------------|----------|
+| **Dolly zoom** | Push-in with FOV change (vertigo effect) | Dramatic reveals, tension escalation |
+| **Orbit** | Camera circles the subject | Character introductions, 360° views |
+| **Crane up/down** | Vertical camera movement | Scene transitions, establishing shots |
+| **Tracking shot** | Camera follows subject laterally | Walking/running sequences, performances |
+| **Zoom in/out** | Focal length change, camera stationary | Emotional emphasis, wide-to-close transitions |
+| **Static** | Locked camera | Dialogue, still moments, lyric emphasis |
+| **Handheld** | Subtle camera shake | Intimacy, documentary feel, live performance |
+| **Pan** | Horizontal rotation on axis | Landscape reveals, scanning environments |
+| **Tilt** | Vertical rotation on axis | Tall subjects, building reveals |
+
+**Integration with the pipeline:**
+- Camera motion is a per-scene property (like `video_engine` or `sigma_shift`)
+- The LLM prompt generator can suggest camera motion based on lyrical content and scene type (performance vs. narrative)
+- The scene model gains a `camera_motion: Optional[str]` field referencing an asset library entry
+- At video generation time, the engine loads the appropriate motion LoRA alongside any character/style LoRA
+
+**Asset library entry format (conceptual):**
+```yaml
+assets:
+  camera_motions:
+    - id: dolly_zoom
+      name: "Dolly Zoom"
+      type: camera_motion
+      lora_path: "assets/loras/camera/dolly_zoom.safetensors"
+      lora_weight: 0.7
+      compatible_engines: [humo, ltx_video]
+      tags: [dramatic, tension, reveal]
+    - id: orbit
+      name: "Orbit"
+      type: camera_motion
+      lora_path: "assets/loras/camera/orbit.safetensors"
+      lora_weight: 0.6
+      compatible_engines: [humo, ltx_video]
+      tags: [introduction, 360, character]
+  style_loras:
+    - id: anime_style
+      name: "Anime Style"
+      type: style
+      lora_path: "assets/loras/style/anime.safetensors"
+      lora_weight: 0.8
+      compatible_engines: [flux, z_image, humo, ltx_video]
+  characters:
+    # ... existing CharacterDef entries migrate here
+```
+
+**Open questions:**
+- LoRA stacking: can camera motion + character + style LoRAs compose without quality degradation? Needs testing per engine.
+- Engine-specific LoRAs: HuMo and LTX-2 use different architectures, so camera motion LoRAs are likely engine-specific. The asset library must track `compatible_engines`.
+- Training pipeline: camera motion LoRAs need to be trained or sourced. CivitAI has some for SD/SDXL; FLUX and HuMo motion LoRAs are emerging but less mature.
+- SD.Next integration: if using SD.Next as an image/video backend, its LoRA management (`extra_networks`) can serve these assets without custom loading code.
+
 ---
 
 ## The Manga / Panel Intermediate
@@ -246,16 +307,18 @@ Each format is a progressively deeper pass through the pipeline. Users can stop 
 
 ### Phase 1: Validate MusicVision ✅ (mostly complete)
 - ✅ All five pipeline stages code-complete and GPU-tested
-- ✅ Three video engines: HunyuanVideo-Avatar (audio-driven), LTX-Video 2 (cinematic), HuMo (audio-driven, 24 bugs fixed, working)
+- ✅ Two video engines: HuMo (audio-driven, 24 bugs fixed, working) and LTX-Video 2 (cinematic, audio-conditioned). HunyuanVideo-Avatar removed (deprecated 2026-03-11).
 - ✅ Three upscalers: SeedVR2 (faces), LTX Spatial (latent), Real-ESRGAN (fast)
 - ✅ Two image engines: Z-Image (ungated, fast) and FLUX (LoRA support)
-- ✅ React storyboard with scene review, approval, regeneration
+- ✅ React storyboard with scene review, approval, regeneration, waveform editor, lyrics mapper
 - ✅ CLI and REST API for all stages
 - ✅ Frame-accurate alignment system, per-scene engine selection
 - ✅ End-to-end storyboard test passed (2026-03-01)
+- ✅ Platform support: cloud CUDA (single high-VRAM GPU), Apple Silicon MPS (preview tier)
+- ✅ GPU power limit management with PowerShell/bash launchers
+- ✅ Per-scene sigma shift control for HuMo tuning
 - 🔲 Lip sync post-processing (Stage 3.5) — spec complete, needs implementation
 - 🔲 Progress feedback (SSE/WebSocket)
-- 🔲 Platform expansion (cloud + MPS)
 
 ### Phase 1.5: Integrated Creation App
 - Wrap lyric generation (vLLM) + AceStep + MusicVision into a single multi-panel app
