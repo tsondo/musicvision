@@ -1,6 +1,6 @@
 # MusicVision — Project Status
 
-**Last updated:** 2026-03-11
+**Last updated:** 2026-07-05
 **Branch:** `main`
 
 ---
@@ -41,6 +41,25 @@ The pipeline is designed around AI-generated music from **AceStep** (a text-cond
 | Frontend (React or Gradio) | ✅ React storyboard (scene review, approval, regeneration) |
 | Frame-accurate alignment system | ✅ Complete |
 | Progress/status feedback (SSE/WebSocket) | ❌ Not started |
+
+| Asset Library (ASSET_LIBRARY_SPEC.md) | Status |
+|----------------|--------|
+| Phase 1 — Data model (`AssetDef`/`AssetImage`/enums, `StyleSheet` migration) | ✅ Complete |
+| Phase 2 — Storage + `AssetService` CRUD | ✅ Complete |
+| Phase 3 — IP-Adapter in `FluxEngine` | ⏳ Pending (checkpoint bake-off) |
+| Phase 4 — Consistency resolver (`resolve_scene_conditioning`) | ⏳ Pending |
+| Phase 5 — Wire conditioning into CLI + API generation | ⏳ Pending |
+| Phase 6 — Asset CRUD API endpoints | ⏳ Pending |
+| Phase 7 — Embedding precomputation + caching | ⏳ Pending |
+| Phase 8 — React Asset Library panel | ⏳ Pending |
+
+Phases 1–2 add the unified asset data model (`StyleSheet.assets`) and a pure
+data-management `AssetService` (CRUD + reference/training image handling). Legacy
+`characters`/`props`/`settings` auto-migrate into `assets` on load; the old
+`CharacterDef`/`PropDef`/`SettingDef` classes remain (deprecated). No engine,
+inference, or API surface was added — Phase 3+ (IP-Adapter) is blocked on an
+external checkpoint bake-off. `IPAdapterConfig` was intentionally deferred with
+Phase 3 rather than added in Phase 1 (it hardcodes the pending adapter repo).
 
 **All five pipeline stages are code-complete and CLI-accessible.** Full end-to-end workflow: `create` → `import-audio` → `intake` → `generate-images` → `generate-video` → `upscale` → `assemble`. Two video engines: HuMo (working, 24 bugs fixed) and LTX-Video 2 (cinematic). Three upscalers: SeedVR2 (pixel-space), LTX Spatial (LTX-2 latent), Real-ESRGAN (fast preview). Assembly auto-prefers upscaled clips. HunyuanVideo-Avatar was previously supported but was deprecated and removed (2026-03-11, commit 35cda2a).
 
@@ -332,7 +351,8 @@ Everything flows through Pydantic v2 models. No raw dict manipulation.
 ```
 name, created
 song: SongInfo (audio_file, bpm, duration, keyscale, AceStep metadata)
-style_sheet: StyleSheet (visual_style, color_palette, characters[], props[], settings[])
+style_sheet: StyleSheet (visual_style, color_palette, assets[], style_lora_path/weight;
+             legacy characters[]/props[]/settings[] auto-migrate into assets[])
 video_engine: VideoEngineType ("humo" | "ltx_video") — project default
 humo: HumoConfig (tier, resolution, scale_a, scale_t, shift, denoising_steps, sampler, block_swap_count, lora, seed, sub_clip_continuity)
 image_gen: ImageGenConfig (model, quant, steps, guidance_scale, lora_path)
@@ -348,7 +368,7 @@ scenes[]:
   video_prompt, video_prompt_user_override, video_clip, video_status
   video_engine: VideoEngineType | null  — per-scene override (null → project default); "humo" or "ltx_video"
   sub_clips[] (for scenes > max engine duration)
-  characters[], props[], settings[]
+  characters[], props[], settings[]  — asset-ID references into style_sheet.assets[]
   notes
 ```
 
@@ -357,7 +377,7 @@ scenes[]:
 ## Tests
 
 ```bash
-# CPU unit tests (no GPU needed) — ~227 tests:
+# CPU unit tests (no GPU needed) — ~275 tests:
 uv run pytest tests/ -v
 
 # GPU integration tests (run on workstation):
@@ -376,6 +396,8 @@ python scripts/test_gpu_pipeline.py --fast # HuMo video generation
 | `tests/test_ltx_video_engine.py` | LTX-Video 2 engine config, factory dispatch | No (mocked) |
 | `tests/test_upscaler.py` | Upscaler enums, config, factory, pipeline orchestrator | No (mocked) |
 | `tests/test_oom_resilience.py` | OOM recovery, pre-flight VRAM checks | No (mocked) |
+| `tests/test_asset_model.py` (19 tests) | AssetDef/AssetImage helpers, StyleSheet legacy migration | No |
+| `tests/test_asset_service.py` (29 tests) | AssetService CRUD, image add/remove/primary, ProjectPaths | No |
 | `scripts/test_image_gen.py` | Z-Image-Turbo + FLUX-schnell GPU generation (2 images each) | **Yes** |
 | `scripts/test_humo_inference.py` (11 tests) | WanModel forward, RoPE, AudioProjModel, FlowMatchScheduler | No (CPU) |
 | `scripts/test_gpu_pipeline.py` | HuMo single clip, generate_scene() sub-splits, assemble_rough_cut() | **Yes** |

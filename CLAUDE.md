@@ -114,6 +114,14 @@ PyTorch: 2.10.0+cu128 (upgraded for RTX 5090 sm_120 support). Do not downgrade.
 - Model loading and unloading must be symmetric — if `load()` moves weights to GPU, `unload()` must free them completely and verifiably
 - Never hardcode resolution, frame count, or FPS — always read from engine constraints
 
+## API Conventions (agent-ready)
+
+An LLM-agent front end (MCP tools over the API) is planned. All new API surface must be tool-friendly:
+- Self-describing operation names and docstrings (each endpoint should read as a tool description).
+- Structured JSON errors: {"error": {"code": <machine_readable>, "message": <human>, "detail": {...}}} — never bare strings or raw tracebacks.
+- No long-running synchronous handlers in new code. Anything that could take >2s must be designed as job-shaped (return an id, poll for status) or explicitly deferred with a TODO(job-model) comment.
+- Pipeline logic stays in core modules; endpoints only validate, delegate, serialize.
+
 ## Do NOT
 
 - Put generation/inference logic in api.py or UI code
