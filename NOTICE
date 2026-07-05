@@ -1,0 +1,11 @@
+MusicVision
+Copyright 2026 Todd Green
+
+This product is licensed under the Apache License, Version 2.0 (see the LICENSE
+file). The Apache 2.0 grant covers the MusicVision source code only.
+
+MusicVision integrates third-party AI model weights that are NOT distributed
+with this software and are NOT covered by this License. Each model's weights are
+governed by their own separate license, several of which restrict commercial use
+(for example, FLUX.1-dev and the FLUX IP-Adapters are non-commercial). See
+THIRD-PARTY-NOTICES.md for the full list and the code-vs-weights distinction.

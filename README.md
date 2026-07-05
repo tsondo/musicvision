@@ -1,6 +1,6 @@
 <p align="center"><img src="MusicVision.png" alt="MusicVision — AI Music Video Generator" width="480"></p>
 
-<h3 align="center">Source-Available AI Music Video Generator for Consumer GPUs</h3>
+<h3 align="center">Open-Source AI Music Video Generator for Consumer GPUs</h3>
 
 <p align="center">
   Turn any song into a lip-synced music video using AI — fully local, no cloud APIs required.
@@ -324,6 +324,8 @@ MusicVision occupies a unique niche: end-to-end music video generation running f
 
 ## License
 
-MusicVision source code is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE) — free for personal, academic, and research use. Commercial licenses are available; see [LICENSE-COMMERCIAL](LICENSE-COMMERCIAL) for details.
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-MusicVision integrates third-party AI models that have their own licenses. Some models (notably FLUX.1-dev) restrict commercial use independently of MusicVision's license. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for details. Users are responsible for complying with all applicable upstream licenses.
+MusicVision's **source code** is licensed under the [Apache License 2.0](LICENSE) — free for personal, academic, research, and commercial use. (Versions released before the Apache 2.0 relicensing commit remain under their original, more restrictive noncommercial terms; see git history.)
+
+**Code vs. model weights.** The Apache 2.0 grant covers the MusicVision code only. It does **not** cover the AI model weights the pipeline downloads at runtime — each model keeps its own license, and several restrict commercial use. Notably, **FLUX.1-dev** and the **FLUX IP-Adapters** are non-commercial, and **LTX-2** is free for commercial use only under a revenue threshold. Commercial users should route image generation through the permissively licensed **Z-Image** or **FLUX.1-schnell** models. Apache 2.0 does not lift any model-weight restriction. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for the full per-model breakdown — you are responsible for complying with all applicable upstream licenses.

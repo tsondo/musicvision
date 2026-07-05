@@ -2,8 +2,10 @@
 
 The files in this directory (`src/musicvision/video/vendor/`) are **vendored
 (copied and adapted) from upstream open-source projects** and are licensed under
-the **Apache License, Version 2.0** — NOT the PolyForm Noncommercial License
-1.0.0 that covers the rest of the MusicVision codebase.
+the **Apache License, Version 2.0**, retaining their original upstream copyright
+(see below). The rest of the MusicVision codebase is also licensed under the
+Apache License 2.0, but these files carry separate upstream authorship and
+attribution that must be preserved independently.
 
 ## File Origins
 

@@ -4,7 +4,7 @@ Thank you for considering contributing to MusicVision! We welcome bug reports, f
 
 ## Contributor License Agreement
 
-By submitting a pull request, you agree to the terms of the [MusicVision Contributor License Agreement (CLA)](CLA.md). This grants the project maintainer the right to distribute your contribution under any license, including the project's PolyForm Noncommercial license and commercial licenses. Please read the CLA before submitting.
+By submitting a pull request, you agree to the terms of the [MusicVision Contributor License Agreement (CLA)](CLA.md). This grants the project maintainer the right to distribute your contribution under any license, including the project's Apache License 2.0. Please read the CLA before submitting.
 
 If you are contributing on behalf of your employer, ensure you have authorization. Contact tsondo@gmail.com for corporate CLA arrangements.
 
@@ -36,4 +36,4 @@ Keep all pipeline logic in the core modules (`intake/`, `imaging/`, `video/`, `a
 
 ## License
 
-Your contributions will be licensed under the same terms as the project: [PolyForm Noncommercial License 1.0.0](LICENSE) for the open-source release, with the option for the maintainer to include contributions in commercial releases per the CLA.
+Your contributions will be licensed under the same terms as the project: the [Apache License 2.0](LICENSE).

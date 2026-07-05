@@ -1,3 +1,13 @@
+> **RETIRED 2026-07-05.** MusicVision was relicensed to the Apache License 2.0
+> (code only) as of the Apache 2.0 relicensing commit on this date (see
+> `git log` for the exact hash). The commercial-license tier and the PolyForm
+> Noncommercial License it complemented no longer apply to versions from that
+> commit forward. Prior released versions remain under their original PolyForm
+> Noncommercial + commercial-tier terms. This document is retained for
+> historical reference only and grants no rights.
+
+---
+
 # MusicVision Commercial License Agreement
 
 This Commercial License Agreement ("Agreement") is entered into between **Todd Green** ("Licensor") and the entity or individual identified in the executed order ("Licensee").
