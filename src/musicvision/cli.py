@@ -154,6 +154,11 @@ def cmd_intake(args: argparse.Namespace) -> None:
 
 def cmd_generate_images(args: argparse.Namespace) -> None:
     """Generate reference images for scenes."""
+    from musicvision.assets.consistency import (
+        conditioning_sort_key,
+        resolve_scene_conditioning,
+        should_enable_ip_adapter,
+    )
     from musicvision.imaging.factory import create_engine
     from musicvision.imaging.prompt_generator import generate_image_prompt
     from musicvision.models import ImageGenConfig, ImageModel
@@ -194,11 +199,19 @@ def cmd_generate_images(args: argparse.Namespace) -> None:
     res_parts = ss.resolution.split("x") if "x" in ss.resolution else ["768", "512"]
     width, height = int(res_parts[0]), int(res_parts[1])
 
-    # Build character LoRA lookup
-    char_loras: dict[str, tuple[str, float]] = {}
-    for char_def in svc.config.style_sheet.characters:
-        if char_def.lora_path:
-            char_loras[char_def.id] = (char_def.lora_path, char_def.lora_weight)
+    # Resolve per-scene conditioning from the asset library (LoRA + IP-Adapter
+    # + prompt fragments). Replaces the old manual character-LoRA lookup.
+    conds = {
+        s.id: resolve_scene_conditioning(
+            s, ss, svc.config.image_gen.model, project_root=svc.paths.root,
+        )
+        for s in scenes
+    }
+
+    # Auto-enable IP-Adapter before load() so the adapter loads at the correct
+    # point in the load sequence (before any cpu-offload — see FluxEngine audit).
+    if should_enable_ip_adapter(ss, svc.config.image_gen.model):
+        svc.config.image_gen.ip_adapter.enabled = True
 
     # Create engine and generate
     device_map = detect_devices()
@@ -209,34 +222,26 @@ def cmd_generate_images(args: argparse.Namespace) -> None:
     generated = 0
     errors = []
     try:
-        # Sort by LoRA to minimize swaps
-        def _lora_key(s):
-            for cid in s.characters:
-                if cid in char_loras:
-                    return char_loras[cid][0]
-            return ""
-
-        sorted_scenes = sorted(scenes, key=_lora_key)
+        # Group by LoRA (minimize fuse/unfuse swaps), then by IP-Adapter
+        # reference set (predictable ordering; IPA needs no load cycles).
+        sorted_scenes = sorted(scenes, key=lambda s: conditioning_sort_key(conds[s.id]))
 
         for scene in sorted_scenes:
             try:
-                lora_path = None
-                lora_weight = 0.8
-                for cid in scene.characters:
-                    if cid in char_loras:
-                        lora_path, lora_weight = char_loras[cid]
-                        break
-
+                cond = conds[scene.id]
                 output_path = svc.paths.image_path(scene.id)
-                prompt = scene.effective_image_prompt
+                prompt = cond.apply_to_prompt(scene.effective_image_prompt)
                 print(f"  Generating {scene.id}: {prompt[:60]}…")
                 engine.generate(
                     prompt=prompt,
                     width=width,
                     height=height,
-                    lora_path=lora_path,
-                    lora_weight=lora_weight,
+                    lora_path=cond.lora_path,
+                    lora_weight=cond.lora_weight,
                     output_path=output_path,
+                    ip_adapter_images=cond.ip_adapter_images if cond.has_ip_adapter else None,
+                    ip_adapter_scales=cond.ip_adapter_scales if cond.has_ip_adapter else None,
+                    ip_adapter_embeddings=cond.ip_adapter_embeddings if cond.ip_adapter_embeddings else None,
                 )
                 scene.reference_image = f"images/{scene.id}.png"
                 generated += 1

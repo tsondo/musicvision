@@ -46,20 +46,38 @@ The pipeline is designed around AI-generated music from **AceStep** (a text-cond
 |----------------|--------|
 | Phase 1 — Data model (`AssetDef`/`AssetImage`/enums, `StyleSheet` migration) | ✅ Complete |
 | Phase 2 — Storage + `AssetService` CRUD | ✅ Complete |
-| Phase 3 — IP-Adapter in `FluxEngine` | ⏳ Pending (checkpoint bake-off) |
-| Phase 4 — Consistency resolver (`resolve_scene_conditioning`) | ⏳ Pending |
-| Phase 5 — Wire conditioning into CLI + API generation | ⏳ Pending |
+| Phase 3 — IP-Adapter in `FluxEngine` (XLabs v2, stock diffusers) | ✅ Complete — **not yet GPU tested** |
+| Phase 4 — Consistency resolver (`resolve_scene_conditioning`) | ✅ Complete |
+| Phase 5 — Wire conditioning into CLI + API generation | ✅ Complete |
 | Phase 6 — Asset CRUD API endpoints | ⏳ Pending |
 | Phase 7 — Embedding precomputation + caching | ⏳ Pending |
 | Phase 8 — React Asset Library panel | ⏳ Pending |
 
-Phases 1–2 add the unified asset data model (`StyleSheet.assets`) and a pure
-data-management `AssetService` (CRUD + reference/training image handling). Legacy
-`characters`/`props`/`settings` auto-migrate into `assets` on load; the old
-`CharacterDef`/`PropDef`/`SettingDef` classes remain (deprecated). No engine,
-inference, or API surface was added — Phase 3+ (IP-Adapter) is blocked on an
-external checkpoint bake-off. `IPAdapterConfig` was intentionally deferred with
-Phase 3 rather than added in Phase 1 (it hardcodes the pending adapter repo).
+Phases 1–2: unified asset data model (`StyleSheet.assets`) + pure data-management
+`AssetService`; legacy `characters`/`props`/`settings` auto-migrate on load.
+
+Phases 3–5: IP-Adapter support in `FluxEngine` via the stock diffusers path
+(`load_ip_adapter`/`set_ip_adapter_scale`/`ip_adapter_image(_embeds)` — no
+vendored pipeline code, no custom attention processors). Bake-off selected
+**XLabs flux-ip-adapter-v2** with the CLIP-ViT-L encoder (`IPAdapterConfig`
+defaults; XLabs v1 is a pure-config swap). `FluxEngine.load()` was restructured
+into build → IP-Adapter → place → LoRA stages so `load_ip_adapter()` always
+precedes cpu-offload (diffusers requirement; the spec originally had this
+backwards). `resolve_scene_conditioning()` maps a scene's assets to LoRA
+(first-wins, characters first) + multi-IPA references + prompt fragments, and
+is wired into `cmd_generate_images` (CLI), `generate_images` and
+`regenerate_image` (API). Z-Image accepts and ignores IPA kwargs with a
+warning. Never batch positive/negative CFG with the IP-Adapter active (XLabs
+adapters break under batched CFG; diffusers runs true-CFG separately).
+
+### Verify at first live GPU run (IP-Adapter)
+
+- [ ] load_ip_adapter → cpu_offload ordering works on the real two-GPU device map
+- [ ] CLIP-L image encoder actually lands on the secondary GPU
+- [ ] VRAM headroom on the 5090 with FLUX + adapter + encoder resident (pre-flight budget check unchanged?)
+- [ ] scale=0.6 sanity on real character references; prompt adherence at scale ≥0.8
+- [ ] multi-IPA (2+ assets in one scene) output sanity
+- [ ] seed-locked reproducibility with IPA active
 
 **All five pipeline stages are code-complete and CLI-accessible.** Full end-to-end workflow: `create` → `import-audio` → `intake` → `generate-images` → `generate-video` → `upscale` → `assemble`. Two video engines: HuMo (working, 24 bugs fixed) and LTX-Video 2 (cinematic). Three upscalers: SeedVR2 (pixel-space), LTX Spatial (LTX-2 latent), Real-ESRGAN (fast preview). Assembly auto-prefers upscaled clips. HunyuanVideo-Avatar was previously supported but was deprecated and removed (2026-03-11, commit 35cda2a).
 
@@ -377,7 +395,7 @@ scenes[]:
 ## Tests
 
 ```bash
-# CPU unit tests (no GPU needed) — ~275 tests:
+# CPU unit tests (no GPU needed) — ~313 tests:
 uv run pytest tests/ -v
 
 # GPU integration tests (run on workstation):
@@ -398,6 +416,8 @@ python scripts/test_gpu_pipeline.py --fast # HuMo video generation
 | `tests/test_oom_resilience.py` | OOM recovery, pre-flight VRAM checks | No (mocked) |
 | `tests/test_asset_model.py` (19 tests) | AssetDef/AssetImage helpers, StyleSheet legacy migration | No |
 | `tests/test_asset_service.py` (29 tests) | AssetService CRUD, image add/remove/primary, ProjectPaths | No |
+| `tests/test_ip_adapter.py` (17 tests) | IPAdapterConfig, FluxEngine IPA generation + load ordering, Z-Image ignore | No (mocked) |
+| `tests/test_consistency.py` (21 tests) | resolve_scene_conditioning rules, sort key, auto-enable helper | No |
 | `scripts/test_image_gen.py` | Z-Image-Turbo + FLUX-schnell GPU generation (2 images each) | **Yes** |
 | `scripts/test_humo_inference.py` (11 tests) | WanModel forward, RoPE, AudioProjModel, FlowMatchScheduler | No (CPU) |
 | `scripts/test_gpu_pipeline.py` | HuMo single clip, generate_scene() sub-splits, assemble_rough_cut() | **Yes** |

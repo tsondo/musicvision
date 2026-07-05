@@ -586,6 +586,13 @@ async def describe_video(scene_id: str):
 @app.post("/api/scenes/{scene_id}/regenerate-image")
 async def regenerate_image(scene_id: str, req: RegenerateImageRequest) -> Scene:
     """Generate or regenerate a single scene's reference image."""
+    # TODO(job-model): a single FLUX generation incl. engine load/unload takes
+    # ~1-3 min; convert to job-shaped (return an id, poll for status) per the
+    # API Conventions block in CLAUDE.md.
+    from musicvision.assets.consistency import (
+        resolve_scene_conditioning,
+        should_enable_ip_adapter,
+    )
     from musicvision.imaging import create_engine
     from musicvision.imaging.prompt_generator import generate_image_prompt
     from musicvision.utils.gpu import detect_devices
@@ -613,18 +620,13 @@ async def regenerate_image(scene_id: str, req: RegenerateImageRequest) -> Scene:
     res_parts = ss.resolution.split("x") if "x" in ss.resolution else ["1280", "720"]
     width, height = int(res_parts[0]), int(res_parts[1])
 
-    # Character LoRA
-    char_loras: dict[str, tuple[str, float]] = {}
-    for char_def in proj.config.style_sheet.characters:
-        if char_def.lora_path:
-            char_loras[char_def.id] = (char_def.lora_path, char_def.lora_weight)
-
-    lora_path = None
-    lora_weight = 0.8
-    for cid in scene.characters:
-        if cid in char_loras:
-            lora_path, lora_weight = char_loras[cid]
-            break
+    # Resolve conditioning from the asset library (LoRA + IP-Adapter + prompt
+    # fragments). Replaces the old manual character-LoRA lookup. `config` is
+    # already a model_copy, so the IP-Adapter auto-enable never persists.
+    cond = resolve_scene_conditioning(scene, ss, config.model, project_root=proj.paths.root)
+    prompt = cond.apply_to_prompt(prompt)
+    if should_enable_ip_adapter(ss, config.model):
+        config.ip_adapter.enabled = True
 
     import asyncio
 
@@ -639,10 +641,13 @@ async def regenerate_image(scene_id: str, req: RegenerateImageRequest) -> Scene:
                 prompt=prompt,
                 width=width,
                 height=height,
-                lora_path=lora_path,
-                lora_weight=lora_weight,
+                lora_path=cond.lora_path,
+                lora_weight=cond.lora_weight,
                 output_path=output_path,
                 seed=seed,
+                ip_adapter_images=cond.ip_adapter_images if cond.has_ip_adapter else None,
+                ip_adapter_scales=cond.ip_adapter_scales if cond.has_ip_adapter else None,
+                ip_adapter_embeddings=cond.ip_adapter_embeddings if cond.ip_adapter_embeddings else None,
             )
             scene.reference_image = f"images/{scene.id}.png"
             scene.image_status = ApprovalStatus.PENDING
@@ -1019,6 +1024,14 @@ async def generate_descriptions(req: GenerateDescriptionsRequest):
 @app.post("/api/pipeline/generate-images")
 async def generate_images(req: GenerateImagesRequest):
     """Generate reference images for scenes that have prompts."""
+    # TODO(job-model): synchronous multi-scene GPU generation can run for
+    # minutes-to-hours; convert to job-shaped (return an id, poll for status)
+    # per the API Conventions block in CLAUDE.md.
+    from musicvision.assets.consistency import (
+        conditioning_sort_key,
+        resolve_scene_conditioning,
+        should_enable_ip_adapter,
+    )
     from musicvision.imaging import create_engine
     from musicvision.imaging.prompt_generator import generate_image_prompt
     from musicvision.utils.gpu import detect_devices
@@ -1054,49 +1067,52 @@ async def generate_images(req: GenerateImagesRequest):
     res_parts = ss.resolution.split("x") if "x" in ss.resolution else ["1280", "720"]
     width, height = int(res_parts[0]), int(res_parts[1])
 
-    # Build character LoRA lookup
-    char_loras: dict[str, tuple[str, float]] = {}
-    for char_def in proj.config.style_sheet.characters:
-        if char_def.lora_path:
-            char_loras[char_def.id] = (char_def.lora_path, char_def.lora_weight)
+    # Resolve per-scene conditioning from the asset library (LoRA + IP-Adapter
+    # + prompt fragments). Replaces the old manual character-LoRA lookup.
+    conds = {
+        s.id: resolve_scene_conditioning(
+            s, ss, proj.config.image_gen.model, project_root=proj.paths.root,
+        )
+        for s in scenes
+    }
+
+    # Engine config copy: auto-enable IP-Adapter before load() (must precede
+    # cpu-offload — see FluxEngine load-order audit) without persisting the
+    # runtime flag into project.yaml.
+    engine_config = proj.config.image_gen.model_copy(deep=True)
+    if should_enable_ip_adapter(ss, engine_config.model):
+        engine_config.ip_adapter.enabled = True
 
     # Run generation in a thread so the event loop stays responsive
     import asyncio
 
     def _run_generation() -> dict:
         device_map = detect_devices()
-        engine = create_engine(proj.config.image_gen, device_map)
+        engine = create_engine(engine_config, device_map)
         engine.load()
 
         generated: list[str] = []
         failed: list[dict] = []
 
         try:
-            def _lora_key(s):
-                for cid in s.characters:
-                    if cid in char_loras:
-                        return char_loras[cid][0]
-                return ""
-
-            sorted_scenes = sorted(scenes, key=_lora_key)
+            # Group by LoRA (minimize fuse/unfuse swaps), then by IP-Adapter
+            # reference set (predictable ordering; IPA needs no load cycles).
+            sorted_scenes = sorted(scenes, key=lambda s: conditioning_sort_key(conds[s.id]))
 
             for scene in sorted_scenes:
                 try:
-                    lora_path = None
-                    lora_weight = 0.8
-                    for cid in scene.characters:
-                        if cid in char_loras:
-                            lora_path, lora_weight = char_loras[cid]
-                            break
-
+                    cond = conds[scene.id]
                     output_path = proj.paths.image_path(scene.id)
                     engine.generate(
-                        prompt=scene.effective_image_prompt,
+                        prompt=cond.apply_to_prompt(scene.effective_image_prompt),
                         width=width,
                         height=height,
-                        lora_path=lora_path,
-                        lora_weight=lora_weight,
+                        lora_path=cond.lora_path,
+                        lora_weight=cond.lora_weight,
                         output_path=output_path,
+                        ip_adapter_images=cond.ip_adapter_images if cond.has_ip_adapter else None,
+                        ip_adapter_scales=cond.ip_adapter_scales if cond.has_ip_adapter else None,
+                        ip_adapter_embeddings=cond.ip_adapter_embeddings if cond.ip_adapter_embeddings else None,
                     )
                     scene.reference_image = f"images/{scene.id}.png"
                     generated.append(scene.id)
