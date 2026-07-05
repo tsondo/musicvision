@@ -8,6 +8,10 @@ This module creates the structure and resolves paths so nothing else hardcodes p
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from musicvision.models import AssetType
 
 
 class ProjectPaths:
@@ -32,11 +36,36 @@ class ProjectPaths:
     def input_dir(self) -> Path:
         return self.root / "input"
 
-    # --- Assets (user-provided references, LoRAs) ---
+    # --- Asset library (reference images, training datasets) ---
 
     @property
     def assets_dir(self) -> Path:
         return self.root / "assets"
+
+    # Per-asset-type subdirectory name. AssetType.LOCATION maps to "locations"
+    # (the legacy on-disk name was "settings"; see settings_dir below).
+    _ASSET_TYPE_DIRS = {"character": "characters", "prop": "props", "location": "locations"}
+
+    def asset_dir(self, asset_type: AssetType, asset_id: str) -> Path:
+        """Directory holding a specific asset's files (reference images, etc.)."""
+        key = asset_type.value if hasattr(asset_type, "value") else asset_type
+        return self.assets_dir / self._ASSET_TYPE_DIRS[key] / asset_id
+
+    def asset_training_dir(self, asset_type: AssetType, asset_id: str) -> Path:
+        """Directory holding a specific asset's LoRA training dataset."""
+        return self.asset_dir(asset_type, asset_id) / "training"
+
+    @property
+    def loras_dir(self) -> Path:
+        """Trained LoRA output directory (project root, matches AssetDef.lora_path)."""
+        return self.root / "loras"
+
+    @property
+    def ip_cache_dir(self) -> Path:
+        """Precomputed IP-Adapter embedding cache (matches ip_adapter_embedding_path)."""
+        return self.root / "ip_cache"
+
+    # --- DEPRECATED legacy asset dirs (kept so old scaffolds/projects resolve) ---
 
     @property
     def characters_dir(self) -> Path:
@@ -49,10 +78,6 @@ class ProjectPaths:
     @property
     def settings_dir(self) -> Path:
         return self.assets_dir / "settings"
-
-    @property
-    def loras_dir(self) -> Path:
-        return self.assets_dir / "loras"
 
     # --- Generated segments ---
 
@@ -135,6 +160,7 @@ class ProjectPaths:
             self.props_dir,
             self.settings_dir,
             self.loras_dir,
+            self.ip_cache_dir,
             self.segments_dir,
             self.sub_segments_dir,
             self.segments_vocal_dir,
