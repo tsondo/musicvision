@@ -13,7 +13,7 @@ HuMo (Human-Centric Video Generation via Collaborative Multi-Modal Conditioning)
 | Tier | Model | Format | DiT VRAM | Speed (480p) | Speed (720p) | Quality |
 |------|-------|--------|----------|-------------|-------------|---------|
 | `fp16` | HuMo-17B | FP16 safetensors | ~34 GB | ~20 min | ~40 min | Best (2× GPU FSDP) |
-| `fp8_scaled` | HuMo-17B | FP8 e4m3fn scaled | ~18 GB | ~25 min | ~50 min | Excellent (fits single RTX 4080 16 GB as fallback) |
+| `fp8_scaled` | HuMo-17B | FP8 e4m3fn scaled | ~18 GB | ~25 min | ~50 min | Excellent (fits 16 GB-class single GPUs with block swap) |
 | `gguf_q8` | HuMo-17B | GGUF Q8_0 | ~18.5 GB | ~25 min | ~50 min | Excellent |
 | `gguf_q6` | HuMo-17B | GGUF Q6_K | ~14.4 GB | ~30 min | ~60 min | Very good |
 | `gguf_q4` | HuMo-17B | GGUF Q4_K_M | ~11.5 GB | ~35 min | ~75 min | Good |
@@ -21,7 +21,7 @@ HuMo (Human-Centric Video Generation via Collaborative Multi-Modal Conditioning)
 
 The 1.7B model has lower visual quality but nearly identical audio-visual sync accuracy. Good for iteration/preview; use 17B for final render.
 
-**Note on `fp8_scaled`:** The FP8 scaled weights (`Kijai/WanVideo_comfy_fp8_scaled`) bring the 17B DiT down to ~18 GB — fitting on a single RTX 4080 (16 GB) as a secondary-GPU fallback, with model components paged via block swap.
+**Note on `fp8_scaled`:** The FP8 scaled weights (`Kijai/WanVideo_comfy_fp8_scaled`) bring the 17B DiT down to ~18 GB — fitting 16 GB-class single GPUs with model components paged via block swap. (No secondary-GPU fallback on the current rig: the 3080 Ti's ~10.5 GB usable is too small for any 17B tier.)
 
 ## Installation
 
@@ -164,14 +164,14 @@ Set `dit.sp_size` in `generate.yaml` equal to the number of GPUs:
 
 ```yaml
 dit:
-  sp_size: 2    # For 2 GPUs (e.g. RTX 5090 32 GB + RTX 4080 16 GB)
+  sp_size: 2    # For 2 GPUs (e.g. RTX 5090 32 GB + RTX 3080 Ti 12 GB)
 ```
 
-**MusicVision two-GPU split (RTX 5090 + RTX 4080):**
-- **Primary GPU** (RTX 5090, 32 GB): DiT/UNet computation
-- **Secondary GPU** (RTX 4080, 16 GB): T5 text encoder, VAE, Whisper encoder — all smaller models fit comfortably at 16 GB
+**MusicVision two-GPU split (RTX 5090 + RTX 3080 Ti):**
+- **Primary GPU** (RTX 5090, 32 GB, `cuda:0`, display off): DiT/UNet computation
+- **Secondary GPU** (RTX 3080 Ti, 12 GB, `cuda:1`, drives the OS display — ~10.5 GB usable): T5 text encoder, VAE, Whisper encoder — they do NOT fit co-resident; `HumoEngine` loads, encodes, and offloads each sequentially
 
-> **Note:** On the dev workstation, the 4080 is `cuda:0` and the 5090 is `cuda:1`. MusicVision's `gpu.py` auto-assigns the highest-VRAM GPU as primary regardless of CUDA index — do not hardcode device indices.
+> **Note:** MusicVision's `gpu.py` auto-assigns the highest-VRAM GPU as primary regardless of CUDA index — do not hardcode device indices.
 
 For single-GPU setups, use `fp8_scaled` or a GGUF tier with `block_swap_count > 0` to stay within VRAM.
 

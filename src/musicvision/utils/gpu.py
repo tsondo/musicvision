@@ -47,8 +47,8 @@ def _gpu_sort_key(index: int) -> tuple:
     Return a sort key for ranking GPUs: (vram_bytes, model_number).
 
     Higher VRAM wins. If VRAM is equal, the higher GPU model number wins
-    (e.g. 4080 > 3080). This ensures the beefiest GPU becomes primary
-    regardless of PCIe slot / CUDA index.
+    (e.g. at equal VRAM a 5080 outranks a 3080 Ti). This ensures the beefiest
+    GPU becomes primary regardless of PCIe slot / CUDA index.
     """
     import torch
 
@@ -191,7 +191,13 @@ def recommend_tier(device_map: DeviceMap) -> "HumoTier":
     Platform notes:
       - Apple Silicon MPS: preview tier only (initial release; FP8 not supported on MPS)
       - Single GPU ≥48 GB (A100 80GB, H100, H200): qualifies for FP16 tier
-      - Dual GPU ≥24 GB primary (RTX 5090 + 4080): FP16 tier
+      - Dual GPU ≥40 GB primary: FP16 tier (matches the code below; an
+        earlier version of this docstring said ≥24 GB — that was never
+        what the code did)
+      - Current rig (5090 32 GB + 3080 Ti 12 GB): lands on FP8_SCALED
+      - NOTE: secondary VRAM is NOT consulted — tiers are keyed off the
+        primary only. The encoder set is assumed to fit the secondary via
+        sequential load/encode/offload (see HumoEngine.generate).
     """
     import torch
     from musicvision.models import HumoTier

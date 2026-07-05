@@ -30,7 +30,7 @@ Make MusicVision run effectively on cloud GPU VMs with A100 80GB, H100 80GB, or 
 
 ### Why single-GPU is better than multi-GPU for cloud
 
-MusicVision's multi-GPU strategy was designed for consumer hardware (32GB + 16GB). On cloud:
+MusicVision's multi-GPU strategy was designed for consumer hardware (32GB + 12GB). On cloud:
 - A single A100 80GB has more VRAM than both consumer GPUs combined (48GB)
 - No PCIe transfer overhead between GPUs
 - No model-splitting complexity
@@ -56,7 +56,7 @@ def recommend_tier(device_map: DeviceMap) -> HumoTier:
     if n_gpus == 1 and primary_gb >= 48:
         return HumoTier.FP16    # A100 80GB, H100, H200, L40S 48GB
     if n_gpus >= 2 and primary_gb >= 40:
-        return HumoTier.FP16    # Consumer dual-GPU (5090 + 4080)
+        return HumoTier.FP16    # Consumer dual-GPU (e.g. 5090 primary)
     # ... rest unchanged ...
 ```
 
@@ -258,7 +258,7 @@ if frontend_dist.exists():
 
 Before renting cloud time:
 1. Run the existing test suite to verify no regressions
-2. If you have a single GPU with ≥24GB (the 5090), test single-GPU mode by setting `CUDA_VISIBLE_DEVICES=0` to hide the 4080
+2. If you have a single GPU with ≥24GB (the 5090), test single-GPU mode by setting `CUDA_VISIBLE_DEVICES` to expose only the 5090 (never assume its index — check `nvidia-smi` first)
 3. Verify `detect_devices()` returns a single-GPU DeviceMap
 4. Verify `recommend_tier()` returns the expected tier
 5. Run a short end-to-end test (3-5 scenes, 320p preview)

@@ -15,8 +15,8 @@ OpenAI-compatible backend (vLLM on local LAN):
   OPENAI_MODEL       = <model_id>    (required)
 
 ---------------------------------------------------------------------------
-Recommended vLLM model candidates for RTX 4080 16GB + RTX 5070 12GB (28GB total)
-Launch with: vllm serve <model_id> --tensor-parallel-size 2
+Recommended vLLM model candidates for the RTX 3090 Ti 24GB LLM server
+Launch with: vllm serve <model_id>
 ---------------------------------------------------------------------------
 
 # Candidate 1 — Best quality that fits (4-bit AWQ, ~18GB)

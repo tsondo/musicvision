@@ -36,7 +36,7 @@ Each scene in `scenes.json` gets a `lip_sync_mode` field:
 - 512×512 face region (v1.6) — significantly sharper than alternatives (MuseTalk is 256×256)
 - Temporal consistency via TREPA (Temporal REPresentation Alignment)
 - Diffusion-based (SD 1.5 UNet) — higher quality than single-step inpainting approaches
-- ~18 GB VRAM for inference (v1.6) — fits on the 5090 or 4080
+- ~18 GB VRAM for inference (v1.6) — fits on the 5090 (far too big for the 3080 Ti secondary)
 - ComfyUI wrapper exists for validation before pipeline integration
 - Active development (v1.5 → v1.6 within months)
 
@@ -294,7 +294,7 @@ LatentSync 1.6 needs ~18 GB VRAM for inference. Two viable options:
 | Config | GPU | Notes |
 |--------|-----|-------|
 | **Primary (recommended)** | RTX 5090 (32 GB) | Plenty of headroom. Load LatentSync after unloading video engine. |
-| **Secondary** | RTX 4080 (16 GB) | Tight but possible with v1.5 (8 GB). v1.6 at 18 GB won't fit. |
+| **Secondary** | RTX 3080 Ti (12 GB, ~10.5 GB usable — drives display) | v1.5 (8 GB) is tight; v1.6 at 18 GB won't fit. |
 
 **Recommended approach:** Run on the 5090 between Stage 3 (video gen unloaded) and Stage 4 (upscaler not yet loaded). Sequential stage execution already guarantees no VRAM contention.
 

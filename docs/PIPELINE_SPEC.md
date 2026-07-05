@@ -17,9 +17,9 @@ The pipeline segments audio for **video generation only** — each scene's slice
 ## System Requirements
 
 ### Inference Workstation (image + video generation)
-- **Primary GPU**: NVIDIA RTX 5090 (32 GB VRAM) — runs DiT for FLUX, HuMo, or LTX-Video 2
-- **Secondary GPU**: NVIDIA RTX 4080 (16 GB VRAM) — offloads text encoders (T5-XXL, CLIP), VAE, Whisper, audio separator
-- **Multi-GPU Strategy**: Proven in ComfyUI. DiT on the 5090, everything else on the 4080. The GPU with the most VRAM is automatically selected as primary by `gpu.py`, regardless of CUDA index (the 4080 is `cuda:0`, the 5090 is `cuda:1` — this does not affect pipeline behavior).
+- **Primary GPU**: NVIDIA RTX 5090 (32 GB VRAM, `cuda:0`, display off — dedicated inference) — runs DiT for FLUX, HuMo, or LTX-Video 2
+- **Secondary GPU**: NVIDIA RTX 3080 Ti (12 GB VRAM, `cuda:1`) — drives the OS display (~1.2 GB baseline; treat usable VRAM as ~10.5 GB). Offloads text encoders (T5-XXL, CLIP), VAE, Whisper, audio separator — loaded sequentially, not co-resident.
+- **Multi-GPU Strategy**: Proven in ComfyUI. DiT on the 5090, everything else on the 3080 Ti. The GPU with the most VRAM is automatically selected as primary by `gpu.py`, regardless of CUDA index — never hardcode device indices in pipeline code.
 - **Model Swapping**: FLUX and video engines run in different pipeline stages (not simultaneously). Within each stage, model components are split across both GPUs. Weights fully unloaded between stages.
 
 ### Local LLM Server (optional, for prompt generation)
@@ -73,22 +73,22 @@ ENGINE_CONSTRAINTS = {
 ### GPU Memory Map (Inference Workstation)
 
 ```
-GPU0 — RTX 5090 (32 GB)          GPU1 — RTX 4080 (16 GB)
-┌─────────────────────────┐       ┌─────────────────────────┐
-│ Stage 2: FLUX DiT       │       │ T5 text encoder  ~10 GB │
-│   bf16: ~24 GB          │       │ VAE              ~0.4 GB│
-│   FP8:  ~12 GB          │       │ Whisper          ~1.5 GB│
-├─────────────────────────┤       │ Audio separator  ~0.5 GB│
-│ Stage 3 (one at a time):│       │                         │
-│  HuMo 17B               │       │ Total: ~12-13 GB        │
-│                         │       │ Headroom: ~3-4 GB       │
-│                         │       └─────────────────────────┘
-│   fp8:  ~18 GB          │
-│   gguf: 11–18.5 GB      │
-│  HuMo 1.7B (preview)    │
-│   fp16: ~3.4 GB         │
+GPU0 — RTX 5090 (32 GB)          GPU1 — RTX 3080 Ti (12 GB, drives display)
+┌─────────────────────────┐       ┌───────────────────────────────┐
+│ Stage 2: FLUX DiT       │       │ OS display baseline  ~1.2 GB  │
+│   bf16: ~24 GB          │       │ Usable               ~10.5 GB │
+│   FP8:  ~12 GB          │       ├───────────────────────────────┤
+├─────────────────────────┤       │ One encoder at a time:        │
+│ Stage 3 (one at a time):│       │  T5 text encoder     ~10 GB   │
+│  HuMo 17B               │       │  VAE                 ~0.4 GB  │
+│                         │       │  Whisper             ~1.5 GB  │
+│                         │       │  Audio separator     ~0.5 GB  │
+│   fp8:  ~18 GB          │       │ (co-resident total ~12-13 GB  │
+│   gguf: 11–18.5 GB      │       │  EXCEEDS usable — sequential  │
+│  HuMo 1.7B (preview)    │       │  load/encode/offload only)    │
+│   fp16: ~3.4 GB         │       └───────────────────────────────┘
 └─────────────────────────┘
-(Only one stage loaded at a time)
+(Only one stage loaded at a time; only one encoder resident on GPU1 at a time)
 ```
 
 ## Frame-Accurate Alignment System

@@ -284,7 +284,7 @@ class FP16Loader(BaseHumoLoader):
     """
     Load HuMo-17B in full FP16 precision.
 
-    For dual GPU with ≥24 GB primary (e.g. RTX 5090 + 4080) or single GPU ≥48 GB
+    For dual GPU with ≥24 GB primary (e.g. RTX 5090 32 GB) or single GPU ≥48 GB
     (A100 80 GB, H100, H200). On multi-GPU, the DiT is placed on the primary GPU;
     full FSDP sharding across GPUs is not implemented.
 

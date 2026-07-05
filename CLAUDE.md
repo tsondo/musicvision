@@ -62,11 +62,11 @@ frontend/                    # React + Vite scene review GUI
 Two machines on the same LAN:
 
 **Inference workstation** (where this repo runs):
-- **Primary GPU**: RTX 5090 32 GB — runs DiT (FLUX diffusion, HuMo/LTX-2 transformer)
-- **Secondary GPU**: RTX 4080 16 GB — offloads T5, CLIP, VAE, Whisper, audio separator
+- **Primary GPU**: RTX 5090 32 GB (`cuda:0`), display OFF, dedicated inference — runs DiT (FLUX diffusion, HuMo/LTX-2 transformer)
+- **Secondary GPU**: RTX 3080 Ti 12 GB (`cuda:1`) — DRIVES THE OS DISPLAY (~1.2 GB baseline); treat usable VRAM as **~10.5 GB**. Offloads T5, CLIP, VAE, Whisper, audio separator — the full encoder set does NOT fit co-resident; sequential load/encode/offload per component is mandatory.
 - OS: Windows + WSL (Fedora also used for dev)
 
-> **CUDA index note:** The 4080 is `cuda:0` and the 5090 is `cuda:1` in `nvidia-smi` order. This does NOT matter for MusicVision — `gpu.py` auto-detects GPUs by VRAM and assigns the highest-VRAM GPU as primary regardless of CUDA index. Do not hardcode CUDA indices anywhere in pipeline code.
+> **CUDA index note:** The 5090 is now `cuda:0` and the 3080 Ti is `cuda:1` in `nvidia-smi` order (this flipped when the 4080 was removed). It does NOT matter for MusicVision — `gpu.py` auto-detects GPUs by VRAM and assigns the highest-VRAM GPU as primary regardless of CUDA index. Do not hardcode CUDA indices anywhere in pipeline code.
 
 **vLLM server** (separate LAN machine):
 - GPU: RTX 3090 Ti 24GB
@@ -202,7 +202,7 @@ Run manually. Each has different hardware requirements — see docs/TESTING.md a
 - HuMo max output: 97 frames (~3.88s at 25fps). Scenes >4s are auto-split into sub-clips.
 - Sub-clip continuity: last frame of sub-clip N becomes reference image for sub-clip N+1.
 - FLUX and HuMo run sequentially (different stages), never simultaneously. Models fully unloaded between stages.
-- GPU0 (5090) runs DiT/UNet. GPU1 (4080) runs encoders/VAE. This split is managed by `utils/gpu.py`.
+- GPU0 (5090) runs DiT/UNet. GPU1 (3080 Ti, ~10.5 GB usable — shares the display) runs encoders/VAE, sequentially offloaded per component. This split is managed by `utils/gpu.py`.
 - VRAM tier system: fp16, fp8_scaled, gguf_q8, gguf_q6, gguf_q4, preview. `recommend_tier()` auto-selects based on available VRAM.
 - Upscaling: per-engine strategy — LTX-2 → LTX Spatial (latent-space), HuMo → SeedVR2 (pixel-space), preview → Real-ESRGAN or NONE. Assembly prefers upscaled clips.
 

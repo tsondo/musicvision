@@ -17,7 +17,7 @@ The pipeline is designed around AI-generated music from **AceStep** (a text-cond
 
 **Primary output:** A rough-cut MP4 + an EDL/FCPXML timeline for DaVinci Resolve finishing.
 
-**Target hardware:** Dual-GPU inference workstation (RTX 5090 32 GB + RTX 4080 16 GB) for image/video generation, with VRAM-tiered fallbacks for lighter configs. Separate RTX 3090 Ti (24 GB) available for local vLLM inference.
+**Target hardware:** Dual-GPU inference workstation (RTX 5090 32 GB dedicated + RTX 3080 Ti 12 GB secondary, which drives the OS display — ~10.5 GB usable) for image/video generation, with VRAM-tiered fallbacks for lighter configs. Separate RTX 3090 Ti (24 GB) available for local vLLM inference.
 
 ---
 
@@ -78,6 +78,7 @@ adapters break under batched CFG; diffusers runs true-CFG separately).
 - [ ] scale=0.6 sanity on real character references; prompt adherence at scale ≥0.8
 - [ ] multi-IPA (2+ assets in one scene) output sanity
 - [ ] seed-locked reproducibility with IPA active
+- [ ] verify encoder-set VRAM fit on the 11GB display-sharing secondary, per stage (imaging/video/intake)
 
 **All five pipeline stages are code-complete and CLI-accessible.** Full end-to-end workflow: `create` → `import-audio` → `intake` → `generate-images` → `generate-video` → `upscale` → `assemble`. Two video engines: HuMo (working, 24 bugs fixed) and LTX-Video 2 (cinematic). Three upscalers: SeedVR2 (pixel-space), LTX Spatial (LTX-2 latent), Real-ESRGAN (fast preview). Assembly auto-prefers upscaled clips. HunyuanVideo-Avatar was previously supported but was deprecated and removed (2026-03-11, commit 35cda2a).
 
@@ -161,7 +162,7 @@ Two selectable video backends, configured per-project or per-scene via `VideoEng
 Lightricks' joint audio+video DiT (19B total: 14B video + 5B audio streams). Image-to-video via `LTX2ImageToVideoPipeline`. 257 frames max @ 24fps = 10.71s per clip (~2.75x HuMo length).
 
 - **Transformer**: GGUF IQ4 (~11GB) from `gguf-org/ltx2-gguf` — avoids 62GB RAM OOM from BF16→FP8 runtime quantization
-- **GPU layout**: `model` CPU offload on 5090, VAE decode on 4080
+- **GPU layout**: `model` CPU offload on 5090, VAE decode on 3080 Ti (~10.5 GB usable — verify fit, see live-run checklist)
 - **Performance**: ~3.3s/step, ~1 min per 257-frame sub-clip
 - **Audio conditioning**: mel spectrogram encoding (TODO: currently audio VAE decode skipped)
 - **Frame constraint**: must be `(N*8)+1`
@@ -517,7 +518,7 @@ Two engines are integrated:
 Per-scene engine selection: `Scene.video_engine` overrides the project default (`ProjectConfig.video_engine`). Pipeline groups scenes by engine for efficient load/unload.
 
 ### Two-GPU split (HuMo)
-GPU0 (RTX 5090 32 GB) handles the DiT compute. GPU1 (RTX 4080 16 GB) handles T5, VAE, Whisper — all fit simultaneously in 16 GB. Block swap allows the 17B DiT to run in less VRAM by sequentially swapping transformer blocks between CPU and GPU.
+GPU0 (RTX 5090 32 GB, dedicated) handles the DiT compute. GPU1 (RTX 3080 Ti 12 GB, drives the OS display — ~10.5 GB usable) handles T5, VAE, Whisper — they do **not** all fit simultaneously; `HumoEngine` loads/encodes/offloads each encoder sequentially (matching ComfyUI's approach). Block swap allows the 17B DiT to run in less VRAM by sequentially swapping transformer blocks between CPU and GPU.
 
 ### Vocal separation
 The vocal stem is used **only for Whisper transcription** (cleaner input = better timestamps). HuMo receives the **full mix** from `segments/` — not the isolated stem. HuMo was trained on mixed audio; isolated vocals degrade A/V sync.

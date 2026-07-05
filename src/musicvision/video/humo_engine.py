@@ -257,10 +257,10 @@ class HumoEngine:
         )
 
         # Step 1-3: encode conditioning signals sequentially.
-        # Offload each encoder after use to maximize VRAM headroom on the
-        # encoder GPU (16 GB 4080). T5 ~9 GB, VAE ~1 GB, Whisper ~3 GB —
-        # keeping all three loaded simultaneously is tight. Sequential
-        # load/encode/offload matches ComfyUI's approach.
+        # Offload each encoder after use — on the encoder GPU (3080 Ti 12 GB,
+        # ~10.5 GB usable since it drives the display) sequential
+        # load/encode/offload is MANDATORY: T5 ~9 GB, VAE ~1 GB, Whisper ~3 GB
+        # do not fit co-resident. Matches ComfyUI's approach.
         text_embeds = self._encode_text(inp.text_prompt)
         self._offload("t5")
 

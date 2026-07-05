@@ -96,7 +96,7 @@ class FluxEngine(ImageEngine):
           3. Place      — device placement or offload:
                             * split (two-GPU): transformer → DiT device
                               (5090); text encoders, VAE, and the IP-Adapter
-                              image encoder → encoder device (4080). CLIP-L
+                              image encoder → encoder device (3080 Ti). CLIP-L
                               vision lives with the other encoders.
                             * single-GPU tiers: .to(device), or cpu-offload —
                               the image encoder is inside the offload graph
@@ -407,7 +407,7 @@ class FluxEngine(ImageEngine):
         """Stage 3: device placement or cpu-offload. MUST run after _load_ip_adapter()."""
         pipe = self._pipe
         if placement == "split":
-            # Two-GPU: DiT on the primary (5090), all encoders on the secondary (4080).
+            # Two-GPU: DiT on the primary (5090), all encoders on the secondary (3080 Ti).
             pipe.transformer.to(self.device_map.dit_device)
             pipe.text_encoder.to(self.device_map.encoder_device)    # CLIP-L (text)
             pipe.text_encoder_2.to(self.device_map.encoder_device)  # T5-XXL

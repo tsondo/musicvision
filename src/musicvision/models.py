@@ -619,7 +619,7 @@ class UpscalerConfig(BaseModel):
     def max_resolution_for_vram(primary_vram_gb: float) -> TargetResolution:
         """Highest upscale resolution supported by the primary GPU.
 
-        - 720p / 1080p: ≤32 GB (RTX 4080/5090 class)
+        - 720p / 1080p: ≤32 GB (RTX 5090 class)
         - 1440p:        ≥48 GB (A6000 / dual-GPU offload)
         - 4K:           ≥48 GB
         """

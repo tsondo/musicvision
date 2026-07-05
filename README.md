@@ -105,7 +105,7 @@ cd frontend && npm install && npm run dev        # React UI at http://localhost:
 | Component | Minimum | Recommended |
 |-----------|---------|-------------|
 | **Primary GPU** | 20 GB VRAM | RTX 5090 32 GB |
-| **Secondary GPU** | 12 GB VRAM | RTX 4080 16 GB |
+| **Secondary GPU** | 12 GB VRAM | RTX 3080 Ti 12 GB (subtract ~1.2 GB if it drives the display) |
 | **RAM** | 32 GB | 64 GB |
 | **Storage** | 100 GB SSD | 500 GB NVMe |
 | **CUDA** | 12.8+ | 12.8+ |
