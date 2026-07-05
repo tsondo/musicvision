@@ -165,9 +165,27 @@ class TargetResolution(str, Enum):
     UHD_4K    = "4k"       # 3840×2160
 
 
+class AssetType(str, Enum):
+    """Type of reusable project asset."""
+    CHARACTER = "character"
+    PROP = "prop"
+    LOCATION = "location"
+
+
+class ConsistencyMethod(str, Enum):
+    """How an asset's visual identity is enforced during image generation."""
+    NONE = "none"                # prompt-only — description injected, no conditioning
+    IP_ADAPTER = "ip_adapter"    # reference image → IP-Adapter at inference time
+    LORA = "lora"                # trained LoRA weights fused into pipeline
+    BOTH = "both"                # LoRA + IP-Adapter (strongest consistency)
+
+
 # ---------------------------------------------------------------------------
 # Style Sheet — persistent visual identity for the project
 # ---------------------------------------------------------------------------
+
+# --- DEPRECATED — kept for backward compat; migrated to AssetDef on load.
+#     Do not use in new code. See AssetDef / StyleSheet.assets below.
 
 class CharacterDef(BaseModel):
     id: str
@@ -189,15 +207,171 @@ class SettingDef(BaseModel):
     reference_image: Optional[str] = None
 
 
+# --- Unified asset model (replaces CharacterDef/PropDef/SettingDef) ---
+
+class AssetImage(BaseModel):
+    """A single image belonging to an asset."""
+    filename: str              # relative to the project root (e.g. "assets/characters/singer/reference_01.png")
+    role: str = "reference"    # "reference" | "training" — reference for IP-Adapter/display, training for LoRA datasets
+    caption: str = ""          # text caption for LoRA training datasets
+    is_primary: bool = False   # the image used for IP-Adapter conditioning and thumbnails
+
+
+class AssetDef(BaseModel):
+    """Universal definition for a reusable project asset (character, prop, or location)."""
+    id: str                                              # unique within project, e.g. "singer", "guitar", "rooftop"
+    name: str                                            # human-friendly display name
+    asset_type: AssetType
+    description: str = ""                                # injected into generation prompts
+
+    # Visual references
+    images: list[AssetImage] = Field(default_factory=list)
+
+    # Consistency configuration
+    consistency: ConsistencyMethod = ConsistencyMethod.NONE
+    lora_path: Optional[str] = None                      # relative to project root (e.g. "loras/singer.safetensors")
+    lora_weight: float = 0.8                             # LoRA fusion scale (0.0–1.0)
+    ip_adapter_scale: float = 0.6                        # IP-Adapter influence (0.0–1.0)
+    ip_adapter_embedding_path: Optional[str] = None      # cached precomputed embedding (e.g. "ip_cache/singer.ipadpt")
+
+    @property
+    def primary_image(self) -> Optional[AssetImage]:
+        """Return the primary reference image, or the first image if none is marked primary."""
+        for img in self.images:
+            if img.is_primary:
+                return img
+        return self.images[0] if self.images else None
+
+    @property
+    def training_images(self) -> list[AssetImage]:
+        """Return all images marked for LoRA training."""
+        return [img for img in self.images if img.role == "training"]
+
+    @property
+    def reference_images(self) -> list[AssetImage]:
+        """Return all images marked as references (IP-Adapter / display)."""
+        return [img for img in self.images if img.role == "reference"]
+
+    @property
+    def has_lora(self) -> bool:
+        """True if this asset has a LoRA path and its consistency method uses LoRA."""
+        return self.lora_path is not None and self.consistency in (
+            ConsistencyMethod.LORA, ConsistencyMethod.BOTH,
+        )
+
+    @property
+    def has_ip_adapter(self) -> bool:
+        """True if this asset has reference images and its consistency method uses IP-Adapter."""
+        return bool(self.images) and self.consistency in (
+            ConsistencyMethod.IP_ADAPTER, ConsistencyMethod.BOTH,
+        )
+
+
 class StyleSheet(BaseModel):
     concept: str = ""  # overall video concept: "what kind of video are we making"
     visual_style: str = ""
     color_palette: str = ""
     aspect_ratio: str = "16:9"
     resolution: str = "1280x720"
+
+    # --- Unified asset library ---
+    assets: list[AssetDef] = Field(default_factory=list)
+    style_lora_path: Optional[str] = None    # project-wide style LoRA applied to all generations
+    style_lora_weight: float = 0.7
+
+    # --- DEPRECATED — migrated into `assets` on load (see _migrate_legacy_assets) ---
     characters: list[CharacterDef] = Field(default_factory=list)
     props: list[PropDef] = Field(default_factory=list)
     settings: list[SettingDef] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_assets(cls, data):
+        """Migrate old CharacterDef/PropDef/SettingDef into the unified assets list.
+
+        Runs before validation so old ``project.yaml`` files load transparently.
+        Legacy entries whose id already exists in ``assets`` are skipped (the new
+        asset wins). ``reference_image`` becomes a primary AssetImage; a
+        character ``lora_path`` sets ``consistency="lora"``.
+        """
+        if not isinstance(data, dict):
+            return data
+
+        assets = list(data.get("assets", []))
+        existing_ids = {a["id"] if isinstance(a, dict) else a.id for a in assets}
+
+        def _as_dict(entry):
+            return entry if isinstance(entry, dict) else entry.model_dump()
+
+        # Migrate characters
+        for char in data.get("characters", []):
+            c = _as_dict(char)
+            if c["id"] in existing_ids:
+                continue
+            asset = {
+                "id": c["id"],
+                "name": c.get("name", c["id"]),
+                "asset_type": "character",
+                "description": c.get("description", ""),
+                "images": [],
+                "consistency": "none",
+                "lora_path": c.get("lora_path"),
+                "lora_weight": c.get("lora_weight", 0.8),
+            }
+            if c.get("reference_image"):
+                asset["images"] = [{"filename": c["reference_image"], "role": "reference", "is_primary": True}]
+            if c.get("lora_path"):
+                asset["consistency"] = "lora"
+            assets.append(asset)
+            existing_ids.add(c["id"])
+
+        # Migrate props
+        for prop in data.get("props", []):
+            p = _as_dict(prop)
+            if p["id"] in existing_ids:
+                continue
+            asset = {
+                "id": p["id"],
+                "name": p.get("name", p["id"]),
+                "asset_type": "prop",
+                "description": p.get("description", ""),
+                "images": [],
+                "consistency": "none",
+            }
+            if p.get("reference_image"):
+                asset["images"] = [{"filename": p["reference_image"], "role": "reference", "is_primary": True}]
+            assets.append(asset)
+            existing_ids.add(p["id"])
+
+        # Migrate settings → locations
+        for setting in data.get("settings", []):
+            s = _as_dict(setting)
+            if s["id"] in existing_ids:
+                continue
+            asset = {
+                "id": s["id"],
+                "name": s.get("name", s["id"]),
+                "asset_type": "location",
+                "description": s.get("description", ""),
+                "images": [],
+                "consistency": "none",
+            }
+            if s.get("reference_image"):
+                asset["images"] = [{"filename": s["reference_image"], "role": "reference", "is_primary": True}]
+            assets.append(asset)
+            existing_ids.add(s["id"])
+
+        data["assets"] = assets
+        return data
+
+    # --- Lookup helpers ---
+    def get_asset(self, asset_id: str) -> Optional[AssetDef]:
+        """Find an asset by ID. Returns None if not found."""
+        return next((a for a in self.assets if a.id == asset_id), None)
+
+    def assets_by_type(self, asset_type: AssetType) -> list[AssetDef]:
+        """Return all assets of a given type."""
+        return [a for a in self.assets if a.asset_type == asset_type]
 
 
 # ---------------------------------------------------------------------------
