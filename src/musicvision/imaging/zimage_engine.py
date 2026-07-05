@@ -74,10 +74,17 @@ class ZImageEngine(ImageEngine):
         lora_path: str | None = None,
         lora_weight: float = 0.8,
         output_path: Path | None = None,
+        ip_adapter_images: list[Path] | None = None,
+        ip_adapter_scales: list[float] | None = None,
+        ip_adapter_embeddings: list[Path] | None = None,
     ) -> ImageResult:
         """Generate a single image. Returns an ImageResult with the saved path."""
         if not self.is_loaded:
             raise RuntimeError("ZImageEngine not loaded. Call load() first.")
+
+        # IP-Adapter is FLUX-only — accept and ignore (no SD3 adapter hacks).
+        if ip_adapter_images or ip_adapter_embeddings:
+            log.warning("IP-Adapter not supported on Z-Image engine — ignoring IP-Adapter conditioning")
 
         self._apply_lora(lora_path)
 

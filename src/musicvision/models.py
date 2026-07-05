@@ -433,6 +433,20 @@ class HumoConfig(BaseModel):
         return {"720p": 1280, "544p": 960, "480p": 832, "384p": 688}.get(self.resolution, 960)
 
 
+class IPAdapterConfig(BaseModel):
+    """IP-Adapter configuration for FLUX engines (stock diffusers loader).
+
+    Defaults select the XLabs FLUX IP-Adapter v2 (bake-off winner, 2026-07).
+    XLabs v1 is a pure-config swap — same diffusers loader, same CLIP-L
+    encoder, different model_repo — no code change needed to switch adapters.
+    """
+    enabled: bool = False
+    model_repo: str = "XLabs-AI/flux-ip-adapter-v2"             # HuggingFace repo for adapter weights
+    weight_name: str = "ip_adapter.safetensors"                 # filename within repo
+    image_encoder_repo: str = "openai/clip-vit-large-patch14"   # CLIP vision encoder
+    default_scale: float = 0.6                                  # influence when no per-asset scale given
+
+
 class ImageGenConfig(BaseModel):
     model: ImageModel = ImageModel.FLUX_DEV
     quant: FluxQuant = FluxQuant.AUTO
@@ -440,6 +454,7 @@ class ImageGenConfig(BaseModel):
     guidance_scale: float = 3.5
     lora_path: Optional[str] = None     # project-level style LoRA (relative to project root)
     lora_weight: float = 0.8
+    ip_adapter: IPAdapterConfig = Field(default_factory=IPAdapterConfig)
 
     @property
     def effective_steps(self) -> int:

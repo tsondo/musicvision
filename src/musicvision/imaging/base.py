@@ -41,8 +41,15 @@ class ImageEngine(ABC):
         lora_path: str | None = None,
         lora_weight: float = 0.8,
         output_path: Path | None = None,
+        ip_adapter_images: list[Path] | None = None,
+        ip_adapter_scales: list[float] | None = None,
+        ip_adapter_embeddings: list[Path] | None = None,
     ) -> ImageResult:
-        """Generate a single image. Returns an ImageResult with the saved path."""
+        """Generate a single image. Returns an ImageResult with the saved path.
+
+        IP-Adapter args are FLUX-only; engines without IP-Adapter support must
+        accept them and ignore them with a warning (never raise).
+        """
 
     @abstractmethod
     def unload(self) -> None:
