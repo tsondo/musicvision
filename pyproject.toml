@@ -46,7 +46,7 @@ dependencies = [
 
 [project.optional-dependencies]
 ml = [
-    "torch>=2.7",
+    "torch>=2.13.0",
     "torchvision>=0.22",
     "torchaudio>=2.7",
     "transformers>=4.40",
