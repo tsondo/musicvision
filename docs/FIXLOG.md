@@ -201,3 +201,56 @@ delegate to the same helpers (single source of truth for the VAE
 mean/std/scale/device chain).
 
 All four loaders (fp16, fp8_scaled, gguf, preview) use the new path.
+
+---
+
+# FLUX two-GPU split placement never worked (device mismatch)
+
+Date: 2026-08-16
+
+## Problem
+
+`FluxEngine._place_pipeline("split")` scattered components across the two
+GPUs (transformer → cuda:0, encoders/VAE → cuda:1) and then invoked the stock
+diffusers `FluxPipeline.__call__`, which computes everything on a single
+`_execution_device` (resolved from the encoder components → cuda:1). First
+transformer call crashed: `mat1 is on cuda:1, different from other tensors on
+cuda:0`. The split strategy is selected whenever the primary has ≥28 GB free
+and a second GPU exists — but imaging had evidently only ever run live via
+Z-Image or the offload strategies, so this path was first exercised by the
+IP-Adapter live-run checklist (STATUS.md), which is what that checklist was
+for.
+
+## Fix
+
+`_install_split_forward_shim()`: wraps `transformer.forward` — tensor inputs
+(including tensors nested in dicts/lists, e.g. `ip_adapter_image_embeds`) hop
+to the DiT device; the output sample hops back to the encoder device where
+latents and the scheduler live. Per-step traffic is tens of MB. Seed
+reproducibility unaffected (CPU generator). The shim lives on the pipeline
+instance and dies with it on unload().
+
+---
+
+# Multi-IPA: adapter instance count must match reference count
+
+Date: 2026-08-16
+
+## Problem
+
+`FluxEngine` loaded ONE IP-Adapter instance and passed N reference images +
+an N-length scale list. diffusers' FLUX contract: one loaded adapter instance
+per reference; with a single adapter, a scale *list* is interpreted
+per-transformer-block → `ValueError: Expected list of 19 scales, got 2.`
+Multi-IPA (checklist item 5) had never been exercised on GPU.
+
+## Fix
+
+`_sync_ip_adapter_count(n)`: on reference-count change, unload + reload the
+adapter with n instances (`[repo]*n` / `[weight_name]*n`), re-place the image
+encoder with the other encoders, and re-assert transformer placement so
+CPU-materialized adapter params join it. Guarded: raises a clear error under
+cpu-offload placements (reloaded modules would sit outside the offload
+hook graph — same constraint as the load-order audit). Scene ordering by
+`conditioning_sort_key` already groups identical reference sets, minimizing
+reloads.

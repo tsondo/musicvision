@@ -67,6 +67,7 @@ class FluxEngine(ImageEngine):
         self._pipe = None
         self._loaded_lora: Optional[str] = None
         self._ip_adapter_loaded = False
+        self._ip_adapter_count = 0
         self._offload_active = False  # True once cpu-offload hooks are installed (see load-order audit)
 
     # ------------------------------------------------------------------
@@ -323,6 +324,10 @@ class FluxEngine(ImageEngine):
 
         kwargs: dict = {}
 
+        n_refs = len(embeddings) if embeddings else len(images) if images else 0
+        if n_refs:
+            self._sync_ip_adapter_count(n_refs)
+
         if embeddings:
             loaded = [
                 torch.load(p, map_location="cpu", weights_only=True) for p in embeddings
@@ -401,7 +406,51 @@ class FluxEngine(ImageEngine):
             image_encoder_pretrained_model_name_or_path=ipa.image_encoder_repo,
         )
         self._ip_adapter_loaded = True
+        self._ip_adapter_count = 1
         log.info("IP-Adapter loaded (image encoder: %s)", ipa.image_encoder_repo)
+
+    def _sync_ip_adapter_count(self, n: int) -> None:
+        """Match loaded adapter instances to the reference count (multi-IPA).
+
+        diffusers' FLUX multi-IPA contract is one loaded adapter instance per
+        reference image (scales are then per-adapter; with a single adapter a
+        scale list is interpreted per-transformer-block). Reloading installs
+        fresh modules, so it is only safe before cpu-offload hooks exist —
+        under split/single-device placement, i.e. never after
+        enable_*_cpu_offload() (see the load-order audit in load()).
+        """
+        if n == getattr(self, "_ip_adapter_count", 0):
+            return
+        if self._offload_active:
+            raise RuntimeError(
+                f"Scene needs {n} IP-Adapter reference(s) but {self._ip_adapter_count} "
+                "adapter instance(s) are loaded, and the adapter count cannot be "
+                "changed under cpu-offload placement (offload hooks would not cover "
+                "the reloaded modules). Reduce the scene to one conditioning asset, "
+                "or run on a placement without cpu-offload."
+            )
+        ipa = self.config.ip_adapter
+        log.info("Reloading IP-Adapter with %d instance(s) (was %d)", n, self._ip_adapter_count)
+        self._pipe.unload_ip_adapter()
+        self._pipe.load_ip_adapter(
+            [ipa.model_repo] * n,
+            weight_name=[ipa.weight_name] * n,
+            image_encoder_pretrained_model_name_or_path=ipa.image_encoder_repo,
+        )
+        # unload_ip_adapter() drops the image encoder; the reload restores it on
+        # CPU — put it back with the other encoders (split) / primary (single).
+        target = (
+            self.device_map.encoder_device
+            if self.device_map.dit_device != self.device_map.encoder_device
+            else self.device_map.primary
+        )
+        if getattr(self._pipe, "image_encoder", None) is not None:
+            self._pipe.image_encoder.to(target)
+        # The reloaded adapter modules live inside the transformer; re-assert its
+        # placement so any CPU-materialized adapter params join it (no-op for
+        # already-placed weights).
+        self._pipe.transformer.to(self.device_map.dit_device)
+        self._ip_adapter_count = n
 
     def _place_pipeline(self, placement: str, primary) -> None:
         """Stage 3: device placement or cpu-offload. MUST run after _load_ip_adapter()."""
@@ -416,6 +465,12 @@ class FluxEngine(ImageEngine):
             # encoders on the secondary GPU — same budget pool as CLIP/T5/VAE.
             if getattr(pipe, "image_encoder", None) is not None:
                 pipe.image_encoder.to(self.device_map.encoder_device)
+            # Stock FluxPipeline.__call__ runs on a single _execution_device
+            # (resolved from the encoder components → cuda:1): prompt embeds,
+            # latents, and the scheduler all live there. Shim the transformer so
+            # its inputs hop to the DiT GPU and its outputs hop back — per-step
+            # traffic is tens of MB, negligible next to a denoise step.
+            self._install_split_forward_shim(pipe)
         elif placement == "single_device":
             pipe.to(primary)
         elif placement == "sequential_offload":
@@ -424,6 +479,43 @@ class FluxEngine(ImageEngine):
         else:  # "model_offload"
             pipe.enable_model_cpu_offload()
             self._offload_active = True
+
+    def _install_split_forward_shim(self, pipe) -> None:
+        """Wrap transformer.forward to bridge the two-GPU split.
+
+        Inputs (tensors, incl. tensors nested in dicts/lists such as
+        ip_adapter_image_embeds) move to the DiT device; the output sample moves
+        back to the encoder device where the scheduler and latents live. The
+        shim dies with the pipeline instance on unload().
+        """
+        import torch
+
+        dit_dev = self.device_map.dit_device
+        enc_dev = self.device_map.encoder_device
+
+        def to_dev(obj, device):
+            if torch.is_tensor(obj):
+                return obj.to(device)
+            if isinstance(obj, dict):
+                return {k: to_dev(v, device) for k, v in obj.items()}
+            if isinstance(obj, (list, tuple)):
+                moved = [to_dev(v, device) for v in obj]
+                return type(obj)(moved) if isinstance(obj, tuple) else moved
+            return obj
+
+        orig_forward = pipe.transformer.forward
+
+        def forward(*args, **kwargs):
+            out = orig_forward(*to_dev(args, dit_dev), **to_dev(kwargs, dit_dev))
+            if torch.is_tensor(out):
+                return out.to(enc_dev)
+            if isinstance(out, tuple):
+                return tuple(to_dev(list(out), enc_dev))
+            if hasattr(out, "sample"):
+                out.sample = out.sample.to(enc_dev)
+            return out
+
+        pipe.transformer.forward = forward
 
     # ------------------------------------------------------------------
     # LoRA helpers
