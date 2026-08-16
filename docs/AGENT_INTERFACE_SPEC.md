@@ -175,10 +175,11 @@ All new/updated endpoints return errors as:
 ```
 
 Initial code registry (extend as needed, keep flat):
-`project_not_open`, `scene_not_found`, `no_scenes_to_process`,
-`job_not_found`, `job_already_active`, `job_not_cancellable`,
-`invalid_job_params`, `engine_load_failed`, `generation_failed`,
-`vram_exhausted`, `llm_unavailable`, `server_restarted`.
+`project_not_open`, `project_busy`, `scene_not_found`,
+`no_scenes_to_process`, `job_not_found`, `job_already_active`,
+`job_not_cancellable`, `invalid_job_params`, `engine_load_failed`,
+`generation_failed`, `vram_exhausted`, `llm_unavailable`,
+`server_restarted`, `unhandled_exception`.
 
 FastAPI's default `HTTPException` bodies don't match this shape; add one
 exception handler that wraps them. Existing endpoints migrate opportunistically
