@@ -25,7 +25,7 @@ The pipeline segments audio for **video generation only** — each scene's slice
 ### Local LLM Server (optional, for prompt generation)
 - **GPU**: NVIDIA RTX 3090 Ti (24GB VRAM) — runs vLLM for local LLM inference
 - **Use case**: Scene segmentation and prompt generation without Claude API dependency
-- **Recommended models**: Qwen2.5-32B-AWQ (~18 GB) or Mistral-Small-3.1-24B-Instruct (~12 GB 4-bit)
+- **Current model**: cyankiwi/Qwen3.6-27B-AWQ-INT4 (~17.7 GB, 4-bit AWQ, vision+text), served as `qwen`
 - **Not required**: Claude API (default) or auto-template fallback work without this machine
 
 ### General

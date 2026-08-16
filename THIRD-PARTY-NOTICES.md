@@ -72,7 +72,7 @@ Optional zero-shot character/style consistency adapters for FLUX. Each is a deri
 
 | Model | Author | License | Commercial Use | Notes |
 |-------|--------|---------|----------------|-------|
-| [Qwen2.5-32B-Instruct-AWQ](https://huggingface.co/Qwen/Qwen2.5-32B-Instruct-AWQ) | Alibaba Qwen | Apache 2.0 | **Yes** | Local LLM for scene segmentation / prompt generation (via vLLM). Optional — Claude API is the default backend. |
+| [Qwen3.6-27B-AWQ-INT4](https://huggingface.co/cyankiwi/Qwen3.6-27B-AWQ-INT4) | Alibaba Qwen (AWQ quant by cyankiwi) | Apache 2.0 | **Yes** | Local LLM for scene segmentation / prompt generation (via vLLM). Optional — Claude API is the default backend. |
 
 ---
 
