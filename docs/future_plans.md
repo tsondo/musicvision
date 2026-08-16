@@ -12,7 +12,7 @@ MusicVision is a proof of concept for a larger creative tool that handles the fu
 
 ## Near-Term: Integrated Creation Pipeline
 
-The local vLLM server (Qwen2.5-32B-AWQ on the 3090 Ti) opens up a fully local, end-to-end creative loop with no external API dependencies:
+The local vLLM server (Qwen3.6-27B-AWQ on the 3090 Ti) opens up a fully local, end-to-end creative loop with no external API dependencies:
 
 ```
 Write (LLM) → Compose (AceStep) → Visualize (MusicVision) → Export
@@ -24,7 +24,7 @@ A single application with four panels, where each panel's output feeds the next:
 
 | Panel | Engine | Input | Output |
 |-------|--------|-------|--------|
-| **Write** | vLLM (Qwen2.5-32B) | Genre, mood, topic, structure | Lyrics with section markers |
+| **Write** | vLLM (Qwen3.6-27B) | Genre, mood, topic, structure | Lyrics with section markers |
 | **Compose** | AceStep | Lyrics, genre tags, BPM target | Song audio + JSON metadata |
 | **Visualize** | MusicVision pipeline | Audio + lyrics + metadata | Storyboard → video clips |
 | **Export** | ffmpeg + FCPXML | Approved clips + original audio | Rough cut + DaVinci project |
@@ -35,7 +35,7 @@ Users can enter at any panel with their own content — write lyrics by hand, br
 
 - AceStep already has a Gradio interface; wrapping it as a tab is straightforward
 - The vLLM server is running 24/7 on the LAN with no per-token cost
-- Lyric generation is a natural fit for Qwen2.5-32B's capabilities
+- Lyric generation is a natural fit for Qwen3.6-27B's capabilities
 - The shared data between panels is minimal: audio file, JSON metadata, lyrics text
 - MusicVision's pipeline/UI separation means adding upstream panels doesn't touch core video logic
 
@@ -388,4 +388,4 @@ Each format is a progressively deeper pass through the pipeline. Users can stop 
 - **Lyric-melody alignment**: Can the LLM learn to write lyrics with syllable counts and stress patterns that work well with AceStep's melody generation?
 - **Lip sync on AI faces**: LatentSync is benchmarked on real human video. Quality on FLUX/Z-Image-generated characters is unknown and needs testing.
 - **Singing vs speech**: Lip sync models are trained primarily on speech. Singing involves wider mouth openings, sustained vowels, and different temporal patterns. The `lips_expression` parameter helps but may not fully cover this.
-- **Automated quality checks via vision LLM**: Run a Qwen2.5-VL model (on the vLLM server or swapped in) to evaluate generated video output programmatically. Use cases: scene-prompt coherence scoring, artifact detection (checkerboard, banding, temporal flicker), lip sync quality assessment, frame-to-frame consistency across sub-clips. Could feed back into the pipeline as an auto-reject/retry gate or surface quality scores in the review GUI.
+- **Automated quality checks via vision LLM**: Qwen3.6-27B (the deployed vLLM model) is vision+text, so this needs no model swap — send it keyframes to evaluate generated video output programmatically. Use cases: scene-prompt coherence scoring, artifact detection (checkerboard, banding, temporal flicker), lip sync quality assessment, frame-to-frame consistency across sub-clips. Could feed back into the pipeline as an auto-reject/retry gate or surface quality scores in the review GUI.

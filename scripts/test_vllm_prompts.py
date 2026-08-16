@@ -14,7 +14,7 @@ Usage:
     python test_vllm_prompts.py
 
     # Override endpoint
-    python test_vllm_prompts.py --base-url http://192.168.1.136:8000/v1 --model qwen32b
+    python test_vllm_prompts.py --base-url http://192.168.68.53:8000/v1 --model qwen
 
     # Test only one stage
     python test_vllm_prompts.py --test segmentation
@@ -622,7 +622,7 @@ def main():
     parser.add_argument("--base-url", default=None,
                         help="vLLM base URL (default: $OPENAI_BASE_URL or http://localhost:8000/v1)")
     parser.add_argument("--model", default=None,
-                        help="Model name (default: $OPENAI_MODEL or 'qwen32b')")
+                        help="Model name (default: $OPENAI_MODEL or 'qwen')")
     parser.add_argument("--api-key", default=None,
                         help="API key (default: $OPENAI_API_KEY or 'vllm')")
     parser.add_argument("--test", choices=["all", "segmentation", "image-prompts", "video-prompts", "batch"],
@@ -630,7 +630,7 @@ def main():
     args = parser.parse_args()
 
     base_url = args.base_url or os.environ.get("OPENAI_BASE_URL", "http://localhost:8000/v1")
-    model = args.model or os.environ.get("OPENAI_MODEL", "qwen32b")
+    model = args.model or os.environ.get("OPENAI_MODEL", "qwen")
     api_key = args.api_key or os.environ.get("OPENAI_API_KEY", "vllm")
 
     print(f"\nMusicVision vLLM Prompt Generation Test")

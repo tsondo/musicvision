@@ -15,25 +15,15 @@ OpenAI-compatible backend (vLLM on local LAN):
   OPENAI_MODEL       = <model_id>    (required)
 
 ---------------------------------------------------------------------------
-Recommended vLLM model candidates for RTX 4080 16GB + RTX 5070 12GB (28GB total)
-Launch with: vllm serve <model_id> --tensor-parallel-size 2
----------------------------------------------------------------------------
-
-# Candidate 1 — Best quality that fits (4-bit AWQ, ~18GB)
-# VLLM_MODEL = "Qwen/Qwen2.5-32B-Instruct-AWQ"
-
-# Candidate 2 — Fast + capable (4-bit, ~12GB, lots of headroom)
-# VLLM_MODEL = "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
-
-# Candidate 3 — Fastest (bf16, ~28GB, fits exactly across both GPUs)
-# VLLM_MODEL = "Qwen/Qwen2.5-14B-Instruct"
-
+Current LAN vLLM server: RTX 3090 Ti 24GB (single GPU) running
+cyankiwi/Qwen3.6-27B-AWQ-INT4 (~17.7GB, 4-bit AWQ, vision+text),
+served under the alias `qwen` — see CLAUDE.md for the full launch command.
 ---------------------------------------------------------------------------
 Example .env for local vLLM:
   LLM_BACKEND=openai
-  OPENAI_BASE_URL=http://192.168.1.100:8000/v1
+  OPENAI_BASE_URL=http://192.168.68.53:8000/v1
   OPENAI_API_KEY=vllm
-  OPENAI_MODEL=Qwen/Qwen2.5-32B-Instruct-AWQ
+  OPENAI_MODEL=qwen
 ---------------------------------------------------------------------------
 """
 
@@ -54,7 +44,7 @@ class LLMConfig:
 
     backend: str = "anthropic"   # "anthropic" | "openai"
     model: str = ""              # model ID; falls back to env var or default
-    base_url: str = ""           # vLLM endpoint, e.g. http://192.168.1.100:8000/v1
+    base_url: str = ""           # vLLM endpoint, e.g. http://192.168.68.53:8000/v1
     api_key: str = ""            # explicit key; falls back to env vars
     max_tokens: int = 0  # 0 = auto (4096 for Anthropic, query vLLM server limit)
 
@@ -135,14 +125,14 @@ class LLMClient:
         if not base_url:
             raise ValueError(
                 "OPENAI_BASE_URL not set. "
-                "Example: http://192.168.1.100:8000/v1"
+                "Example: http://192.168.68.53:8000/v1"
             )
         api_key = self.config.api_key or os.environ.get("OPENAI_API_KEY", "vllm")
         model = self.config.model or os.environ.get("OPENAI_MODEL", "")
         if not model:
             raise ValueError(
                 "OPENAI_MODEL not set. "
-                "Set it to your vLLM model ID, e.g. Qwen/Qwen2.5-32B-Instruct-AWQ"
+                "Set it to your vLLM served model name, e.g. qwen"
             )
         log.info("LLM → vLLM (url=%s, model=%s)", base_url, model)
 
@@ -168,8 +158,8 @@ def get_client(config: LLMConfig | None = None) -> LLMClient:
         client = get_client()               # reads LLM_BACKEND, etc. from env
         client = get_client(LLMConfig(      # explicit openai config
             backend="openai",
-            base_url="http://192.168.1.100:8000/v1",
-            model="Qwen/Qwen2.5-32B-Instruct-AWQ",
+            base_url="http://192.168.68.53:8000/v1",
+            model="qwen",
         ))
         text = client.chat(system_prompt, user_message)
     """
