@@ -337,6 +337,14 @@ export default function WaveformEditor({
     return -1;
   }, [currentTime, word_timestamps]);
 
+  // TODO(waveform-wip): sectionTextColor, processedWords, and activeWordIndex are
+  // staged for section-colored word rendering + active-word playback highlight,
+  // not yet wired into the render tree. The void references keep noUnusedLocals
+  // green until then — delete them (and this comment) when the feature lands.
+  void sectionTextColor;
+  void processedWords;
+  void activeWordIndex;
+
   // ---- Derive scenes from markers ----
   const derivedScenes = useMemo(() => {
     const points = [0, ...markers.sort((a, b) => a - b), duration];
