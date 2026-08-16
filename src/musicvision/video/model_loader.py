@@ -166,6 +166,46 @@ def _gguf_name_to_pt_key(name: str) -> str:
     return result
 
 
+def component_nn_module(model: Any) -> Any:
+    """Return the underlying nn.Module for a bundle component wrapper.
+
+    Handles WanT5Encoder (._model.model), WanVideoVAE (._vae.model or .model),
+    and plain nn.Modules (Whisper encoder, DiT).
+    """
+    if model is None:
+        return None
+    if hasattr(model, "_model") and hasattr(model._model, "model"):
+        return model._model.model
+    if hasattr(model, "_vae") and model._vae is not None:
+        return model._vae.model
+    if hasattr(model, "model"):
+        return model.model
+    return model
+
+
+def move_component(model: Any, name: str, device: Any) -> None:
+    """Move a component's weights to *device*, keeping wrapper state consistent.
+
+    For the VAE this also moves the wrapper's mean/std tensors and updates its
+    device attributes — encoding with stale wrapper devices produces silent
+    device-mismatch errors.
+    """
+    import torch
+
+    nn_mod = component_nn_module(model)
+    if nn_mod is None:
+        return
+    nn_mod.to(device)
+    if name == "vae" and model is not None:
+        model.device = torch.device(device)
+        vae_inner = getattr(model, "_vae", None)
+        if vae_inner is not None:
+            vae_inner.mean = vae_inner.mean.to(device)
+            vae_inner.std = vae_inner.std.to(device)
+            vae_inner.scale = [vae_inner.mean, 1.0 / vae_inner.std]
+            vae_inner.device = str(device)
+
+
 class BaseHumoLoader(ABC):
     """Abstract base for all HuMo model loaders."""
 
@@ -191,6 +231,38 @@ class BaseHumoLoader(ABC):
     # ------------------------------------------------------------------
     # Shared helpers used by all concrete loaders
     # ------------------------------------------------------------------
+
+    def _load_encoders_cpu_resident(
+        self, enc_device: Any, weights_dir: Path | None = None,
+    ) -> tuple[Any, Any, Any]:
+        """Load T5, VAE, and Whisper one at a time, parking each on CPU.
+
+        The full encoder set (~13 GB) does not fit co-resident on small
+        secondary GPUs (3080 Ti 12 GB, shares the display → ~10.5 GB usable),
+        and HumoEngine.generate() offloads every encoder to CPU after use
+        anyway — CPU-resident is the steady state on every topology. Each
+        component is loaded through enc_device (so wrapper device attributes
+        point at the encoder GPU) then immediately parked on CPU; the engine's
+        _reload() raises each one on first use.
+        """
+        import gc
+
+        import torch
+
+        parked = []
+        for name, load_fn in (
+            ("t5", self._load_t5),
+            ("vae", self._load_vae),
+            ("whisper", self._load_whisper),
+        ):
+            model = load_fn(enc_device, weights_dir)
+            move_component(model, name, "cpu")
+            if enc_device.type == "cuda":
+                torch.cuda.empty_cache()
+            gc.collect()
+            log.info("%s loaded and parked on CPU (raised to %s on first use)", name, enc_device)
+            parked.append(model)
+        return parked[0], parked[1], parked[2]
 
     def _load_t5(self, device: Any, weights_dir: Path | None = None) -> Any:
         """Load UMT5-XXL text encoder onto *device*. Auto-downloads on first use."""
@@ -302,9 +374,7 @@ class FP16Loader(BaseHumoLoader):
         log.info("Loading HuMo-17B FP16 DiT from %s onto %s", weight_path, dit_device)
         dit = self._load_wan_dit(weight_path, torch.float16, dit_device, device_map)
 
-        t5      = self._load_t5(enc_device, weights_dir)
-        vae     = self._load_vae(enc_device, weights_dir)
-        whisper = self._load_whisper(enc_device, weights_dir)
+        t5, vae, whisper = self._load_encoders_cpu_resident(enc_device, weights_dir)
         swap    = self._make_block_swap(dit, config, dit_device)
 
         return HumoModelBundle(
@@ -378,9 +448,7 @@ class FP8ScaledLoader(BaseHumoLoader):
             except FileNotFoundError:
                 log.warning("LoRA '%s' not found — proceeding without LoRA", config.lora)
 
-        t5      = self._load_t5(enc_device, weights_dir)
-        vae     = self._load_vae(enc_device, weights_dir)
-        whisper = self._load_whisper(enc_device, weights_dir)
+        t5, vae, whisper = self._load_encoders_cpu_resident(enc_device, weights_dir)
         swap    = self._make_block_swap(dit, config, dit_device)
 
         return HumoModelBundle(
@@ -768,9 +836,7 @@ class GGUFLoader(BaseHumoLoader):
             self.tier.value, weight_path.name, dit_device,
         )
         dit  = self._load_gguf_dit(weight_path, dit_device)
-        t5      = self._load_t5(enc_device, weights_dir)
-        vae     = self._load_vae(enc_device, weights_dir)
-        whisper = self._load_whisper(enc_device, weights_dir)
+        t5, vae, whisper = self._load_encoders_cpu_resident(enc_device, weights_dir)
         swap    = self._make_block_swap(dit, config, dit_device)
 
         return HumoModelBundle(
@@ -960,9 +1026,7 @@ class Preview1_7BLoader(BaseHumoLoader):
         log.info("Loading HuMo-1.7B Preview DiT from %s onto %s", weight_path, dit_device)
         dit = self._load_preview_dit(weight_path, dit_device, torch.float16)
 
-        t5      = self._load_t5(enc_device, weights_dir)
-        vae     = self._load_vae(enc_device, weights_dir)
-        whisper = self._load_whisper(enc_device, weights_dir)
+        t5, vae, whisper = self._load_encoders_cpu_resident(enc_device, weights_dir)
         # 1.7B is small enough that block swap is rarely needed
         swap = self._make_block_swap(dit, config, dit_device) if config.block_swap_count > 0 else None
 
@@ -986,6 +1050,10 @@ class Preview1_7BLoader(BaseHumoLoader):
             state = {}
             for shard in shards:
                 state.update(load_file(shard, device="cpu"))
+        elif weight_path.suffix == ".pth":
+            # Upstream ships the 1.7B model as a single EMA torch checkpoint
+            # (HuMo-1.7B/ema.pth), plain WanModel keys, no prefix.
+            state = torch.load(str(weight_path), map_location="cpu", weights_only=True)
         else:
             state = load_file(str(weight_path), device="cpu")
 

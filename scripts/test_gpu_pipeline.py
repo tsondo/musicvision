@@ -575,7 +575,9 @@ def phase_assembly(
             order=i,
             time_start=t_cursor,
             time_end=t_cursor + dur,
-            video_clip=str(clip_path),
+            # Absolute path: the concatenator joins non-absolute clip paths onto
+            # the project root, which doubles a relative --out-dir prefix.
+            video_clip=str(Path(clip_path).resolve()),
             video_status=ApprovalStatus.APPROVED,
         )
         scenes_list.append(s)

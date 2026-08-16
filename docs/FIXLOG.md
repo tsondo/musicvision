@@ -118,3 +118,86 @@ to `[(0,8),(8,16),(16,24),(24,32),(32,33)]`.
 | `src/musicvision/video/humo_engine.py` | Block-swap calling convention updated |
 | `src/musicvision/video/model_loader.py` | GGUF key mapping updated |
 | `FIXLOG.md` | This file |
+
+---
+
+# Preview-tier weight spec stale (upstream repo reorganized)
+
+Date: 2026-08-16
+
+## Problem
+
+`weight_registry.py` pointed the PREVIEW tier at
+`bytedance-research/HuMo/diffusion_models_1_3B/` (safetensors shard dir).
+The upstream repo was reorganized: the 1.7B model now ships as a single EMA
+torch checkpoint at `HuMo-1.7B/ema.pth` (~7 GB fp32, plain WanModel keys,
+no prefix — verified with `scripts/dump_keys.py`, 1193 keys).
+
+Two compounding bugs made this fail *silently*:
+1. `snapshot_download` with an `allow_patterns` glob that matches nothing
+   succeeds without downloading anything; `download_dit` then reported ✓.
+2. `Preview1_7BLoader._load_preview_dit` only handled safetensors.
+
+The FP16 spec (`diffusion_models/`) references the same pre-reorg layout and
+is almost certainly stale too — NOT fixed here (34 GB download, unverifiable
+in this session). Fix + verify before first fp16 run; the shard-dir glob in
+`_load_preview_dit`'s sibling FP16 path is also non-recursive, so nested
+`HuMo-17B/` shards would be missed.
+
+## Fix
+
+| File | Action |
+|---|---|
+| `src/musicvision/video/weight_registry.py` | PREVIEW spec → `HuMo-1.7B/ema.pth` (fmt pth); `download_dit` dir-branch now validates weight files landed and raises instead of silently succeeding |
+| `src/musicvision/video/model_loader.py` | `_load_preview_dit` handles `.pth` via `torch.load(weights_only=True)` |
+
+## Deeper finding (same session): preview tier architecturally unsupported
+
+Even with the correct checkpoint, preview cannot run as implemented:
+
+- `HuMo-1.7B/ema.pth` has `patch_embedding.weight [1536, 16, 1, 2, 2]` —
+  **in_dim=16**. Everything else matches `CONFIG_1_7B` (dim 1536, ffn 8960,
+  30 blocks, full TIA audio stack: audio_proj + audio_cross_attn present).
+- Our `CONFIG_1_7B` declares `in_dim=36`, and `humo_engine` unconditionally
+  builds 36-channel DiT input (16 noise + 4 mask + 16 ref-latent concat).
+  The 1.7B variant evidently injects the reference differently (no concat
+  channels — likely temporal-only placement in the 16-ch latent).
+- Additional latent bug: `_load_preview_dit` calls `load_state_dict` without
+  `assign=True` on a meta-device model — every copy is a silent no-op
+  (torch UserWarning), so even a shape-compatible load would produce
+  uninitialized weights.
+
+**Not fixed** — supporting 1.7B needs its conditioning interface ported from
+upstream (`Phantom-video/HuMo` `infer_tia_1_7B` path) and validated; scope
+decision deferred. Until then: preview tier is dead code; use fp8_scaled
+(`--draft`) for iteration on this hardware.
+
+---
+
+# Encoder co-residency OOM on 12 GB secondary (4080 → 3080 Ti)
+
+Date: 2026-08-16
+
+## Problem
+
+`BaseHumoLoader` subclasses loaded T5 (~9.4 GB) + VAE (~0.5 GB) + Whisper
+(~3.1 GB) all onto the encoder GPU at `load()` time. Fit on the old 16 GB
+4080; OOMs on the 3080 Ti (12 GB, drives the display, ~10.8 GB usable):
+`Engine load()` failed with 11.27 GB torch-allocated on GPU 1.
+
+`HumoEngine.generate()` already ran the mandatory sequential
+encode→offload loop (encoders are CPU-resident between generations on every
+topology) — only the initial placement predated the hardware change.
+
+## Fix
+
+`BaseHumoLoader._load_encoders_cpu_resident()`: each encoder is loaded
+through the encoder GPU one at a time and immediately parked on CPU
+(each component individually fits; only co-residency broke). The engine's
+existing `_reload()` raises each on first use. Wrapper device-attribute
+handling extracted to module-level `component_nn_module()` /
+`move_component()` in model_loader.py; `HumoEngine._offload/_reload`
+delegate to the same helpers (single source of truth for the VAE
+mean/std/scale/device chain).
+
+All four loaders (fp16, fp8_scaled, gguf, preview) use the new path.
