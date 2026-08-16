@@ -31,11 +31,14 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from dataclasses import dataclass
 
 log = logging.getLogger(__name__)
 
 ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-20250514"
+
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>\s*", flags=re.DOTALL)
 
 
 @dataclass
@@ -47,6 +50,10 @@ class LLMConfig:
     base_url: str = ""           # vLLM endpoint, e.g. http://192.168.68.53:8000/v1
     api_key: str = ""            # explicit key; falls back to env vars
     max_tokens: int = 0  # 0 = auto (4096 for Anthropic, query vLLM server limit)
+    # Reasoning models (Qwen3+) emit thinking tokens before the answer. Pipeline
+    # calls need deterministic JSON, not chain-of-thought, so thinking is disabled
+    # per-request by default. Set OPENAI_DISABLE_THINKING=0 to leave it on.
+    disable_thinking: bool = True
 
 
 def _config_from_env() -> LLMConfig:
@@ -58,6 +65,7 @@ def _config_from_env() -> LLMConfig:
             model=os.environ.get("OPENAI_MODEL", ""),
             base_url=os.environ.get("OPENAI_BASE_URL", ""),
             api_key=os.environ.get("OPENAI_API_KEY", "vllm"),
+            disable_thinking=os.environ.get("OPENAI_DISABLE_THINKING", "1") != "0",
         )
     return LLMConfig(
         backend="anthropic",
@@ -146,8 +154,30 @@ class LLMClient:
         )
         if self.config.max_tokens:
             kwargs["max_tokens"] = self.config.max_tokens
+        if self.config.disable_thinking:
+            # vLLM passes chat_template_kwargs through to the model's chat
+            # template; Qwen3-family templates take enable_thinking.
+            kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
         response = client.chat.completions.create(**kwargs)
-        return response.choices[0].message.content.strip()
+        message = response.choices[0].message
+        content = message.content or ""
+        # If the server's reasoning parser routed everything into the reasoning
+        # field (e.g. max_tokens exhausted mid-thought), content comes back None.
+        if not content.strip():
+            reasoning = getattr(message, "reasoning", None) or getattr(message, "reasoning_content", None)
+            finish = response.choices[0].finish_reason
+            raise RuntimeError(
+                f"LLM returned empty content (finish_reason={finish!r}). "
+                + (
+                    "The response was entirely reasoning tokens — disable thinking "
+                    "(OPENAI_DISABLE_THINKING=1) or raise max_tokens."
+                    if reasoning
+                    else "Check the vLLM server logs."
+                )
+            )
+        # A model serving without a reasoning parser can leak its chain of
+        # thought into content as <think>...</think>; strip it.
+        return _THINK_BLOCK_RE.sub("", content).strip()
 
 
 def get_client(config: LLMConfig | None = None) -> LLMClient:

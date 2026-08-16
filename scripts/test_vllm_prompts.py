@@ -55,6 +55,23 @@ except ImportError:
     print("ERROR: openai package not installed. Run: pip install openai")
     sys.exit(1)
 
+# Qwen3-family reasoning models burn tokens on chain-of-thought and return
+# content=None when it doesn't finish. Disable thinking per-request, mirroring
+# what llm.py does for pipeline calls.
+NO_THINKING = {"chat_template_kwargs": {"enable_thinking": False}}
+
+
+def _content(resp) -> str:
+    """Extract message content, failing loudly if it's empty or reasoning-only."""
+    message = resp.choices[0].message
+    text = (message.content or "").strip()
+    if not text:
+        raise RuntimeError(
+            f"empty content (finish_reason={resp.choices[0].finish_reason!r}) — "
+            "response may be entirely reasoning tokens"
+        )
+    return text
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Test fixtures — mock data that mirrors real pipeline structures
@@ -226,9 +243,10 @@ def test_connection(client: OpenAI, model: str) -> bool:
             messages=[{"role": "user", "content": "Reply with exactly: OK"}],
             max_tokens=10,
             temperature=0.0,
+            extra_body=NO_THINKING,
         )
         elapsed = time.time() - t0
-        text = resp.choices[0].message.content.strip()
+        text = _content(resp)
         print(f"  Response: {text!r}  ({elapsed:.2f}s)")
         print(f"  Model:    {resp.model}")
         tokens = resp.usage
@@ -267,9 +285,10 @@ def test_segmentation(client: OpenAI, model: str) -> bool:
             ],
             max_tokens=2000,
             temperature=0.3,
+            extra_body=NO_THINKING,
         )
         elapsed = time.time() - t0
-        raw = resp.choices[0].message.content.strip()
+        raw = _content(resp)
 
         # Strip markdown fences if present
         if raw.startswith("```"):
@@ -396,9 +415,10 @@ def test_image_prompts(client: OpenAI, model: str) -> bool:
                 ],
                 max_tokens=300,
                 temperature=0.7,
+                extra_body=NO_THINKING,
             )
             elapsed = time.time() - t0
-            prompt = resp.choices[0].message.content.strip()
+            prompt = _content(resp)
 
             print(f"  Time: {elapsed:.2f}s")
             print(f"  Prompt ({len(prompt)} chars):")
@@ -491,9 +511,10 @@ def test_video_prompts(client: OpenAI, model: str) -> bool:
             ],
             max_tokens=400,
             temperature=0.7,
+            extra_body=NO_THINKING,
         )
         elapsed = time.time() - t0
-        prompt = resp.choices[0].message.content.strip()
+        prompt = _content(resp)
 
         print(f"  Time: {elapsed:.2f}s")
         print(f"  Prompt ({len(prompt)} chars):")
@@ -594,10 +615,11 @@ def test_batch_consistency(client: OpenAI, model: str) -> bool:
                 ],
                 max_tokens=300,
                 temperature=0.7,
+                extra_body=NO_THINKING,
             )
             elapsed = time.time() - t0
             total_time += elapsed
-            prompt = resp.choices[0].message.content.strip()
+            prompt = _content(resp)
             prompts.append((scene["id"], prompt))
 
             print(f"\n  {scene['id']} ({elapsed:.2f}s):")
