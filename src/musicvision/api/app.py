@@ -20,16 +20,21 @@ from dotenv import load_dotenv
 
 load_dotenv()  # load .env from cwd (or any parent) before anything reads env vars
 
-from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from musicvision.jobs import JobManager, JobManagerError
 from musicvision.models import (
     ApprovalStatus,
     HumoConfig,
     ImageGenConfig,
     ImageModel,
+    Job,
+    JobKind,
+    JobState,
     ProjectConfig,
     Scene,
     SceneBoundary,
@@ -59,11 +64,50 @@ app.add_middleware(
 
 _project: ProjectService | None = None
 
+job_manager = JobManager()
+
 
 def get_project() -> ProjectService:
     if _project is None:
         raise HTTPException(status_code=400, detail="No project loaded. Create or open a project first.")
     return _project
+
+
+# ---------------------------------------------------------------------------
+# Structured errors (AGENT_INTERFACE_SPEC.md §4.3)
+#
+# New (job) endpoints return {"error": {code, message, detail}}. Existing
+# endpoints keep FastAPI's {"detail": ...} shape until the frontend migrates
+# (P3) — client.ts currently reads body.detail.
+# ---------------------------------------------------------------------------
+
+_ERROR_HTTP_STATUS = {
+    "project_not_open": 400,
+    "project_busy": 409,
+    "invalid_job_params": 400,
+    "job_not_found": 404,
+    "job_already_active": 409,
+    "job_not_cancellable": 409,
+}
+
+
+class StructuredApiError(Exception):
+    """Endpoint-level error carrying a machine-readable code (spec §4.3)."""
+
+    def __init__(self, code: str, message: str, detail: dict | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.detail = detail or {}
+
+
+@app.exception_handler(StructuredApiError)
+@app.exception_handler(JobManagerError)
+async def _structured_error_handler(request: Request, exc: StructuredApiError | JobManagerError):
+    return JSONResponse(
+        status_code=_ERROR_HTTP_STATUS.get(exc.code, 400),
+        content={"error": {"code": exc.code, "message": exc.message, "detail": exc.detail}},
+    )
 
 
 def _resolve_scene_audio(proj: ProjectService, scene, audio_path: Path) -> Path:
@@ -153,11 +197,22 @@ class RegenerateVideoRequest(BaseModel):
 # Project endpoints
 # ---------------------------------------------------------------------------
 
+def _guard_no_active_job() -> None:
+    if job_manager.has_active_job():
+        raise StructuredApiError(
+            "project_busy",
+            "A job is queued or running. Wait for it to finish or cancel it first.",
+        )
+
+
 @app.post("/api/projects/create")
 async def create_project(req: CreateProjectRequest):
     global _project
+    _guard_no_active_job()
     project_dir = Path(req.directory).resolve()
+    job_manager.detach_project()
     _project = ProjectService.create(project_dir, name=req.name)
+    job_manager.attach_project(project_dir)
     mount_project_files(project_dir)
     return {"status": "created", "name": req.name, "directory": req.directory}
 
@@ -165,11 +220,15 @@ async def create_project(req: CreateProjectRequest):
 @app.post("/api/projects/open")
 async def open_project(req: OpenProjectRequest):
     global _project
+    _guard_no_active_job()
     try:
         project_dir = Path(req.directory).resolve()
-        _project = ProjectService.open(project_dir)
+        new_project = ProjectService.open(project_dir)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    job_manager.detach_project()
+    _project = new_project
+    job_manager.attach_project(project_dir)
     mount_project_files(project_dir)
     return {"status": "opened", "name": _project.config.name, "directory": req.directory}
 
@@ -177,8 +236,63 @@ async def open_project(req: OpenProjectRequest):
 @app.post("/api/projects/close")
 async def close_project():
     global _project
+    _guard_no_active_job()
+    job_manager.detach_project()
     _project = None
     return {"status": "closed"}
+
+
+# ---------------------------------------------------------------------------
+# Jobs (AGENT_INTERFACE_SPEC.md §4.1)
+#
+# Long-running pipeline operations run as jobs: submit -> id -> poll.
+# Handlers are registered per JobKind at P2 (endpoint migration); submitting
+# a kind with no registered handler returns invalid_job_params.
+# ---------------------------------------------------------------------------
+
+class SubmitJobRequest(BaseModel):
+    kind: JobKind
+    params: dict = {}
+
+
+@app.post("/api/jobs", status_code=202)
+async def submit_job(req: SubmitJobRequest) -> Job:
+    """Submit a long-running pipeline job (generate images/videos, upscale,
+    assemble, ...). Returns 202 with the queued Job; poll GET /api/jobs/{id}
+    for progress. Rejects with job_already_active if a job of the same kind
+    is already queued/running for an overlapping scene scope."""
+    if _project is None:
+        raise StructuredApiError("project_not_open", "No project loaded. Create or open a project first.")
+    return job_manager.submit(req.kind, req.params)
+
+
+@app.get("/api/jobs/{job_id}")
+async def get_job(job_id: str) -> Job:
+    """Get a job's current state, progress, result, and error. This is the
+    poll target while a job runs. Recommended cadence: ~2s while queued or
+    running, stop on a terminal state (succeeded/failed/cancelled)."""
+    return job_manager.get(job_id)
+
+
+@app.get("/api/jobs")
+async def list_jobs(state: str | None = None, kind: str | None = None, limit: int = 50) -> list[Job]:
+    """List jobs newest-first, including journaled history from previous
+    server runs. Optional filters: state (queued/running/succeeded/failed/
+    cancelled) and kind (e.g. generate_images)."""
+    try:
+        state_f = JobState(state) if state else None
+        kind_f = JobKind(kind) if kind else None
+    except ValueError as e:
+        raise StructuredApiError("invalid_job_params", str(e), {"state": state, "kind": kind})
+    return job_manager.list(state=state_f, kind=kind_f, limit=limit)
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str) -> Job:
+    """Request job cancellation. Queued jobs cancel immediately; a running job
+    finishes its current scene/sub-clip first (completed artifacts are kept)
+    and ends as cancelled with partial results. 409 if already finished."""
+    return job_manager.cancel(job_id)
 
 
 @app.get("/api/projects/config")

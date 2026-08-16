@@ -833,3 +833,66 @@ class SceneBoundary(BaseModel):
     section: str = ""
     type: SceneType = SceneType.VOCAL
     lyrics: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Jobs (AGENT_INTERFACE_SPEC.md §3) — long-running pipeline operations
+# ---------------------------------------------------------------------------
+
+class JobKind(str, Enum):
+    INTAKE = "intake"
+    ANALYZE = "analyze"
+    GENERATE_DESCRIPTIONS = "generate_descriptions"
+    GENERATE_IMAGES = "generate_images"
+    GENERATE_VIDEO_DESCRIPTIONS = "generate_video_descriptions"
+    GENERATE_VIDEOS = "generate_videos"
+    UPSCALE = "upscale"
+    ASSEMBLE = "assemble"
+    REGENERATE_IMAGE = "regenerate_image"      # single-scene
+    REGENERATE_VIDEO = "regenerate_video"      # single-scene
+    UPSCALE_SCENE = "upscale_scene"            # single-scene
+
+
+class JobState(str, Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+TERMINAL_JOB_STATES = frozenset({JobState.SUCCEEDED, JobState.FAILED, JobState.CANCELLED})
+
+
+class JobProgress(BaseModel):
+    """Coarse per-unit progress. Units are scenes/sub-clips, not denoising steps."""
+    current: int = 0
+    total: int = 0                  # 0 = indeterminate
+    unit: str = "scenes"            # "scenes" | "sub_clips" | "steps"
+    message: str = ""
+    scene_id: str | None = None  # scene currently being processed
+
+
+class JobError(BaseModel):
+    """Structured failure info — mirrors the API error envelope."""
+    code: str
+    message: str
+    detail: dict = Field(default_factory=dict)
+
+
+class Job(BaseModel):
+    """A queued/running/finished pipeline operation. Journaled per state change."""
+    id: str
+    kind: JobKind
+    params: dict = Field(default_factory=dict)
+    state: JobState = JobState.QUEUED
+    progress: JobProgress = Field(default_factory=JobProgress)
+    error: JobError | None = None
+    result: dict = Field(default_factory=dict)
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.state in TERMINAL_JOB_STATES
