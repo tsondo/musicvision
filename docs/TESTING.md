@@ -44,7 +44,7 @@ MusicVision uses a two-layer test strategy: fast unit tests that run anywhere, a
 | ~~`test_hva_standalone.py`~~ | ~~HunyuanVideo-Avatar standalone inference test~~ — **removed** (HVA deprecated 2026-03-11) | — |
 | `test_humo_480p.py` | HuMo 480p resolution inference test | GPU + HuMo weights |
 | `test_humo_720p.py` | HuMo 720p resolution inference test | GPU + HuMo weights |
-| `test_vllm_prompts.py` | All three LLM prompt paths (segmentation, image prompts, video prompts, batch consistency) against a running vLLM server | vLLM server running on LAN with Qwen2.5-32B-AWQ |
+| `test_vllm_prompts.py` | All three LLM prompt paths (segmentation, image prompts, video prompts, batch consistency) against a running vLLM server | vLLM server running on LAN with Qwen3.6-27B-AWQ-INT4 (served as `qwen`) |
 | `dump_keys.py` | Utility to dump checkpoint `state_dict` keys for debugging weight loading issues | Model weights on disk |
 
 ---

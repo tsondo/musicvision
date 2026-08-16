@@ -261,9 +261,8 @@ Both prompt generators gracefully degrade when no LLM is configured:
 - `LLM_BACKEND=anthropic` (default) — `ANTHROPIC_API_KEY`
 - `LLM_BACKEND=openai` — vLLM: `OPENAI_BASE_URL` + `OPENAI_MODEL`
 
-**vLLM candidates for local inference (RTX 3090 Ti, 24 GB VRAM):**
-- `Qwen/Qwen2.5-32B-Instruct-AWQ` (~18 GB, best quality)
-- `mistralai/Mistral-Small-3.1-24B-Instruct-2503` (~12 GB 4-bit, fast)
+**Deployed vLLM model (RTX 3090 Ti, 24 GB VRAM):**
+- `cyankiwi/Qwen3.6-27B-AWQ-INT4` (~17.7 GB, 4-bit AWQ, vision+text), served as `qwen` at `http://192.168.178.105:8000/v1`
 
 ---
 

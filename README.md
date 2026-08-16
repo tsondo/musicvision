@@ -34,7 +34,7 @@ Everything runs locally on consumer NVIDIA GPUs. No cloud services, no per-minut
 - **Professional export** — rough cut MP4, EDL, and FCPXML 1.10 for DaVinci Resolve
 - **Iterative workflow** — review and regenerate individual scenes via React GUI or CLI; approve only what you like
 - **Per-scene engine selection** — use different video engines for different scenes in the same project
-- **Fully local LLM option** — vLLM with Qwen2.5-32B on a LAN server for scene segmentation and prompt generation, or use Claude API, or skip LLM entirely with auto-templates
+- **Fully local LLM option** — vLLM with Qwen3.6-27B on a LAN server for scene segmentation and prompt generation, or use Claude API, or skip LLM entirely with auto-templates
 - **Config-driven projects** — every project is a YAML + JSON directory; reproducible, version-controllable, shareable
 
 ### Current Status
@@ -125,7 +125,7 @@ M-series Mac support is planned but not yet implemented. Blocking issues include
 
 ### Optional: Local LLM Server
 
-A separate GPU (e.g. RTX 3090 Ti 24 GB) can run [vLLM](https://github.com/vllm-project/vllm) with Qwen2.5-32B-AWQ for scene segmentation and prompt generation, eliminating the Claude API dependency entirely. This is optional — the pipeline works without it using auto-templates or the Claude API.
+A separate GPU (e.g. RTX 3090 Ti 24 GB) can run [vLLM](https://github.com/vllm-project/vllm) with Qwen3.6-27B-AWQ-INT4 for scene segmentation and prompt generation, eliminating the Claude API dependency entirely. This is optional — the pipeline works without it using auto-templates or the Claude API.
 
 ---
 
@@ -175,8 +175,8 @@ Copy `.env.example` to `.env` and configure:
 | `HUGGINGFACE_TOKEN` | For FLUX.1-dev (gated) | Not needed for Z-Image (ungated) |
 | `ANTHROPIC_API_KEY` | For Claude LLM prompts | Not needed if using vLLM or auto-templates |
 | `LLM_BACKEND` | No (default: `anthropic`) | Set to `openai` for vLLM |
-| `OPENAI_BASE_URL` | If using vLLM | e.g. `http://192.168.1.100:8000/v1` |
-| `OPENAI_MODEL` | If using vLLM | e.g. `Qwen/Qwen2.5-32B-Instruct-AWQ` |
+| `OPENAI_BASE_URL` | If using vLLM | e.g. `http://192.168.178.105:8000/v1` |
+| `OPENAI_MODEL` | If using vLLM | the `--served-model-name`, e.g. `qwen` |
 | `MUSICVISION_WEIGHTS_DIR` | No | Override model cache dir (default: `~/.cache/musicvision/weights`) |
 | `SEEDVR2_REPO_DIR` | For SeedVR2 upscaler | Path to cloned SeedVR repo |
 
