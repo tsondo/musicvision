@@ -175,7 +175,7 @@ Copy `.env.example` to `.env` and configure:
 | `HUGGINGFACE_TOKEN` | For FLUX.1-dev (gated) | Not needed for Z-Image (ungated) |
 | `ANTHROPIC_API_KEY` | For Claude LLM prompts | Not needed if using vLLM or auto-templates |
 | `LLM_BACKEND` | No (default: `anthropic`) | Set to `openai` for vLLM |
-| `OPENAI_BASE_URL` | If using vLLM | e.g. `http://192.168.178.105:8000/v1` |
+| `OPENAI_BASE_URL` | If using vLLM | e.g. `http://192.168.68.53:8000/v1` |
 | `OPENAI_MODEL` | If using vLLM | the `--served-model-name`, e.g. `qwen` |
 | `MUSICVISION_WEIGHTS_DIR` | No | Override model cache dir (default: `~/.cache/musicvision/weights`) |
 | `SEEDVR2_REPO_DIR` | For SeedVR2 upscaler | Path to cloned SeedVR repo |

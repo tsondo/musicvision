@@ -71,7 +71,7 @@ Two machines on the same LAN:
 **vLLM server** (separate LAN machine, Fedora, hostname `vllm-host`):
 - GPU: RTX 3090 Ti 24GB (single GPU)
 - Model: `cyankiwi/Qwen3.6-27B-AWQ-INT4` (~17.7 GB, 4-bit AWQ, vision+text) via vLLM 0.27+, served as `qwen`
-- Endpoint: `http://192.168.178.105:8000/v1` (OpenAI-compatible; see `OPENAI_BASE_URL` in `.env`)
+- Endpoint: `http://192.168.68.53:8000/v1` (OpenAI-compatible; see `OPENAI_BASE_URL` in `.env`)
 - Max context 24576 tokens (KV-cache limit on 24 GB); reasoning parser `qwen3`, tool-call parser `qwen3_xml`
 - Runs as a systemd user service on the host (`systemctl --user status vllm`), 24/7, no per-token cost
 
@@ -86,7 +86,7 @@ cp .env.example .env
 
 Key env vars (see .env.example for full list):
 - `LLM_BACKEND` — `anthropic` (default) or `openai` (for vLLM)
-- `OPENAI_BASE_URL` — vLLM server URL: `http://192.168.178.105:8000/v1`
+- `OPENAI_BASE_URL` — vLLM server URL: `http://192.168.68.53:8000/v1`
 - `OPENAI_MODEL` — `qwen` (the --served-model-name on vLLM)
 - `HUGGINGFACE_TOKEN` — required for HuMo DiT weights and FLUX.1-dev
 - `ANTHROPIC_API_KEY` — only if using Claude API instead of vLLM

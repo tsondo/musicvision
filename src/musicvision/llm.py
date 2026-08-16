@@ -21,7 +21,7 @@ served under the alias `qwen` — see CLAUDE.md for the full launch command.
 ---------------------------------------------------------------------------
 Example .env for local vLLM:
   LLM_BACKEND=openai
-  OPENAI_BASE_URL=http://192.168.178.105:8000/v1
+  OPENAI_BASE_URL=http://192.168.68.53:8000/v1
   OPENAI_API_KEY=vllm
   OPENAI_MODEL=qwen
 ---------------------------------------------------------------------------
@@ -44,7 +44,7 @@ class LLMConfig:
 
     backend: str = "anthropic"   # "anthropic" | "openai"
     model: str = ""              # model ID; falls back to env var or default
-    base_url: str = ""           # vLLM endpoint, e.g. http://192.168.178.105:8000/v1
+    base_url: str = ""           # vLLM endpoint, e.g. http://192.168.68.53:8000/v1
     api_key: str = ""            # explicit key; falls back to env vars
     max_tokens: int = 0  # 0 = auto (4096 for Anthropic, query vLLM server limit)
 
@@ -125,7 +125,7 @@ class LLMClient:
         if not base_url:
             raise ValueError(
                 "OPENAI_BASE_URL not set. "
-                "Example: http://192.168.178.105:8000/v1"
+                "Example: http://192.168.68.53:8000/v1"
             )
         api_key = self.config.api_key or os.environ.get("OPENAI_API_KEY", "vllm")
         model = self.config.model or os.environ.get("OPENAI_MODEL", "")
@@ -158,7 +158,7 @@ def get_client(config: LLMConfig | None = None) -> LLMClient:
         client = get_client()               # reads LLM_BACKEND, etc. from env
         client = get_client(LLMConfig(      # explicit openai config
             backend="openai",
-            base_url="http://192.168.178.105:8000/v1",
+            base_url="http://192.168.68.53:8000/v1",
             model="qwen",
         ))
         text = client.chat(system_prompt, user_message)

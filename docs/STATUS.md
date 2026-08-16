@@ -262,7 +262,7 @@ Both prompt generators gracefully degrade when no LLM is configured:
 - `LLM_BACKEND=openai` — vLLM: `OPENAI_BASE_URL` + `OPENAI_MODEL`
 
 **Deployed vLLM model (RTX 3090 Ti, 24 GB VRAM):**
-- `cyankiwi/Qwen3.6-27B-AWQ-INT4` (~17.7 GB, 4-bit AWQ, vision+text), served as `qwen` at `http://192.168.178.105:8000/v1`
+- `cyankiwi/Qwen3.6-27B-AWQ-INT4` (~17.7 GB, 4-bit AWQ, vision+text), served as `qwen` at `http://192.168.68.53:8000/v1`
 
 ---
 

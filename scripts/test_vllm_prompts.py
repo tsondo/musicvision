@@ -14,7 +14,7 @@ Usage:
     python test_vllm_prompts.py
 
     # Override endpoint
-    python test_vllm_prompts.py --base-url http://192.168.178.105:8000/v1 --model qwen
+    python test_vllm_prompts.py --base-url http://192.168.68.53:8000/v1 --model qwen
 
     # Test only one stage
     python test_vllm_prompts.py --test segmentation
