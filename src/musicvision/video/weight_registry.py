@@ -87,8 +87,8 @@ _DIT_SPECS: dict[HumoTier, WeightSpec] = {
     ),
     HumoTier.PREVIEW: WeightSpec(
         repo_id="bytedance-research/HuMo",
-        filename="diffusion_models_1_3B/",          # 1.7B shard directory
-        fmt="safetensors",
+        filename="HuMo-1.7B/ema.pth",               # upstream reorganized: single EMA checkpoint
+        fmt="pth",
         expected_gb=3.4,
         local_subdir="preview",
     ),
@@ -243,6 +243,14 @@ def download_dit(
             local_dir=str(local_dir),
             token=token,
         )
+        # snapshot_download succeeds even when allow_patterns matches nothing;
+        # verify real weight files actually landed before reporting success.
+        weight_exts = (".safetensors", ".gguf", ".pth", ".bin")
+        if not any(p.is_file() and p.suffix in weight_exts for p in local_dir.rglob("*")):
+            raise RuntimeError(
+                f"Download of {spec.repo_id}/{spec.filename} produced no weight files "
+                f"in {local_dir} — the repo path in the weight registry is likely stale."
+            )
         return local_dir
     else:
         dest = local_dir / spec.filename

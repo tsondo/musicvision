@@ -118,3 +118,176 @@ to `[(0,8),(8,16),(16,24),(24,32),(32,33)]`.
 | `src/musicvision/video/humo_engine.py` | Block-swap calling convention updated |
 | `src/musicvision/video/model_loader.py` | GGUF key mapping updated |
 | `FIXLOG.md` | This file |
+
+---
+
+# Preview-tier weight spec stale (upstream repo reorganized)
+
+Date: 2026-08-16
+
+## Problem
+
+`weight_registry.py` pointed the PREVIEW tier at
+`bytedance-research/HuMo/diffusion_models_1_3B/` (safetensors shard dir).
+The upstream repo was reorganized: the 1.7B model now ships as a single EMA
+torch checkpoint at `HuMo-1.7B/ema.pth` (~7 GB fp32, plain WanModel keys,
+no prefix — verified with `scripts/dump_keys.py`, 1193 keys).
+
+Two compounding bugs made this fail *silently*:
+1. `snapshot_download` with an `allow_patterns` glob that matches nothing
+   succeeds without downloading anything; `download_dit` then reported ✓.
+2. `Preview1_7BLoader._load_preview_dit` only handled safetensors.
+
+The FP16 spec (`diffusion_models/`) references the same pre-reorg layout and
+is almost certainly stale too — NOT fixed here (34 GB download, unverifiable
+in this session). Fix + verify before first fp16 run; the shard-dir glob in
+`_load_preview_dit`'s sibling FP16 path is also non-recursive, so nested
+`HuMo-17B/` shards would be missed.
+
+## Fix
+
+| File | Action |
+|---|---|
+| `src/musicvision/video/weight_registry.py` | PREVIEW spec → `HuMo-1.7B/ema.pth` (fmt pth); `download_dit` dir-branch now validates weight files landed and raises instead of silently succeeding |
+| `src/musicvision/video/model_loader.py` | `_load_preview_dit` handles `.pth` via `torch.load(weights_only=True)` |
+
+## Deeper finding (same session): preview tier architecturally unsupported
+
+Even with the correct checkpoint, preview cannot run as implemented:
+
+- `HuMo-1.7B/ema.pth` has `patch_embedding.weight [1536, 16, 1, 2, 2]` —
+  **in_dim=16**. Everything else matches `CONFIG_1_7B` (dim 1536, ffn 8960,
+  30 blocks, full TIA audio stack: audio_proj + audio_cross_attn present).
+- Our `CONFIG_1_7B` declares `in_dim=36`, and `humo_engine` unconditionally
+  builds 36-channel DiT input (16 noise + 4 mask + 16 ref-latent concat).
+  The 1.7B variant evidently injects the reference differently (no concat
+  channels — likely temporal-only placement in the 16-ch latent).
+- Additional latent bug: `_load_preview_dit` calls `load_state_dict` without
+  `assign=True` on a meta-device model — every copy is a silent no-op
+  (torch UserWarning), so even a shape-compatible load would produce
+  uninitialized weights.
+
+**Not fixed** — supporting 1.7B needs its conditioning interface ported from
+upstream (`Phantom-video/HuMo` `infer_tia_1_7B` path) and validated; scope
+decision deferred. Until then: preview tier is dead code; use fp8_scaled
+(`--draft`) for iteration on this hardware.
+
+---
+
+# Encoder co-residency OOM on 12 GB secondary (4080 → 3080 Ti)
+
+Date: 2026-08-16
+
+## Problem
+
+`BaseHumoLoader` subclasses loaded T5 (~9.4 GB) + VAE (~0.5 GB) + Whisper
+(~3.1 GB) all onto the encoder GPU at `load()` time. Fit on the old 16 GB
+4080; OOMs on the 3080 Ti (12 GB, drives the display, ~10.8 GB usable):
+`Engine load()` failed with 11.27 GB torch-allocated on GPU 1.
+
+`HumoEngine.generate()` already ran the mandatory sequential
+encode→offload loop (encoders are CPU-resident between generations on every
+topology) — only the initial placement predated the hardware change.
+
+## Fix
+
+`BaseHumoLoader._load_encoders_cpu_resident()`: each encoder is loaded
+through the encoder GPU one at a time and immediately parked on CPU
+(each component individually fits; only co-residency broke). The engine's
+existing `_reload()` raises each on first use. Wrapper device-attribute
+handling extracted to module-level `component_nn_module()` /
+`move_component()` in model_loader.py; `HumoEngine._offload/_reload`
+delegate to the same helpers (single source of truth for the VAE
+mean/std/scale/device chain).
+
+All four loaders (fp16, fp8_scaled, gguf, preview) use the new path.
+
+---
+
+# FLUX two-GPU split placement never worked (device mismatch)
+
+Date: 2026-08-16
+
+## Problem
+
+`FluxEngine._place_pipeline("split")` scattered components across the two
+GPUs (transformer → cuda:0, encoders/VAE → cuda:1) and then invoked the stock
+diffusers `FluxPipeline.__call__`, which computes everything on a single
+`_execution_device` (resolved from the encoder components → cuda:1). First
+transformer call crashed: `mat1 is on cuda:1, different from other tensors on
+cuda:0`. The split strategy is selected whenever the primary has ≥28 GB free
+and a second GPU exists — but imaging had evidently only ever run live via
+Z-Image or the offload strategies, so this path was first exercised by the
+IP-Adapter live-run checklist (STATUS.md), which is what that checklist was
+for.
+
+## Fix
+
+`_install_split_forward_shim()`: wraps `transformer.forward` — tensor inputs
+(including tensors nested in dicts/lists, e.g. `ip_adapter_image_embeds`) hop
+to the DiT device; the output sample hops back to the encoder device where
+latents and the scheduler live. Per-step traffic is tens of MB. Seed
+reproducibility unaffected (CPU generator). The shim lives on the pipeline
+instance and dies with it on unload().
+
+---
+
+# Multi-IPA: adapter instance count must match reference count
+
+Date: 2026-08-16
+
+## Problem
+
+`FluxEngine` loaded ONE IP-Adapter instance and passed N reference images +
+an N-length scale list. diffusers' FLUX contract: one loaded adapter instance
+per reference; with a single adapter, a scale *list* is interpreted
+per-transformer-block → `ValueError: Expected list of 19 scales, got 2.`
+Multi-IPA (checklist item 5) had never been exercised on GPU.
+
+## Fix
+
+`_sync_ip_adapter_count(n)`: on reference-count change, unload + reload the
+adapter with n instances (`[repo]*n` / `[weight_name]*n`), re-place the image
+encoder with the other encoders, and re-assert transformer placement so
+CPU-materialized adapter params join it. Guarded: raises a clear error under
+cpu-offload placements (reloaded modules would sit outside the offload
+hook graph — same constraint as the load-order audit). Scene ordering by
+`conditioning_sort_key` already groups identical reference sets, minimizing
+reloads.
+
+---
+
+# cuda:1 kernel instability under WSL2 → FLUX split v2 + strategy override
+
+Date: 2026-08-16 (evening, follow-up to the checklist session)
+
+## Problem
+
+After the dep-bump verification, FLUX generations began failing
+intermittently with `RuntimeError: CUDA driver error: device not ready` in
+whatever heavy kernel happened to run on cuda:1 (T5 SDPA, CLIP conv, VAE
+decode conv). Systematically excluded: dependency versions (pre-bump control
+failed identically), VRAM ceiling (reproduced with ~9 GB free after T5
+parking), SDPA backend (MATH-forced matmul attention also failed), WSL
+restart (failed on a fresh instance). Morning runs of identical code all
+passed; cuda:0 work was 100 % reliable throughout. Conclusion: stochastic
+WSL2/WDDM instability on the display-sharing secondary GPU, environmental
+and session-dependent. Windows-side driver investigation pending.
+
+## Changes
+
+1. **Split placement v2** (`FluxEngine._place_pipeline`): execution
+   (latents/scheduler/transformer/VAE decode) hosted on the DiT GPU —
+   `_pin_execution_device()` overrides diffusers' alphabetical
+   `_execution_device` resolution; the old transformer forward shim is gone.
+   The secondary GPU is now a burst worker only: CLIP-L text resident,
+   T5 and the IPA image encoder CPU-parked and raised per encode burst
+   (HuMo's sequential policy). Strictly better VRAM profile regardless of
+   the driver issue; encode bursts remain exposed to it.
+2. **`MUSICVISION_FLUX_STRATEGY` env override** in `_select_strategy()` —
+   `bf16_offload` runs imaging entirely on the primary GPU
+   (model-cpu-offload, cuda:1 uninvolved). Verified 3/3 consecutive
+   1024×576 IPA generations during the incident, seed-stable. Use this
+   while cuda:1 is misbehaving.
+
+`tests/test_ip_adapter.py` split-placement test updated to the v2 contract.

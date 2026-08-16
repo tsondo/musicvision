@@ -449,39 +449,23 @@ class HumoEngine:
 
     def _get_nn_module(self, name: str):
         """Get the underlying nn.Module for a bundle component."""
-        model = getattr(self._bundle, name, None)
-        if model is None:
+        from musicvision.video.model_loader import component_nn_module
+
+        if self._bundle is None:
             return None
-        # WanT5Encoder: ._model.model is the nn.Module (T5Encoder)
-        if hasattr(model, '_model') and hasattr(model._model, 'model'):
-            return model._model.model
-        # WanVideoVAE._vae is WanVAE (plain class), WanVAE.model is the nn.Module (WanVAE_)
-        if hasattr(model, '_vae') and model._vae is not None:
-            return model._vae.model
-        # WanVideoVAE (alternate): .model is the nn.Module
-        if hasattr(model, 'model'):
-            return model.model
-        # Whisper encoder: is directly an nn.Module
-        return model
+        return component_nn_module(getattr(self._bundle, name, None))
 
     def _offload(self, name: str) -> None:
         """Move a model component from GPU to CPU to free VRAM."""
-        import torch, gc
+        import gc
+
+        import torch
+
+        from musicvision.video.model_loader import move_component
 
         if self._bundle is None:
             return
-        nn_mod = self._get_nn_module(name)
-        if nn_mod is None:
-            return
-        nn_mod.to("cpu")
-        # Update VAE wrapper chain: WanVideoVAE.device + WanVAE mean/std/scale tensors
-        if name == "vae" and self._bundle.vae is not None:
-            self._bundle.vae.device = torch.device("cpu")
-            vae_inner = self._bundle.vae._vae
-            if vae_inner is not None:
-                vae_inner.mean = vae_inner.mean.to("cpu")
-                vae_inner.std = vae_inner.std.to("cpu")
-                vae_inner.scale = [vae_inner.mean, 1.0 / vae_inner.std]
+        move_component(getattr(self._bundle, name, None), name, "cpu")
         torch.cuda.empty_cache()
         gc.collect()
         log.debug("Offloaded %s to CPU", name)
@@ -490,10 +474,13 @@ class HumoEngine:
         """Move a model component back from CPU to encoder GPU (no-op if already there)."""
         import torch
 
+        from musicvision.video.model_loader import component_nn_module, move_component
+
         if self._bundle is None:
             return
         device = self._bundle.encoder_device
-        nn_mod = self._get_nn_module(name)
+        model = getattr(self._bundle, name, None)
+        nn_mod = component_nn_module(model)
         if nn_mod is None:
             return
         # Check if already on the right device
@@ -503,16 +490,7 @@ class HumoEngine:
                 return  # already on GPU
         except StopIteration:
             return
-        nn_mod.to(device)
-        # Update VAE wrapper chain: WanVideoVAE.device + WanVAE mean/std/scale tensors
-        if name == "vae" and self._bundle.vae is not None:
-            self._bundle.vae.device = torch.device(device)
-            vae_inner = self._bundle.vae._vae
-            if vae_inner is not None:
-                vae_inner.mean = vae_inner.mean.to(device)
-                vae_inner.std = vae_inner.std.to(device)
-                vae_inner.scale = [vae_inner.mean, 1.0 / vae_inner.std]
-                vae_inner.device = str(device)
+        move_component(model, name, device)
         log.debug("Reloaded %s to %s", name, device)
 
     # ------------------------------------------------------------------

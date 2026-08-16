@@ -1,6 +1,6 @@
 # MusicVision — Project Status
 
-**Last updated:** 2026-07-05
+**Last updated:** 2026-08-16
 **Branch:** `main`
 
 ---
@@ -72,13 +72,24 @@ adapters break under batched CFG; diffusers runs true-CFG separately).
 
 ### Verify at first live GPU run (IP-Adapter)
 
-- [ ] load_ip_adapter → cpu_offload ordering works on the real two-GPU device map
-- [ ] CLIP-L image encoder actually lands on the secondary GPU
-- [ ] VRAM headroom on the 5090 with FLUX + adapter + encoder resident (pre-flight budget check unchanged?)
-- [ ] scale=0.6 sanity on real character references; prompt adherence at scale ≥0.8
-- [ ] multi-IPA (2+ assets in one scene) output sanity
-- [ ] seed-locked reproducibility with IPA active
-- [ ] verify encoder-set VRAM fit on the 11GB display-sharing secondary, per stage (imaging/video/intake)
+All verified 2026-08-16 on the 5090 + 3080 Ti topology (see FIXLOG for the two
+fixes this run required: split-placement forward shim; per-reference adapter
+instances for multi-IPA):
+
+- [x] load_ip_adapter → cpu_offload ordering works on the real two-GPU device map *(split placement — needed the forward shim, see FIXLOG)*
+- [x] CLIP-L image encoder actually lands on the secondary GPU *(cuda:1 confirmed; superseded same day by split v2 — now CPU-parked, raised to cuda:1 per encode burst, see FIXLOG)*
+- [x] VRAM headroom on the 5090 with FLUX + adapter + encoder resident *(23.2 GB alloc / 6.9 GB free)*
+- [x] scale=0.6 sanity on real character references; prompt adherence at scale ≥0.8 *(outputs in test_output/2026-08-16_1400_ipa_checklist/checklist_outputs/ — visual identity/adherence pending human review)*
+- [x] multi-IPA (2+ assets in one scene) output sanity *(after per-reference adapter-instance fix)*
+- [x] seed-locked reproducibility with IPA active *(byte-identical within a load cycle; ±1 LSB across adapter reloads)*
+- [x] verify encoder-set VRAM fit on the 11GB display-sharing secondary, per stage *(video: seq. offload, transients ≤11.7 GB; imaging: split v2 burst-only after ceiling issues — see FIXLOG; intake: ≤7.9 GB)*
+
+> **⚠ cuda:1 stability (2026-08-16):** the display-sharing 3080 Ti
+> intermittently fails heavy kernels under WSL2 ("CUDA driver error: device
+> not ready"), session-dependent, independent of code path or dep versions.
+> If imaging crashes with this error, set `MUSICVISION_FLUX_STRATEGY=bf16_offload`
+> (verified reliable: imaging runs entirely on the 5090). Windows-side driver
+> investigation pending. Details in FIXLOG.
 
 **All five pipeline stages are code-complete and CLI-accessible.** Full end-to-end workflow: `create` → `import-audio` → `intake` → `generate-images` → `generate-video` → `upscale` → `assemble`. Two video engines: HuMo (working, 24 bugs fixed) and LTX-Video 2 (cinematic). Three upscalers: SeedVR2 (pixel-space), LTX Spatial (LTX-2 latent), Real-ESRGAN (fast preview). Assembly auto-prefers upscaled clips. HunyuanVideo-Avatar was previously supported but was deprecated and removed (2026-03-11, commit 35cda2a).
 
