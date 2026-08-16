@@ -289,7 +289,9 @@ class TestLoadOrdering:
         assert engine._offload_active
 
     @patch("musicvision.imaging.flux_engine._free_vram_gb", return_value=30.0)
-    def test_split_placement_puts_image_encoder_on_encoder_device(self, mock_vram, gpu_device_map):
+    def test_split_placement_parks_burst_encoders(self, mock_vram, gpu_device_map):
+        """Split v2: execution on the DiT GPU (transformer + VAE); T5 and the
+        IP-Adapter image encoder are CPU-parked and raised per encode burst."""
         diffusers = pytest.importorskip("diffusers")
         calls: list = []
         pipe = self._tracked_pipe(calls)
@@ -303,7 +305,10 @@ class TestLoadOrdering:
         assert calls == ["ip_adapter"]
         assert not engine._offload_active
         pipe.transformer.to.assert_called_once_with(gpu_device_map.dit_device)
-        pipe.image_encoder.to.assert_called_once_with(gpu_device_map.encoder_device)
+        pipe.vae.to.assert_called_once_with(gpu_device_map.dit_device)
+        pipe.text_encoder.to.assert_called_once_with(gpu_device_map.encoder_device)
+        pipe.text_encoder_2.to.assert_called_once_with("cpu")
+        pipe.image_encoder.to.assert_called_once_with("cpu")
 
     @patch("musicvision.imaging.flux_engine._free_vram_gb", return_value=20.0)
     def test_disabled_ip_adapter_never_loads(self, mock_vram, gpu_device_map):

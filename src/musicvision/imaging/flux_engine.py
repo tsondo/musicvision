@@ -68,6 +68,7 @@ class FluxEngine(ImageEngine):
         self._loaded_lora: Optional[str] = None
         self._ip_adapter_loaded = False
         self._ip_adapter_count = 0
+        self._placement = ""
         self._offload_active = False  # True once cpu-offload hooks are installed (see load-order audit)
 
     # ------------------------------------------------------------------
@@ -226,18 +227,47 @@ class FluxEngine(ImageEngine):
         )
         actual_seed = seed if seed is not None else torch.seed()
 
+        # Split placement: encode the prompt as a burst on the encoder GPU —
+        # raise T5 (~9 GB bf16, the only large encoder), encode, park it back
+        # on CPU — then hand the pipeline embeds on the DiT GPU where execution
+        # is pinned. Sequential per-component policy, same as the HuMo engine.
+        prompt_kwargs: dict = {"prompt": prompt}
+        if getattr(self, "_placement", "") == "split":
+            enc_dev = self.device_map.encoder_device
+            dit_dev = self.device_map.dit_device
+            t5 = self._pipe.text_encoder_2
+            t5.to(enc_dev)
+            # MATH backend for the burst: fused SDPA kernels (cuDNN/efficient)
+            # on the display-sharing secondary GPU intermittently fail with
+            # "CUDA driver error: device not ready" under WSL2; plain-matmul
+            # attention (what the HuMo engine's vendored T5 uses) is reliable
+            # there, and the encode burst is far too short for the backend to
+            # matter for speed.
+            from torch.nn.attention import SDPBackend, sdpa_kernel
+
+            with sdpa_kernel([SDPBackend.MATH]):
+                prompt_embeds, pooled_prompt_embeds, _ = self._pipe.encode_prompt(
+                    prompt=prompt, prompt_2=None, device=enc_dev,
+                )
+            t5.to("cpu")
+            torch.cuda.empty_cache()
+            prompt_kwargs = {
+                "prompt_embeds": prompt_embeds.to(dit_dev),
+                "pooled_prompt_embeds": pooled_prompt_embeds.to(dit_dev),
+            }
+
         # NOTE: never batch positive/negative prompts into a single forward pass
         # while the IP-Adapter is active — XLabs adapters are known to produce
         # garbage under batched CFG. diffusers' FluxPipeline runs true-CFG
         # passes separately by design; do not "optimize" this into a
         # concatenated batch.
         result = self._pipe(
-            prompt=prompt,
             width=width,
             height=height,
             num_inference_steps=self.config.effective_steps,
             guidance_scale=self.config.guidance_scale,
             generator=generator,
+            **prompt_kwargs,
             **ipa_kwargs,
         ).images[0]
 
@@ -299,13 +329,19 @@ class FluxEngine(ImageEngine):
             return False
         log.info("Lazy-loading IP-Adapter on first use")
         self._load_ip_adapter()
-        # Place the freshly loaded image encoder with the other encoders.
-        if (
-            getattr(self._pipe, "image_encoder", None) is not None
-            and self.device_map.encoder_device.type != "cpu"
-        ):
-            self._pipe.image_encoder.to(self.device_map.encoder_device)
+        # Place the freshly loaded image encoder: CPU-parked under split
+        # (raised per encode burst), with the other encoders otherwise.
+        if getattr(self._pipe, "image_encoder", None) is not None:
+            self._pipe.image_encoder.to(self._image_encoder_park_device())
         return True
+
+    def _image_encoder_park_device(self):
+        """Resting place for the CLIP-L vision encoder between IPA bursts."""
+        if getattr(self, "_placement", "") == "split":
+            return "cpu"
+        if self.device_map.encoder_device.type != "cpu":
+            return self.device_map.encoder_device
+        return self.device_map.primary
 
     def _prepare_ip_adapter(
         self,
@@ -328,18 +364,38 @@ class FluxEngine(ImageEngine):
         if n_refs:
             self._sync_ip_adapter_count(n_refs)
 
+        split = getattr(self, "_placement", "") == "split"
+        dit_dev = self.device_map.dit_device
+
         if embeddings:
             loaded = [
                 torch.load(p, map_location="cpu", weights_only=True) for p in embeddings
             ]
+            if split:
+                loaded = [t.to(dit_dev) for t in loaded]
             kwargs["ip_adapter_image_embeds"] = loaded
         elif images:
             from PIL import Image
 
             loaded_images = [Image.open(p).convert("RGB") for p in images]
-            kwargs["ip_adapter_image"] = (
-                loaded_images if len(loaded_images) > 1 else loaded_images[0]
-            )
+            if split:
+                # Burst-encode on the encoder GPU: raise the CLIP-L vision
+                # encoder from its CPU park, encode, park it again, and hand
+                # the pipeline precomputed embeds on the DiT GPU (the pipeline
+                # would otherwise run the image encoder on its pinned
+                # execution device, where it does not live).
+                enc_dev = self.device_map.encoder_device
+                self._pipe.image_encoder.to(enc_dev)
+                embeds = self._pipe.prepare_ip_adapter_image_embeds(
+                    loaded_images, None, enc_dev, 1,
+                )
+                self._pipe.image_encoder.to("cpu")
+                torch.cuda.empty_cache()
+                kwargs["ip_adapter_image_embeds"] = [t.to(dit_dev) for t in embeds]
+            else:
+                kwargs["ip_adapter_image"] = (
+                    loaded_images if len(loaded_images) > 1 else loaded_images[0]
+                )
         else:
             return {}
 
@@ -438,14 +494,9 @@ class FluxEngine(ImageEngine):
             image_encoder_pretrained_model_name_or_path=ipa.image_encoder_repo,
         )
         # unload_ip_adapter() drops the image encoder; the reload restores it on
-        # CPU — put it back with the other encoders (split) / primary (single).
-        target = (
-            self.device_map.encoder_device
-            if self.device_map.dit_device != self.device_map.encoder_device
-            else self.device_map.primary
-        )
+        # CPU — send it to its resting place (CPU park under split).
         if getattr(self._pipe, "image_encoder", None) is not None:
-            self._pipe.image_encoder.to(target)
+            self._pipe.image_encoder.to(self._image_encoder_park_device())
         # The reloaded adapter modules live inside the transformer; re-assert its
         # placement so any CPU-materialized adapter params join it (no-op for
         # already-placed weights).
@@ -455,22 +506,31 @@ class FluxEngine(ImageEngine):
     def _place_pipeline(self, placement: str, primary) -> None:
         """Stage 3: device placement or cpu-offload. MUST run after _load_ip_adapter()."""
         pipe = self._pipe
+        self._placement = placement
         if placement == "split":
-            # Two-GPU: DiT on the primary (5090), all encoders on the secondary (3080 Ti).
+            # Two-GPU split v2 — execution is hosted on the DiT GPU; the
+            # secondary is a burst worker only. Rationale (2026-08-16 live
+            # runs): hosting the pipeline on the display-sharing 3080 Ti put
+            # its heavy kernels (T5 SDPA, CLIP conv, VAE decode) at the 12 GB
+            # ceiling, where WSL2 fails allocations with a misleading
+            # "CUDA driver error: device not ready" instead of a clean OOM.
+            #   * transformer + VAE → DiT GPU (VAE weights are ~0.2 GB; the
+            #     decode's multi-GB activations belong on the big card)
+            #   * CLIP-L text → encoder GPU, resident (0.25 GB)
+            #   * T5 + IP-Adapter image encoder → CPU-parked, raised onto the
+            #     encoder GPU only for their encode burst (HuMo's sequential
+            #     per-component policy)
             pipe.transformer.to(self.device_map.dit_device)
+            pipe.vae.to(self.device_map.dit_device)
             pipe.text_encoder.to(self.device_map.encoder_device)    # CLIP-L (text)
-            pipe.text_encoder_2.to(self.device_map.encoder_device)  # T5-XXL
-            pipe.vae.to(self.device_map.vae_device)
-            # IP-Adapter image encoder (CLIP-L vision) belongs with the other
-            # encoders on the secondary GPU — same budget pool as CLIP/T5/VAE.
+            pipe.text_encoder_2.to("cpu")                           # T5-XXL, raised per generate
             if getattr(pipe, "image_encoder", None) is not None:
-                pipe.image_encoder.to(self.device_map.encoder_device)
-            # Stock FluxPipeline.__call__ runs on a single _execution_device
-            # (resolved from the encoder components → cuda:1): prompt embeds,
-            # latents, and the scheduler all live there. Shim the transformer so
-            # its inputs hop to the DiT GPU and its outputs hop back — per-step
-            # traffic is tens of MB, negligible next to a denoise step.
-            self._install_split_forward_shim(pipe)
+                pipe.image_encoder.to("cpu")                        # raised per IPA prepare
+            # diffusers resolves _execution_device from the alphabetically
+            # first nn.Module component (the image encoder / text encoder),
+            # which would host latents and the scheduler on the wrong device.
+            # Pin it to the DiT GPU.
+            self._pin_execution_device(pipe, self.device_map.dit_device)
         elif placement == "single_device":
             pipe.to(primary)
         elif placement == "sequential_offload":
@@ -480,42 +540,23 @@ class FluxEngine(ImageEngine):
             pipe.enable_model_cpu_offload()
             self._offload_active = True
 
-    def _install_split_forward_shim(self, pipe) -> None:
-        """Wrap transformer.forward to bridge the two-GPU split.
+    @staticmethod
+    def _pin_execution_device(pipe, device) -> None:
+        """Force the pipeline's _execution_device to *device*.
 
-        Inputs (tensors, incl. tensors nested in dicts/lists such as
-        ip_adapter_image_embeds) move to the DiT device; the output sample moves
-        back to the encoder device where the scheduler and latents live. The
-        shim dies with the pipeline instance on unload().
+        diffusers derives it from the alphabetically first nn.Module component,
+        which under a cross-GPU split (or with CPU-parked encoders) is the
+        wrong host for latents/scheduler state. Swapping in a one-off subclass
+        overrides the class property per-instance; it dies with the pipeline.
         """
         import torch
 
-        dit_dev = self.device_map.dit_device
-        enc_dev = self.device_map.encoder_device
-
-        def to_dev(obj, device):
-            if torch.is_tensor(obj):
-                return obj.to(device)
-            if isinstance(obj, dict):
-                return {k: to_dev(v, device) for k, v in obj.items()}
-            if isinstance(obj, (list, tuple)):
-                moved = [to_dev(v, device) for v in obj]
-                return type(obj)(moved) if isinstance(obj, tuple) else moved
-            return obj
-
-        orig_forward = pipe.transformer.forward
-
-        def forward(*args, **kwargs):
-            out = orig_forward(*to_dev(args, dit_dev), **to_dev(kwargs, dit_dev))
-            if torch.is_tensor(out):
-                return out.to(enc_dev)
-            if isinstance(out, tuple):
-                return tuple(to_dev(list(out), enc_dev))
-            if hasattr(out, "sample"):
-                out.sample = out.sample.to(enc_dev)
-            return out
-
-        pipe.transformer.forward = forward
+        pinned = torch.device(device)
+        pipe.__class__ = type(
+            f"{type(pipe).__name__}PinnedExec",
+            (type(pipe),),
+            {"_execution_device": property(lambda self: pinned)},
+        )
 
     # ------------------------------------------------------------------
     # LoRA helpers
@@ -576,7 +617,23 @@ def _select_strategy(free_gb: float, config: ImageGenConfig) -> str:
       "bf16_offload"        — full precision, model cpu offload (Tier A/B, 1 GPU)
       "quantized_offload"   — quantized transformer, model cpu offload (Tier C)
       "quantized_sequential"— quantized, sequential cpu offload (Tier D)
+
+    MUSICVISION_FLUX_STRATEGY overrides the automatic choice (one of the
+    values above). Escape hatch for environments where a strategy's device
+    usage is unreliable — e.g. WSL2 sessions where kernels on the
+    display-sharing secondary GPU intermittently fail with "CUDA driver
+    error: device not ready"; bf16_offload keeps imaging entirely on the
+    primary GPU.
     """
+    override = os.environ.get("MUSICVISION_FLUX_STRATEGY", "").strip()
+    if override:
+        valid = {"bf16_split", "bf16_offload", "quantized_offload", "quantized_sequential"}
+        if override not in valid:
+            raise ValueError(
+                f"MUSICVISION_FLUX_STRATEGY={override!r} is not one of {sorted(valid)}"
+            )
+        log.info("FLUX strategy overridden via MUSICVISION_FLUX_STRATEGY: %s", override)
+        return override
     # Explicit quant overrides tier selection
     if config.quant == FluxQuant.BF16:
         return "bf16_offload"   # caller promotes to split if 2 GPUs

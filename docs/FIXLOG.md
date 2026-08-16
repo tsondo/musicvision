@@ -254,3 +254,40 @@ cpu-offload placements (reloaded modules would sit outside the offload
 hook graph — same constraint as the load-order audit). Scene ordering by
 `conditioning_sort_key` already groups identical reference sets, minimizing
 reloads.
+
+---
+
+# cuda:1 kernel instability under WSL2 → FLUX split v2 + strategy override
+
+Date: 2026-08-16 (evening, follow-up to the checklist session)
+
+## Problem
+
+After the dep-bump verification, FLUX generations began failing
+intermittently with `RuntimeError: CUDA driver error: device not ready` in
+whatever heavy kernel happened to run on cuda:1 (T5 SDPA, CLIP conv, VAE
+decode conv). Systematically excluded: dependency versions (pre-bump control
+failed identically), VRAM ceiling (reproduced with ~9 GB free after T5
+parking), SDPA backend (MATH-forced matmul attention also failed), WSL
+restart (failed on a fresh instance). Morning runs of identical code all
+passed; cuda:0 work was 100 % reliable throughout. Conclusion: stochastic
+WSL2/WDDM instability on the display-sharing secondary GPU, environmental
+and session-dependent. Windows-side driver investigation pending.
+
+## Changes
+
+1. **Split placement v2** (`FluxEngine._place_pipeline`): execution
+   (latents/scheduler/transformer/VAE decode) hosted on the DiT GPU —
+   `_pin_execution_device()` overrides diffusers' alphabetical
+   `_execution_device` resolution; the old transformer forward shim is gone.
+   The secondary GPU is now a burst worker only: CLIP-L text resident,
+   T5 and the IPA image encoder CPU-parked and raised per encode burst
+   (HuMo's sequential policy). Strictly better VRAM profile regardless of
+   the driver issue; encode bursts remain exposed to it.
+2. **`MUSICVISION_FLUX_STRATEGY` env override** in `_select_strategy()` —
+   `bf16_offload` runs imaging entirely on the primary GPU
+   (model-cpu-offload, cuda:1 uninvolved). Verified 3/3 consecutive
+   1024×576 IPA generations during the incident, seed-stable. Use this
+   while cuda:1 is misbehaving.
+
+`tests/test_ip_adapter.py` split-placement test updated to the v2 contract.
