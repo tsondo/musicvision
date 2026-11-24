@@ -286,3 +286,47 @@ export interface SceneBoundary {
   type: SceneType;
   lyrics: string;
 }
+
+// --- Jobs (AGENT_INTERFACE_SPEC.md §3) — mirrors models.Job ---
+
+export type JobKind =
+  | "intake"
+  | "analyze"
+  | "generate_descriptions"
+  | "generate_images"
+  | "generate_video_descriptions"
+  | "generate_videos"
+  | "upscale"
+  | "assemble"
+  | "regenerate_image"
+  | "regenerate_video"
+  | "upscale_scene";
+
+export type JobState = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+
+export interface JobProgress {
+  current: number;
+  total: number; // 0 = indeterminate
+  unit: string;
+  message: string;
+  scene_id: string | null;
+}
+
+export interface JobError {
+  code: string;
+  message: string;
+  detail: Record<string, unknown>;
+}
+
+export interface Job {
+  id: string;
+  kind: JobKind;
+  params: Record<string, unknown>;
+  state: JobState;
+  progress: JobProgress;
+  error: JobError | null;
+  result: Record<string, unknown>;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}

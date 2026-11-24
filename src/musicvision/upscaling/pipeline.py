@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from musicvision.models import Scene, SceneList, UpscalerConfig, UpscalerType, VideoEngineType
+from musicvision.models import JobProgress, Scene, SceneList, UpscalerConfig, UpscalerType, VideoEngineType
 from musicvision.upscaling.base import UpscaleInput
 from musicvision.upscaling.factory import create_upscale_engine
 from musicvision.utils.paths import ProjectPaths
@@ -31,7 +32,9 @@ def upscale_clips(
     render_mode: str = "final",
     scene_ids: list[str] | None = None,
     device_map: DeviceMap | None = None,
-) -> dict[str, list[str]]:
+    on_progress: Callable[[JobProgress], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+) -> dict:
     """Upscale video clips for scenes.
 
     Args:
@@ -42,9 +45,15 @@ def upscale_clips(
         render_mode: "preview" or "final" — affects upscaler selection.
         scene_ids: If provided, only upscale these scenes.
         device_map: GPU device map (needed for LTX Spatial).
+        on_progress: Optional per-scene progress callback (job model). Absent
+            = behavior unchanged (CLI).
+        should_cancel: Optional cooperative-cancel check, polled between
+            scenes (never mid-upscale). When it returns True the remaining
+            scenes are skipped and the result reports ``cancelled: True``.
 
     Returns:
-        Dict with "upscaled" and "failed" scene ID lists.
+        Dict with "upscaled" and "failed" scene ID lists (plus
+        ``"cancelled": True`` if stopped early via ``should_cancel``).
     """
     target_w, target_h = upscaler_config.target_width_height()
 
@@ -90,14 +99,25 @@ def upscale_clips(
 
     upscaled: list[str] = []
     failed: list[str] = []
+    total = sum(len(g) for g in engine_groups.values())
+    done = 0
+
+    def _report(scene_id: str | None, message: str) -> None:
+        if on_progress is not None:
+            on_progress(JobProgress(current=done, total=total, unit="scenes", message=message, scene_id=scene_id))
 
     for upscaler_type, group_scenes in engine_groups.items():
+        if should_cancel is not None and should_cancel():
+            break
         log.info("Upscaling %d scene(s) with %s", len(group_scenes), upscaler_type.value)
 
         engine = create_upscale_engine(upscaler_type, upscaler_config, device_map=device_map)
         engine.load()
         try:
             for scene in group_scenes:
+                if should_cancel is not None and should_cancel():
+                    break
+                _report(scene.id, f"Upscaling {scene.id} with {upscaler_type.value}")
                 try:
                     _upscale_scene(scene, engine, paths, target_w, target_h)
                     # Update resolution metadata from the upscaled clip
@@ -108,10 +128,15 @@ def upscale_clips(
                 except Exception:
                     log.exception("Failed to upscale %s", scene.id)
                     failed.append(scene.id)
+                done += 1
+                _report(scene.id, f"Upscaled {done}/{total}")
         finally:
             engine.unload()
 
-    return {"upscaled": upscaled, "failed": failed}
+    result: dict = {"upscaled": upscaled, "failed": failed}
+    if should_cancel is not None and should_cancel():
+        result["cancelled"] = True
+    return result
 
 
 def _has_video(scene: Scene) -> bool:

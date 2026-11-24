@@ -1,7 +1,21 @@
 import { useRef, useState } from "react";
 import type { StepStatus } from "../hooks/usePipeline";
-import type { AssembleResult, PipelineStage, RenderMode, TargetResolution } from "../api/types";
+import type { AssembleResult, Job, JobKind, PipelineStage, RenderMode, TargetResolution } from "../api/types";
 import FileBrowser from "./FileBrowser";
+
+const JOB_LABELS: Record<JobKind, string> = {
+  intake: "Intake",
+  analyze: "Analyzing audio",
+  generate_descriptions: "Writing image prompts",
+  generate_images: "Generating images",
+  generate_video_descriptions: "Writing motion prompts",
+  generate_videos: "Rendering videos",
+  upscale: "Upscaling",
+  assemble: "Assembling",
+  regenerate_image: "Regenerating image",
+  regenerate_video: "Regenerating video",
+  upscale_scene: "Upscaling scene",
+};
 
 function progressStyle(done: number, total: number): React.CSSProperties {
   if (total === 0) return {};
@@ -41,6 +55,8 @@ interface Props {
   queueTotal: number;
   batchDone: number;
   batchTotal: number;
+  activeJob: Job | null;
+  onCancelJob: () => void;
   onUploadAudio: (file: File) => void;
   onUploadLyrics: (file: File) => void;
   onImportAudio: (path: string) => void;
@@ -106,6 +122,8 @@ export default function PipelineBar({
   queueTotal,
   batchDone,
   batchTotal,
+  activeJob,
+  onCancelJob,
   onUploadAudio,
   onUploadLyrics,
   onImportAudio,
@@ -307,10 +325,12 @@ export default function PipelineBar({
             className="btn-sm"
             disabled={sceneCount === 0 || isRunning || imagesRemaining === 0 || descriptionsRemaining > 0}
             onClick={() => onGenerateImages()}
-            style={imagesStatus === "running" ? progressStyle(imagesWithCount, sceneCount) : undefined}
+            style={imagesStatus === "running"
+              ? progressStyle(batchTotal > 0 ? batchDone : imagesWithCount, batchTotal > 0 ? batchTotal : sceneCount)
+              : undefined}
           >
             {imagesStatus === "running"
-              ? `Generating ${imagesWithCount}/${sceneCount}...`
+              ? `Generating ${batchTotal > 0 ? batchDone : imagesWithCount}/${batchTotal > 0 ? batchTotal : sceneCount}...`
               : imagesRemaining > 0
                 ? `Generate ${imagesRemaining} Image${imagesRemaining > 1 ? "s" : ""}`
                 : "All Done"}
@@ -462,6 +482,27 @@ export default function PipelineBar({
           </button>
         </div>
       </div>
+
+      {activeJob && (
+        <div className="job-strip" role="status">
+          <span className="job-strip-kind">{JOB_LABELS[activeJob.kind] ?? activeJob.kind}</span>
+          <span className="job-strip-count">
+            {activeJob.state === "queued"
+              ? "queued"
+              : activeJob.progress.total > 0
+                ? `${activeJob.progress.current}/${activeJob.progress.total}`
+                : "running"}
+          </span>
+          <span className="job-strip-message">{activeJob.progress.message}</span>
+          <button
+            className="btn-sm"
+            onClick={onCancelJob}
+            title="Stops after the current scene finishes; finished scenes are kept"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
 
       {queueActive && queueTotal > 0 && (
         <div className="queue-progress">

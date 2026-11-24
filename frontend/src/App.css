@@ -326,6 +326,37 @@ body {
   accent-color: var(--accent);
 }
 
+.job-strip {
+  width: 100%;
+  margin-top: 8px;
+  padding: 4px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.job-strip-kind {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.job-strip-count {
+  color: var(--accent);
+}
+
+.job-strip-message {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .pipeline-error {
   width: 100%;
   margin-top: 8px;

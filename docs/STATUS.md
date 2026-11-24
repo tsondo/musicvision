@@ -40,7 +40,8 @@ The pipeline is designed around AI-generated music from **AceStep** (a text-cond
 | End-to-end storyboard test | ✅ Passed (2026-03-01) — 5 scenes, 320p preview |
 | Frontend (React or Gradio) | ✅ React storyboard (scene review, approval, regeneration) |
 | Frame-accurate alignment system | ✅ Complete |
-| Progress/status feedback (SSE/WebSocket) | ❌ Not started |
+| Job model (submit + poll, per-scene progress, cancel) | ✅ All long-running endpoints are jobs (AGENT_INTERFACE_SPEC P1–P3) |
+| Progress push (SSE/WebSocket) | ❌ Not started — polling `GET /api/jobs/{id}` instead |
 
 | Asset Library (ASSET_LIBRARY_SPEC.md) | Status |
 |----------------|--------|

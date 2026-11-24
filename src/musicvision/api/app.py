@@ -24,9 +24,9 @@ from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
-from musicvision.jobs import JobManager, JobManagerError
+from musicvision.jobs import JobContext, JobFailureError, JobManager, JobManagerError
 from musicvision.models import (
     ApprovalStatus,
     HumoConfig,
@@ -88,6 +88,7 @@ _ERROR_HTTP_STATUS = {
     "job_not_found": 404,
     "job_already_active": 409,
     "job_not_cancellable": 409,
+    "scene_not_found": 404,
 }
 
 
@@ -246,8 +247,9 @@ async def close_project():
 # Jobs (AGENT_INTERFACE_SPEC.md §4.1)
 #
 # Long-running pipeline operations run as jobs: submit -> id -> poll.
-# Handlers are registered per JobKind at P2 (endpoint migration); submitting
-# a kind with no registered handler returns invalid_job_params.
+# The /api/pipeline/* and per-scene regenerate/upscale endpoints are thin
+# wrappers over the same submit path; handlers are registered at the bottom
+# of this module (register_job_handlers).
 # ---------------------------------------------------------------------------
 
 class SubmitJobRequest(BaseModel):
@@ -255,15 +257,66 @@ class SubmitJobRequest(BaseModel):
     params: dict = {}
 
 
+def _submit_job(kind: JobKind, params: BaseModel) -> Job:
+    """Validate-and-queue shared by every job-shaped endpoint.
+
+    Only checks that cannot be invalidated by an earlier queued job run here
+    (project open, scene ids exist). Prerequisites such as reference images
+    are checked by the handler when the job runs, so an agent can queue
+    generate_images and generate_videos back to back."""
+    if _project is None:
+        raise StructuredApiError("project_not_open", "No project loaded. Create or open a project first.")
+    data = params.model_dump(mode="json")
+    if data.get("scene_id"):
+        data["scene_ids"] = [data["scene_id"]]  # scope for the duplicate-job guard
+    missing = [sid for sid in data.get("scene_ids") or [] if _project.scenes.get_scene(sid) is None]
+    if missing:
+        raise StructuredApiError(
+            "scene_not_found", f"Scene(s) not found: {', '.join(missing)}", {"scene_ids": missing},
+        )
+    return job_manager.submit(kind, data)
+
+
+def _job_project() -> ProjectService:
+    """get_project() for handlers: fails the job with a typed error instead of HTTP 400."""
+    if _project is None:
+        raise JobFailureError("project_not_open", "No project loaded.")
+    return _project
+
+
+def _job_scenes(proj: ProjectService, scene_ids: list[str]) -> list[Scene]:
+    """Resolve scene ids inside a handler (empty = all scenes, in order)."""
+    if not scene_ids:
+        return list(proj.scenes.scenes)
+    missing = [sid for sid in scene_ids if proj.scenes.get_scene(sid) is None]
+    if missing:
+        raise JobFailureError("scene_not_found", f"Scene(s) not found: {', '.join(missing)}", {"scene_ids": missing})
+    return [proj.scenes.get_scene(sid) for sid in scene_ids]
+
+
 @app.post("/api/jobs", status_code=202)
 async def submit_job(req: SubmitJobRequest) -> Job:
     """Submit a long-running pipeline job (generate images/videos, upscale,
     assemble, ...). Returns 202 with the queued Job; poll GET /api/jobs/{id}
-    for progress. Rejects with job_already_active if a job of the same kind
-    is already queued/running for an overlapping scene scope."""
+    for progress. ``params`` are validated against the kind's schema (the
+    same body the matching /api/pipeline/* or per-scene endpoint takes; the
+    per-scene kinds also need ``scene_id``). Rejects with job_already_active
+    if a job of the same kind is already queued/running for an overlapping
+    scene scope."""
     if _project is None:
         raise StructuredApiError("project_not_open", "No project loaded. Create or open a project first.")
-    return job_manager.submit(req.kind, req.params)
+    model = _JOB_PARAM_MODELS[req.kind]
+    try:
+        params = model.model_validate(req.params)
+    except ValidationError as e:
+        import json as _json
+
+        raise StructuredApiError(
+            "invalid_job_params",
+            f"Invalid params for job kind {req.kind.value!r}",
+            {"kind": req.kind.value, "errors": _json.loads(e.json(include_url=False))},
+        )
+    return _submit_job(req.kind, params)
 
 
 @app.get("/api/jobs/{job_id}")
@@ -697,12 +750,27 @@ async def describe_video(scene_id: str):
 # Per-scene regeneration endpoints
 # ---------------------------------------------------------------------------
 
-@app.post("/api/scenes/{scene_id}/regenerate-image")
-async def regenerate_image(scene_id: str, req: RegenerateImageRequest) -> Scene:
-    """Generate or regenerate a single scene's reference image."""
-    # TODO(job-model): a single FLUX generation incl. engine load/unload takes
-    # ~1-3 min; convert to job-shaped (return an id, poll for status) per the
-    # API Conventions block in CLAUDE.md.
+class RegenerateImageJobParams(RegenerateImageRequest):
+    """Params for the regenerate_image job kind (single scene)."""
+    scene_id: str
+
+
+class RegenerateVideoJobParams(RegenerateVideoRequest):
+    """Params for the regenerate_video job kind (single scene)."""
+    scene_id: str
+
+
+@app.post("/api/scenes/{scene_id}/regenerate-image", status_code=202)
+async def regenerate_image(scene_id: str, req: RegenerateImageRequest) -> Job:
+    """Generate or regenerate one scene's reference image (FLUX / Z-Image).
+
+    Runs as a job: returns 202 with the queued Job. Poll GET /api/jobs/{id};
+    on success ``result.scene`` is the updated Scene (image_status reset to
+    pending). Writes a missing image prompt via the LLM first."""
+    return _submit_job(JobKind.REGENERATE_IMAGE, RegenerateImageJobParams(scene_id=scene_id, **req.model_dump()))
+
+
+def _job_regenerate_image(params: dict, ctx: JobContext) -> dict:
     from musicvision.assets.consistency import (
         resolve_scene_conditioning,
         should_enable_ip_adapter,
@@ -711,10 +779,10 @@ async def regenerate_image(scene_id: str, req: RegenerateImageRequest) -> Scene:
     from musicvision.imaging.prompt_generator import generate_image_prompt
     from musicvision.utils.gpu import detect_devices
 
-    proj = get_project()
-    scene = proj.scenes.get_scene(scene_id)
-    if not scene:
-        raise HTTPException(status_code=404, detail=f"Scene {scene_id} not found")
+    req = RegenerateImageJobParams.model_validate(params)
+    proj = _job_project()
+    scene = _job_scenes(proj, [req.scene_id])[0]
+    ctx.report(0, 1, message=f"Preparing {scene.id}", scene_id=scene.id)
 
     # Auto-generate prompt if missing
     prompt = scene.effective_image_prompt
@@ -722,7 +790,9 @@ async def regenerate_image(scene_id: str, req: RegenerateImageRequest) -> Scene:
         scene.image_prompt = generate_image_prompt(scene, proj.config)
         prompt = scene.effective_image_prompt
         if not prompt:
-            raise HTTPException(status_code=400, detail="Failed to generate image prompt.")
+            raise JobFailureError(
+                "prompt_generation_failed", "Failed to generate image prompt.", {"scene_id": scene.id},
+            )
 
     # Build config — override model if provided
     config = proj.config.image_gen.model_copy()
@@ -742,40 +812,47 @@ async def regenerate_image(scene_id: str, req: RegenerateImageRequest) -> Scene:
     if should_enable_ip_adapter(ss, config.model):
         config.ip_adapter.enabled = True
 
-    import asyncio
-
-    def _run() -> Scene:
-        device_map = detect_devices()
-        engine = create_engine(config, device_map)
-        engine.load()
-        try:
-            output_path = proj.paths.image_path(scene.id)
-            seed = req.seed if req.seed >= 0 else None
-            engine.generate(
-                prompt=prompt,
-                width=width,
-                height=height,
-                lora_path=cond.lora_path,
-                lora_weight=cond.lora_weight,
-                output_path=output_path,
-                seed=seed,
-                ip_adapter_images=cond.ip_adapter_images if cond.has_ip_adapter else None,
-                ip_adapter_scales=cond.ip_adapter_scales if cond.has_ip_adapter else None,
-                ip_adapter_embeddings=cond.ip_adapter_embeddings if cond.ip_adapter_embeddings else None,
-            )
-            scene.reference_image = f"images/{scene.id}.png"
-            scene.image_status = ApprovalStatus.PENDING
-        finally:
-            engine.unload()
-        proj.save_scenes()
-        return scene
-
-    return await asyncio.to_thread(_run)
+    ctx.raise_if_cancelled()
+    ctx.report(0, 1, message=f"Generating image for {scene.id}", scene_id=scene.id)
+    device_map = detect_devices()
+    engine = create_engine(config, device_map)
+    engine.load()
+    try:
+        output_path = proj.paths.image_path(scene.id)
+        seed = req.seed if req.seed >= 0 else None
+        engine.generate(
+            prompt=prompt,
+            width=width,
+            height=height,
+            lora_path=cond.lora_path,
+            lora_weight=cond.lora_weight,
+            output_path=output_path,
+            seed=seed,
+            ip_adapter_images=cond.ip_adapter_images if cond.has_ip_adapter else None,
+            ip_adapter_scales=cond.ip_adapter_scales if cond.has_ip_adapter else None,
+            ip_adapter_embeddings=cond.ip_adapter_embeddings if cond.ip_adapter_embeddings else None,
+        )
+        scene.reference_image = f"images/{scene.id}.png"
+        scene.image_status = ApprovalStatus.PENDING
+    finally:
+        engine.unload()
+    proj.save_scenes()
+    ctx.report(1, 1, message=f"Generated image for {scene.id}", scene_id=scene.id)
+    return {"scene": scene.model_dump(mode="json")}
 
 
-@app.post("/api/scenes/{scene_id}/regenerate-video")
-async def regenerate_video(scene_id: str, req: RegenerateVideoRequest) -> Scene:
-    """Generate or regenerate a single scene's video clip at preview quality."""
+@app.post("/api/scenes/{scene_id}/regenerate-video", status_code=202)
+async def regenerate_video(scene_id: str, req: RegenerateVideoRequest) -> Job:
+    """Generate or regenerate one scene's video clip (HuMo / LTX-Video 2).
+
+    Runs as a job: returns 202 with the queued Job. Poll GET /api/jobs/{id};
+    on success ``result.scene`` is the updated Scene (video_status reset to
+    pending). The scene needs a reference image; that is checked when the
+    job runs, so it can be queued right behind a regenerate_image job."""
+    return _submit_job(JobKind.REGENERATE_VIDEO, RegenerateVideoJobParams(scene_id=scene_id, **req.model_dump()))
+
+
+def _job_regenerate_video(params: dict, ctx: JobContext) -> dict:
     from musicvision.engine_registry import (
         frames_to_seconds,
         get_constraints,
@@ -786,10 +863,10 @@ async def regenerate_video(scene_id: str, req: RegenerateVideoRequest) -> Scene:
     from musicvision.video import create_video_engine
     from musicvision.video.prompt_generator import generate_video_prompt
 
-    proj = get_project()
-    scene = proj.scenes.get_scene(scene_id)
-    if not scene:
-        raise HTTPException(status_code=404, detail=f"Scene {scene_id} not found")
+    req = RegenerateVideoJobParams.model_validate(params)
+    proj = _job_project()
+    scene = _job_scenes(proj, [req.scene_id])[0]
+    ctx.report(0, 1, message=f"Preparing {scene.id}", scene_id=scene.id)
 
     # Auto-generate prompt if missing
     prompt = scene.effective_video_prompt
@@ -797,14 +874,20 @@ async def regenerate_video(scene_id: str, req: RegenerateVideoRequest) -> Scene:
         scene.video_prompt = generate_video_prompt(scene, proj.config)
         prompt = scene.effective_video_prompt
         if not prompt:
-            raise HTTPException(status_code=400, detail="Failed to generate video prompt.")
+            raise JobFailureError(
+                "prompt_generation_failed", "Failed to generate video prompt.", {"scene_id": scene.id},
+            )
     if not scene.reference_image:
-        raise HTTPException(status_code=400, detail="Scene has no reference image. Generate one first.")
+        raise JobFailureError(
+            "missing_prerequisite",
+            "Scene has no reference image. Generate one first.",
+            {"scene_id": scene.id, "missing": "reference_image"},
+        )
 
     # Resolve audio (silence if lip_sync is off)
     audio_file = proj.config.song.audio_file
     if not audio_file:
-        raise HTTPException(status_code=400, detail="No audio file in project config.")
+        raise JobFailureError("missing_prerequisite", "No audio file in project config.", {"missing": "audio_file"})
     audio_path = proj.resolve_path(audio_file)
     segment = _resolve_scene_audio(proj, scene, audio_path)
 
@@ -816,9 +899,9 @@ async def regenerate_video(scene_id: str, req: RegenerateVideoRequest) -> Scene:
     plan_subclips([scene], constraints, proj.paths.segments_dir, proj.paths.sub_segments_dir)
 
     # Apply render mode
-    if engine_type == VideoEngineType.LTX_VIDEO:
-        from musicvision.utils.gpu import detect_devices
+    from musicvision.utils.gpu import detect_devices
 
+    if engine_type == VideoEngineType.LTX_VIDEO:
         config = proj.config.ltx_video.model_copy()
         if req.render_mode == "preview":
             config.width = 480
@@ -828,16 +911,10 @@ async def regenerate_video(scene_id: str, req: RegenerateVideoRequest) -> Scene:
             config.width = 768
             config.height = 512
             config.num_inference_steps = 40
-        device_map = detect_devices()
-        engine = create_video_engine(config, device_map=device_map, engine_type=engine_type)
     else:
-        from musicvision.utils.gpu import detect_devices
-
         config = proj.config.humo.model_copy()
         if scene.sigma_shift is not None:
             config.shift = scene.sigma_shift
-        device_map = detect_devices()
-        engine = create_video_engine(config, device_map=device_map, engine_type=engine_type)
 
     # Resolve seed: use locked seed if approved, use request seed if specified, else random
     import random
@@ -858,104 +935,118 @@ async def regenerate_video(scene_id: str, req: RegenerateVideoRequest) -> Scene:
             for p in scene.generation_audio_segments
         ]
 
-    import asyncio
+    ctx.raise_if_cancelled()
+    ctx.report(0, 1, message=f"Rendering {scene.id} ({engine_type.value})", scene_id=scene.id)
+    device_map = detect_devices()
+    engine = create_video_engine(config, device_map=device_map, engine_type=engine_type)
+    engine.load()
+    try:
+        ref_image = proj.resolve_path(scene.reference_image)
+        results = engine.generate_scene(
+            text_prompt=prompt,
+            reference_image=ref_image,
+            audio_segment=segment,
+            output_dir=proj.paths.clips_dir,
+            scene_id=scene.id,
+            duration=scene.duration,
+            subclip_frame_counts=scene.subclip_frame_counts,
+            subclip_audio_paths=subclip_audio,
+        )
 
-    def _run() -> Scene:
-        engine.load()
-        try:
-            ref_image = proj.resolve_path(scene.reference_image)
-            results = engine.generate_scene(
-                text_prompt=prompt,
-                reference_image=ref_image,
-                audio_segment=segment,
-                output_dir=proj.paths.clips_dir,
-                scene_id=scene.id,
-                duration=scene.duration,
-                subclip_frame_counts=scene.subclip_frame_counts,
-                subclip_audio_paths=subclip_audio,
+        if len(results) > 1:
+            scene.sub_clips = []
+            suffixes = sub_clip_suffixes(len(results))
+            frame_counts = scene.subclip_frame_counts or []
+            cursor = 0
+            for j, (r, suffix) in enumerate(zip(results, suffixes)):
+                fc = frame_counts[j] if j < len(frame_counts) else None
+                sub_start = scene.time_start + frames_to_seconds(cursor, constraints.fps)
+                cursor += fc or 0
+                sub_end = scene.time_start + frames_to_seconds(cursor, constraints.fps)
+                scene.sub_clips.append(SubClip(
+                    id=f"{scene.id}_{suffix}",
+                    time_start=sub_start,
+                    time_end=min(sub_end, scene.time_end),
+                    video_prompt=prompt,
+                    video_clip=str(r.video_path.relative_to(proj.paths.root)),
+                    frame_count=fc,
+                ))
+            from musicvision.utils.audio import concat_videos
+
+            sub_paths = [r.video_path for r in results]
+            joined = proj.paths.clips_dir / f"{scene.id}_joined.mp4"
+            concat_videos(sub_paths, joined)
+            scene.video_clip = str(joined.relative_to(proj.paths.root))
+        else:
+            scene.video_clip = f"clips/{scene.id}.mp4"
+            scene.sub_clips = []
+
+        # Persist LTX-2 generated audio path (single-clip only —
+        # scenes with sub-clips don't support generated audio mixing)
+        if len(results) == 1 and results[0].generated_audio_path:
+            gap = results[0].generated_audio_path
+            scene.generated_audio = str(gap.relative_to(proj.paths.root))
+            log.info("Generated audio persisted: %s", scene.generated_audio)
+        elif len(results) > 1 and any(r.generated_audio_path for r in results):
+            log.info(
+                "Scene %s split into %d sub-clips — generated audio not supported, using song only",
+                scene.id, len(results),
             )
+            scene.generated_audio = None
+            from musicvision.models import SceneAudioMode
+            scene.audio_mode = SceneAudioMode.SONG_ONLY
 
-            if len(results) > 1:
-                scene.sub_clips = []
-                suffixes = sub_clip_suffixes(len(results))
-                frame_counts = scene.subclip_frame_counts or []
-                cursor = 0
-                for j, (r, suffix) in enumerate(zip(results, suffixes)):
-                    fc = frame_counts[j] if j < len(frame_counts) else None
-                    sub_start = scene.time_start + frames_to_seconds(cursor, constraints.fps)
-                    cursor += fc or 0
-                    sub_end = scene.time_start + frames_to_seconds(cursor, constraints.fps)
-                    scene.sub_clips.append(SubClip(
-                        id=f"{scene.id}_{suffix}",
-                        time_start=sub_start,
-                        time_end=min(sub_end, scene.time_end),
-                        video_prompt=prompt,
-                        video_clip=str(r.video_path.relative_to(proj.paths.root)),
-                        frame_count=fc,
-                    ))
-                from musicvision.utils.audio import concat_videos
+        scene.video_status = ApprovalStatus.PENDING
+        from musicvision.utils.video import update_scene_resolution
+        update_scene_resolution(scene, proj.paths.root)
+    finally:
+        engine.unload()
 
-                sub_paths = [r.video_path for r in results]
-                joined = proj.paths.clips_dir / f"{scene.id}_joined.mp4"
-                concat_videos(sub_paths, joined)
-                scene.video_clip = str(joined.relative_to(proj.paths.root))
-            else:
-                scene.video_clip = f"clips/{scene.id}.mp4"
-                scene.sub_clips = []
-
-            # Persist LTX-2 generated audio path (single-clip only —
-            # scenes with sub-clips don't support generated audio mixing)
-            if len(results) == 1 and results[0].generated_audio_path:
-                gap = results[0].generated_audio_path
-                scene.generated_audio = str(gap.relative_to(proj.paths.root))
-                log.info("Generated audio persisted: %s", scene.generated_audio)
-            elif len(results) > 1 and any(r.generated_audio_path for r in results):
-                log.info(
-                    "Scene %s split into %d sub-clips — generated audio not supported, using song only",
-                    scene.id, len(results),
-                )
-                scene.generated_audio = None
-                from musicvision.models import SceneAudioMode
-                scene.audio_mode = SceneAudioMode.SONG_ONLY
-
-            scene.video_status = ApprovalStatus.PENDING
-            from musicvision.utils.video import update_scene_resolution
-            update_scene_resolution(scene, proj.paths.root)
-        finally:
-            engine.unload()
-
-        proj.save_scenes()
-        return scene
-
-    return await asyncio.to_thread(_run)
+    proj.save_scenes()
+    ctx.report(1, 1, message=f"Rendered {scene.id}", scene_id=scene.id)
+    return {"scene": scene.model_dump(mode="json")}
 
 
 # ---------------------------------------------------------------------------
 # Pipeline stage endpoints (stubs — will call into engine modules)
 # ---------------------------------------------------------------------------
 
-@app.post("/api/pipeline/analyze")
+class AnalyzeParams(BaseModel):
+    """Params for the analyze job kind."""
+    skip_transcription: bool = False
+    use_vocal_separation: bool = True
+
+
+@app.post("/api/pipeline/analyze", status_code=202)
 async def analyze_audio(
     skip_transcription: bool = False,
     use_vocal_separation: bool = True,
-):
-    """Phase 1: Analyze audio (BPM, Whisper, demucs). No scene boundaries."""
+) -> Job:
+    """Phase 1: Analyze audio (BPM, Whisper, vocal separation). No scene boundaries.
+
+    Runs as a job: returns 202 with the queued Job. Poll GET /api/jobs/{id};
+    on success ``result`` is the AnalysisResult (same shape as GET /api/analysis)."""
+    return _submit_job(
+        JobKind.ANALYZE,
+        AnalyzeParams(skip_transcription=skip_transcription, use_vocal_separation=use_vocal_separation),
+    )
+
+
+def _job_analyze(params: dict, ctx: JobContext) -> dict:
     from musicvision.intake.pipeline import run_analyze as _run_analyze
     from musicvision.utils.gpu import detect_devices
 
-    proj = get_project()
-
-    def _run() -> dict:
-        device_map = detect_devices()
-        result = _run_analyze(
-            project=proj,
-            device_map=device_map,
-            skip_transcription=skip_transcription,
-            use_vocal_separation=use_vocal_separation,
-        )
-        return result.model_dump(mode="json")
-
-    return await asyncio.to_thread(_run)
+    p = AnalyzeParams.model_validate(params)
+    proj = _job_project()
+    ctx.report(0, 0, unit="steps", message="Analyzing audio (BPM, vocals, transcription)")
+    device_map = detect_devices()
+    result = _run_analyze(
+        project=proj,
+        device_map=device_map,
+        skip_transcription=p.skip_transcription,
+        use_vocal_separation=p.use_vocal_separation,
+    )
+    return result.model_dump(mode="json")
 
 
 class LyricsAssignmentItem(BaseModel):
@@ -1044,103 +1135,139 @@ async def get_analysis():
     }
 
 
-@app.post("/api/pipeline/intake")
+class IntakeParams(BaseModel):
+    """Params for the intake job kind."""
+    use_llm: bool = True
+    skip_transcription: bool = False
+    use_vocal_separation: bool = True
+
+
+@app.post("/api/pipeline/intake", status_code=202)
 async def run_intake(
     use_llm: bool = True,
     skip_transcription: bool = False,
     use_vocal_separation: bool = True,
-):
-    """Stage 1: Full intake (analyze + segment in one call). CLI backward-compat."""
+) -> Job:
+    """Stage 1: Full intake (analyze + segment in one call). CLI backward-compat.
+
+    Runs as a job: returns 202 with the queued Job; ``result.scene_count`` on success."""
+    return _submit_job(
+        JobKind.INTAKE,
+        IntakeParams(
+            use_llm=use_llm,
+            skip_transcription=skip_transcription,
+            use_vocal_separation=use_vocal_separation,
+        ),
+    )
+
+
+def _job_intake(params: dict, ctx: JobContext) -> dict:
     from musicvision.intake.pipeline import run_intake as _run_intake
     from musicvision.utils.gpu import detect_devices
 
-    proj = get_project()
-
-    def _run() -> dict:
-        device_map = detect_devices()
-        scene_list = _run_intake(
-            project=proj,
-            use_llm_segmentation=use_llm,
-            device_map=device_map,
-            skip_transcription=skip_transcription,
-            use_vocal_separation=use_vocal_separation,
-        )
-        return {"status": "complete", "scene_count": len(scene_list.scenes)}
-
-    return await asyncio.to_thread(_run)
+    p = IntakeParams.model_validate(params)
+    proj = _job_project()
+    ctx.report(0, 0, unit="steps", message="Running intake (analysis + segmentation)")
+    device_map = detect_devices()
+    scene_list = _run_intake(
+        project=proj,
+        use_llm_segmentation=p.use_llm,
+        device_map=device_map,
+        skip_transcription=p.skip_transcription,
+        use_vocal_separation=p.use_vocal_separation,
+    )
+    return {"status": "complete", "scene_count": len(scene_list.scenes)}
 
 
 class GenerateDescriptionsRequest(BaseModel):
     scene_ids: list[str] = []
 
 
-@app.post("/api/pipeline/generate-descriptions")
-async def generate_descriptions(req: GenerateDescriptionsRequest):
-    """Generate image prompt descriptions for scenes via LLM (no GPU)."""
+def _run_prompt_batch(
+    need_prompt: list[Scene],
+    ctx: JobContext,
+    label: str,
+    batch_fn,
+    single_fn,
+    assign,
+) -> dict:
+    """Shared LLM prompt loop for image and motion descriptions.
+
+    Tries one batch call first (coherent prompts across scenes), falls back
+    to one call per scene. Progress is per scene; cancel is checked between
+    scenes in the fallback path."""
+    proj = _job_project()
+    total = len(need_prompt)
+    generated: list[str] = []
+    failed: list[dict] = []
+    if not need_prompt:
+        return {"status": "complete", "generated": [], "failed": [], "total": 0}
+
+    ctx.report(0, total, message=f"Writing {total} {label} prompt(s)")
+    try:
+        prompts = batch_fn(need_prompt, proj.config)
+        for scene, prompt in zip(need_prompt, prompts):
+            assign(scene, prompt)
+            generated.append(scene.id)
+        proj.save_scenes()
+        ctx.report(total, total, message=f"Wrote {total} {label} prompt(s)")
+    except Exception as batch_exc:
+        log.warning("Batch %s prompt generation failed: %s — falling back to individual", label, batch_exc)
+        for i, scene in enumerate(need_prompt):
+            ctx.raise_if_cancelled()
+            ctx.report(i, total, message=f"Writing {label} prompt for {scene.id}", scene_id=scene.id)
+            try:
+                assign(scene, single_fn(scene, proj.config))
+                generated.append(scene.id)
+                proj.save_scenes()
+            except Exception as exc:
+                log.error("%s prompt generation failed for %s: %s", label, scene.id, exc)
+                failed.append({"scene_id": scene.id, "error": str(exc)})
+            ctx.report(i + 1, total, message=f"Wrote {label} prompt for {scene.id}", scene_id=scene.id)
+
+    return {"status": "complete", "generated": generated, "failed": failed, "total": total}
+
+
+@app.post("/api/pipeline/generate-descriptions", status_code=202)
+async def generate_descriptions(req: GenerateDescriptionsRequest) -> Job:
+    """Write image prompts via the LLM for scenes that don't have one (no GPU).
+
+    Runs as a job: returns 202 with the queued Job. ``result`` on success:
+    {generated: [scene ids], failed: [{scene_id, error}], total}."""
+    return _submit_job(JobKind.GENERATE_DESCRIPTIONS, req)
+
+
+def _job_generate_descriptions(params: dict, ctx: JobContext) -> dict:
     from musicvision.imaging.prompt_generator import (
         generate_image_prompt,
         generate_image_prompts_batch,
     )
 
-    proj = get_project()
-
-    # Resolve target scenes
-    if req.scene_ids:
-        scenes = []
-        for sid in req.scene_ids:
-            scene = proj.scenes.get_scene(sid)
-            if not scene:
-                raise HTTPException(status_code=404, detail=f"Scene {sid} not found")
-            scenes.append(scene)
-    else:
-        scenes = proj.scenes.scenes
-
-    # Only scenes that still need a prompt
+    req = GenerateDescriptionsRequest.model_validate(params)
+    proj = _job_project()
+    scenes = _job_scenes(proj, req.scene_ids)
     need_prompt = [s for s in scenes if not s.effective_image_prompt]
 
-    if not need_prompt:
-        return {"status": "complete", "generated": [], "failed": [], "total": 0}
+    def assign(scene: Scene, prompt: str) -> None:
+        scene.image_prompt = prompt
 
-    import asyncio
-
-    def _run() -> dict:
-        generated: list[str] = []
-        failed: list[dict] = []
-
-        # Try batch first for coherence, fall back to individual
-        try:
-            prompts = generate_image_prompts_batch(need_prompt, proj.config)
-            for scene, prompt in zip(need_prompt, prompts):
-                scene.image_prompt = prompt
-                generated.append(scene.id)
-            proj.save_scenes()
-        except Exception as batch_exc:
-            log.warning("Batch prompt generation failed: %s — falling back to individual", batch_exc)
-            for scene in need_prompt:
-                try:
-                    scene.image_prompt = generate_image_prompt(scene, proj.config)
-                    generated.append(scene.id)
-                    proj.save_scenes()
-                except Exception as exc:
-                    log.error("Prompt generation failed for %s: %s", scene.id, exc)
-                    failed.append({"scene_id": scene.id, "error": str(exc)})
-
-        return {
-            "status": "complete",
-            "generated": generated,
-            "failed": failed,
-            "total": len(need_prompt),
-        }
-
-    return await asyncio.to_thread(_run)
+    return _run_prompt_batch(
+        need_prompt, ctx, "image", generate_image_prompts_batch, generate_image_prompt, assign,
+    )
 
 
-@app.post("/api/pipeline/generate-images")
-async def generate_images(req: GenerateImagesRequest):
-    """Generate reference images for scenes that have prompts."""
-    # TODO(job-model): synchronous multi-scene GPU generation can run for
-    # minutes-to-hours; convert to job-shaped (return an id, poll for status)
-    # per the API Conventions block in CLAUDE.md.
+@app.post("/api/pipeline/generate-images", status_code=202)
+async def generate_images(req: GenerateImagesRequest) -> Job:
+    """Generate reference images for scenes (all scenes when scene_ids is empty).
+
+    Runs as a job: returns 202 with the queued Job. Progress is per scene
+    (``progress.current/total``, ``progress.scene_id``); cancel takes effect
+    between scenes. ``result`` on success: {generated, failed, total}.
+    ``model`` overrides and persists the project's image model."""
+    return _submit_job(JobKind.GENERATE_IMAGES, req)
+
+
+def _job_generate_images(params: dict, ctx: JobContext) -> dict:
     from musicvision.assets.consistency import (
         conditioning_sort_key,
         resolve_scene_conditioning,
@@ -1150,30 +1277,24 @@ async def generate_images(req: GenerateImagesRequest):
     from musicvision.imaging.prompt_generator import generate_image_prompt
     from musicvision.utils.gpu import detect_devices
 
-    proj = get_project()
+    req = GenerateImagesRequest.model_validate(params)
+    proj = _job_project()
 
     # Apply model override if provided
     if req.model:
         proj.config.image_gen.model = ImageModel(req.model)
         proj.save_config()
 
-    # Resolve target scenes
-    if req.scene_ids:
-        scenes = []
-        for sid in req.scene_ids:
-            scene = proj.scenes.get_scene(sid)
-            if not scene:
-                raise HTTPException(status_code=404, detail=f"Scene {sid} not found")
-            scenes.append(scene)
-    else:
-        scenes = proj.scenes.scenes
-
+    scenes = _job_scenes(proj, req.scene_ids)
     if not scenes:
-        raise HTTPException(status_code=400, detail="No scenes to process")
+        raise JobFailureError("no_scenes_to_process", "No scenes to process")
+    total = len(scenes)
 
     # Auto-generate prompts for any scenes still missing one (backward compat with CLI/per-scene regen)
     for scene in scenes:
         if not scene.effective_image_prompt:
+            ctx.raise_if_cancelled()
+            ctx.report(0, total, message=f"Writing image prompt for {scene.id}", scene_id=scene.id)
             scene.image_prompt = generate_image_prompt(scene, proj.config)
 
     # Resolve style sheet dimensions
@@ -1197,129 +1318,102 @@ async def generate_images(req: GenerateImagesRequest):
     if should_enable_ip_adapter(ss, engine_config.model):
         engine_config.ip_adapter.enabled = True
 
-    # Run generation in a thread so the event loop stays responsive
-    import asyncio
+    ctx.raise_if_cancelled()
+    ctx.report(0, total, message=f"Loading {engine_config.model.value}")
+    device_map = detect_devices()
+    engine = create_engine(engine_config, device_map)
+    engine.load()
 
-    def _run_generation() -> dict:
-        device_map = detect_devices()
-        engine = create_engine(engine_config, device_map)
-        engine.load()
+    generated: list[str] = []
+    failed: list[dict] = []
 
-        generated: list[str] = []
-        failed: list[dict] = []
+    try:
+        # Group by LoRA (minimize fuse/unfuse swaps), then by IP-Adapter
+        # reference set (predictable ordering; IPA needs no load cycles).
+        sorted_scenes = sorted(scenes, key=lambda s: conditioning_sort_key(conds[s.id]))
 
-        try:
-            # Group by LoRA (minimize fuse/unfuse swaps), then by IP-Adapter
-            # reference set (predictable ordering; IPA needs no load cycles).
-            sorted_scenes = sorted(scenes, key=lambda s: conditioning_sort_key(conds[s.id]))
+        for i, scene in enumerate(sorted_scenes):
+            ctx.raise_if_cancelled()  # between scenes only — never mid-denoise
+            ctx.report(i, total, message=f"Generating image for {scene.id}", scene_id=scene.id)
+            try:
+                cond = conds[scene.id]
+                output_path = proj.paths.image_path(scene.id)
+                engine.generate(
+                    prompt=cond.apply_to_prompt(scene.effective_image_prompt),
+                    width=width,
+                    height=height,
+                    lora_path=cond.lora_path,
+                    lora_weight=cond.lora_weight,
+                    output_path=output_path,
+                    ip_adapter_images=cond.ip_adapter_images if cond.has_ip_adapter else None,
+                    ip_adapter_scales=cond.ip_adapter_scales if cond.has_ip_adapter else None,
+                    ip_adapter_embeddings=cond.ip_adapter_embeddings if cond.ip_adapter_embeddings else None,
+                )
+                scene.reference_image = f"images/{scene.id}.png"
+                generated.append(scene.id)
+                proj.save_scenes()
+            except Exception as exc:
+                log.error("Image generation failed for %s: %s", scene.id, exc)
+                failed.append({"scene_id": scene.id, "error": str(exc)})
+            ctx.report(i + 1, total, message=f"Finished {scene.id}", scene_id=scene.id)
+    finally:
+        engine.unload()
 
-            for scene in sorted_scenes:
-                try:
-                    cond = conds[scene.id]
-                    output_path = proj.paths.image_path(scene.id)
-                    engine.generate(
-                        prompt=cond.apply_to_prompt(scene.effective_image_prompt),
-                        width=width,
-                        height=height,
-                        lora_path=cond.lora_path,
-                        lora_weight=cond.lora_weight,
-                        output_path=output_path,
-                        ip_adapter_images=cond.ip_adapter_images if cond.has_ip_adapter else None,
-                        ip_adapter_scales=cond.ip_adapter_scales if cond.has_ip_adapter else None,
-                        ip_adapter_embeddings=cond.ip_adapter_embeddings if cond.ip_adapter_embeddings else None,
-                    )
-                    scene.reference_image = f"images/{scene.id}.png"
-                    generated.append(scene.id)
-                    proj.save_scenes()
-                except Exception as exc:
-                    log.error("Image generation failed for %s: %s", scene.id, exc)
-                    failed.append({"scene_id": scene.id, "error": str(exc)})
-        finally:
-            engine.unload()
-
-        return {
-            "status": "complete",
-            "generated": generated,
-            "failed": failed,
-            "total": len(scenes),
-        }
-
-    return await asyncio.to_thread(_run_generation)
+    return {
+        "status": "complete",
+        "generated": generated,
+        "failed": failed,
+        "total": total,
+    }
 
 
 class GenerateVideoDescriptionsRequest(BaseModel):
     scene_ids: list[str] = []
 
 
-@app.post("/api/pipeline/generate-video-descriptions")
-async def generate_video_descriptions(req: GenerateVideoDescriptionsRequest):
-    """Generate video motion prompts for scenes via LLM (no GPU)."""
+@app.post("/api/pipeline/generate-video-descriptions", status_code=202)
+async def generate_video_descriptions(req: GenerateVideoDescriptionsRequest) -> Job:
+    """Write video motion prompts via the LLM for scenes that don't have one (no GPU).
+
+    Runs as a job: returns 202 with the queued Job. ``result`` on success:
+    {generated, failed, total}."""
+    return _submit_job(JobKind.GENERATE_VIDEO_DESCRIPTIONS, req)
+
+
+def _job_generate_video_descriptions(params: dict, ctx: JobContext) -> dict:
     from musicvision.video.prompt_generator import (
         generate_video_prompt,
         generate_video_prompts_batch,
     )
 
-    proj = get_project()
-
-    # Resolve target scenes
-    if req.scene_ids:
-        scenes = []
-        for sid in req.scene_ids:
-            scene = proj.scenes.get_scene(sid)
-            if not scene:
-                raise HTTPException(status_code=404, detail=f"Scene {sid} not found")
-            scenes.append(scene)
-    else:
-        scenes = proj.scenes.scenes
-
-    # Only scenes that still need a prompt
+    req = GenerateVideoDescriptionsRequest.model_validate(params)
+    proj = _job_project()
+    scenes = _job_scenes(proj, req.scene_ids)
     need_prompt = [s for s in scenes if not s.effective_video_prompt]
 
-    if not need_prompt:
-        return {"status": "complete", "generated": [], "failed": [], "total": 0}
+    def assign(scene: Scene, prompt: str) -> None:
+        scene.video_prompt = prompt
 
-    import asyncio
-
-    def _run() -> dict:
-        generated: list[str] = []
-        failed: list[dict] = []
-
-        # Try batch first for coherence, fall back to individual
-        try:
-            prompts = generate_video_prompts_batch(need_prompt, proj.config)
-            for scene, prompt in zip(need_prompt, prompts):
-                scene.video_prompt = prompt
-                generated.append(scene.id)
-            proj.save_scenes()
-        except Exception as batch_exc:
-            log.warning("Batch video prompt generation failed: %s — falling back to individual", batch_exc)
-            for scene in need_prompt:
-                try:
-                    scene.video_prompt = generate_video_prompt(scene, proj.config)
-                    generated.append(scene.id)
-                    proj.save_scenes()
-                except Exception as exc:
-                    log.error("Video prompt generation failed for %s: %s", scene.id, exc)
-                    failed.append({"scene_id": scene.id, "error": str(exc)})
-
-        return {
-            "status": "complete",
-            "generated": generated,
-            "failed": failed,
-            "total": len(need_prompt),
-        }
-
-    return await asyncio.to_thread(_run)
+    return _run_prompt_batch(
+        need_prompt, ctx, "motion", generate_video_prompts_batch, generate_video_prompt, assign,
+    )
 
 
-@app.post("/api/pipeline/generate-videos")
-async def generate_videos(req: GenerateVideosRequest):
+@app.post("/api/pipeline/generate-videos", status_code=202)
+async def generate_videos(req: GenerateVideosRequest) -> Job:
     """Stage 3: Generate video clips for specified scenes (or all).
 
-    Scenes are grouped by their ``video_engine`` field (falling back to the
-    project default).  Each engine group is processed sequentially so only one
-    engine holds GPU memory at a time.
-    """
+    Runs as a job: returns 202 with the queued Job. Scenes are grouped by
+    their ``video_engine`` (falling back to the project default, or
+    ``engine`` for this run) and each group runs with one engine loaded.
+    Progress is per scene; cancel takes effect between scenes. Reference
+    images are checked when the job runs, so this can be queued right
+    behind a generate_images job. ``result`` on success: {generated,
+    failed, total, vram_warnings?}."""
+    return _submit_job(JobKind.GENERATE_VIDEOS, req)
+
+
+def _job_generate_videos(params: dict, ctx: JobContext) -> dict:
     from collections import defaultdict
 
     from musicvision.engine_registry import (
@@ -1332,45 +1426,42 @@ async def generate_videos(req: GenerateVideosRequest):
     from musicvision.video import create_video_engine
     from musicvision.video.prompt_generator import generate_video_prompt
 
-    proj = get_project()
+    req = GenerateVideosRequest.model_validate(params)
+    proj = _job_project()
 
     # Engine override for this run only (don't persist to project.yaml)
     run_engine = VideoEngineType(req.engine) if req.engine else proj.config.video_engine
 
-    # Resolve target scenes
-    if req.scene_ids:
-        scenes = []
-        for sid in req.scene_ids:
-            scene = proj.scenes.get_scene(sid)
-            if not scene:
-                raise HTTPException(status_code=404, detail=f"Scene {sid} not found")
-            scenes.append(scene)
-    else:
-        scenes = proj.scenes.scenes
-
+    scenes = _job_scenes(proj, req.scene_ids)
     if not scenes:
-        raise HTTPException(status_code=400, detail="No scenes to process")
+        raise JobFailureError("no_scenes_to_process", "No scenes to process")
+    total = len(scenes)
 
     # Check that scenes have reference images (Stage 2 must run first)
     missing_images = [s.id for s in scenes if not s.reference_image]
     if missing_images:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Scenes missing reference images (run generate-images first): {missing_images}",
+        raise JobFailureError(
+            "missing_prerequisite",
+            f"Scenes missing reference images (run generate-images first): {missing_images}",
+            {"missing": "reference_image", "scene_ids": missing_images},
         )
 
     # Generate video prompts for scenes that don't have one yet
     for scene in scenes:
         if not scene.effective_video_prompt:
+            ctx.raise_if_cancelled()
+            ctx.report(0, total, message=f"Writing motion prompt for {scene.id}", scene_id=scene.id)
             scene.video_prompt = generate_video_prompt(scene, proj.config)
 
     # Resolve audio file
     audio_file = proj.config.song.audio_file
     if not audio_file:
-        raise HTTPException(status_code=400, detail="No audio file set in project config.")
+        raise JobFailureError("missing_prerequisite", "No audio file set in project config.", {"missing": "audio_file"})
     audio_path = proj.resolve_path(audio_file)
     if not audio_path.exists():
-        raise HTTPException(status_code=404, detail=f"Audio file not found: {audio_path}")
+        raise JobFailureError(
+            "missing_prerequisite", f"Audio file not found: {audio_path}", {"missing": "audio_file"},
+        )
 
     # Group scenes by engine type
     engine_groups: dict[VideoEngineType, list] = defaultdict(list)
@@ -1378,10 +1469,8 @@ async def generate_videos(req: GenerateVideosRequest):
         etype = scene.video_engine or run_engine
         engine_groups[etype].append(scene)
 
-    from musicvision.utils.gpu import _oom_suggestion, estimate_vram_gb, is_oom_error
+    from musicvision.utils.gpu import _oom_suggestion, detect_devices, estimate_vram_gb, is_oom_error
 
-    generated: list[str] = []
-    failed: list[dict] = []
     vram_warnings: list[dict] = []
 
     # --- Pre-flight VRAM check (advisory, does not block) ---
@@ -1426,173 +1515,177 @@ async def generate_videos(req: GenerateVideosRequest):
         proj.config.ltx_video.num_inference_steps = 40
     log.info("Render mode: %s", render_mode)
 
-    # --- Run generation in a thread so the event loop stays responsive ---
-    import asyncio
-
     _humo_default_shift = proj.config.humo.shift
 
-    def _run_generation() -> dict:
-        generated: list[str] = []
-        failed: list[dict] = []
+    generated: list[str] = []
+    failed: list[dict] = []
+    done = 0
 
-        for engine_type, group_scenes in engine_groups.items():
-            constraints = get_constraints(engine_type.value)
-            plan_subclips(group_scenes, constraints, proj.paths.segments_dir, proj.paths.sub_segments_dir)
+    for engine_type, group_scenes in engine_groups.items():
+        ctx.raise_if_cancelled()
+        constraints = get_constraints(engine_type.value)
+        plan_subclips(group_scenes, constraints, proj.paths.segments_dir, proj.paths.sub_segments_dir)
 
-            if engine_type == VideoEngineType.LTX_VIDEO:
-                from musicvision.utils.gpu import detect_devices
-                device_map = detect_devices()
-                engine = create_video_engine(proj.config.ltx_video, device_map=device_map, engine_type=engine_type)
-            else:
-                from musicvision.utils.gpu import detect_devices
-                device_map = detect_devices()
-                engine = create_video_engine(proj.config.humo, device_map=device_map, engine_type=engine_type)
+        ctx.report(done, total, message=f"Loading {engine_type.value}")
+        device_map = detect_devices()
+        if engine_type == VideoEngineType.LTX_VIDEO:
+            engine = create_video_engine(proj.config.ltx_video, device_map=device_map, engine_type=engine_type)
+        else:
+            engine = create_video_engine(proj.config.humo, device_map=device_map, engine_type=engine_type)
 
-            engine.load()
-            consecutive_ooms = 0
+        engine.load()
+        consecutive_ooms = 0
 
-            try:
-                for scene in group_scenes:
-                    if consecutive_ooms >= 2:
-                        engine_config = proj.config.ltx_video if engine_type == VideoEngineType.LTX_VIDEO else proj.config.humo
-                        log.warning(
-                            "Skipping %s — %d consecutive OOMs, remaining scenes in "
-                            "%s group will also fail",
-                            scene.id, consecutive_ooms, engine_type.value,
+        try:
+            for scene in group_scenes:
+                ctx.raise_if_cancelled()  # between scenes only — never mid-denoise
+                ctx.report(done, total, message=f"Rendering {scene.id} ({engine_type.value})", scene_id=scene.id)
+                if consecutive_ooms >= 2:
+                    engine_config = (
+                        proj.config.ltx_video if engine_type == VideoEngineType.LTX_VIDEO else proj.config.humo
+                    )
+                    log.warning(
+                        "Skipping %s — %d consecutive OOMs, remaining scenes in "
+                        "%s group will also fail",
+                        scene.id, consecutive_ooms, engine_type.value,
+                    )
+                    failed.append({
+                        "scene_id": scene.id,
+                        "error": f"Skipped after {consecutive_ooms} consecutive OOMs",
+                        "error_type": "oom_skipped",
+                        "oom_context": {
+                            "engine": engine_type.value,
+                            "image_size": getattr(engine_config, "image_size", 0),
+                            "suggestion": _oom_suggestion(engine_type.value, engine_config),
+                        },
+                    })
+                    done += 1
+                    ctx.report(done, total, message=f"Skipped {scene.id}", scene_id=scene.id)
+                    continue
+
+                try:
+                    import random
+                    if scene.video_status.value == "approved" and scene.video_seed is not None:
+                        scene_seed = scene.video_seed
+                    else:
+                        scene_seed = random.randint(0, 2**31 - 1)
+                        scene.video_seed = scene_seed
+
+                    if engine_type == VideoEngineType.LTX_VIDEO:
+                        proj.config.ltx_video.seed = scene_seed
+                    else:
+                        proj.config.humo.seed = scene_seed
+                        # Apply per-scene sigma shift override
+                        if scene.sigma_shift is not None:
+                            proj.config.humo.shift = scene.sigma_shift
+                        else:
+                            proj.config.humo.shift = _humo_default_shift
+
+                    ref_image = proj.resolve_path(scene.reference_image)
+                    segment = _resolve_scene_audio(proj, scene, audio_path)
+
+                    subclip_audio = None
+                    if scene.generation_audio_segments and len(scene.generation_audio_segments) > 1:
+                        subclip_audio = [
+                            proj.resolve_path(p) if not Path(p).is_absolute() else Path(p)
+                            for p in scene.generation_audio_segments
+                        ]
+
+                    results = engine.generate_scene(
+                        text_prompt=scene.effective_video_prompt,
+                        reference_image=ref_image,
+                        audio_segment=segment,
+                        output_dir=proj.paths.clips_dir,
+                        scene_id=scene.id,
+                        duration=scene.duration,
+                        subclip_frame_counts=scene.subclip_frame_counts,
+                        subclip_audio_paths=subclip_audio,
+                    )
+
+                    if len(results) > 1:
+                        scene.sub_clips = []
+                        suffixes = sub_clip_suffixes(len(results))
+                        frame_counts = scene.subclip_frame_counts or []
+                        cursor = 0
+                        for j, (r, suffix) in enumerate(zip(results, suffixes)):
+                            fc = frame_counts[j] if j < len(frame_counts) else None
+                            sub_start = scene.time_start + frames_to_seconds(cursor, constraints.fps)
+                            cursor += fc or 0
+                            sub_end = scene.time_start + frames_to_seconds(cursor, constraints.fps)
+                            scene.sub_clips.append(SubClip(
+                                id=f"{scene.id}_{suffix}",
+                                time_start=sub_start,
+                                time_end=min(sub_end, scene.time_end),
+                                video_prompt=scene.effective_video_prompt,
+                                video_clip=str(r.video_path.relative_to(proj.paths.root)),
+                                frame_count=fc,
+                            ))
+                        from musicvision.utils.audio import concat_videos
+
+                        sub_paths = [r.video_path for r in results]
+                        joined = proj.paths.clips_dir / f"{scene.id}_joined.mp4"
+                        concat_videos(sub_paths, joined)
+                        scene.video_clip = str(joined.relative_to(proj.paths.root))
+                        # Multi-sub-clip scenes cannot use generated audio
+                        if any(r.generated_audio_path for r in results):
+                            from musicvision.models import SceneAudioMode
+                            log.info(
+                                "Scene %s split into %d sub-clips — forcing song_only audio mode",
+                                scene.id, len(results),
+                            )
+                            scene.generated_audio = None
+                            scene.audio_mode = SceneAudioMode.SONG_ONLY
+                    else:
+                        scene.video_clip = f"clips/{scene.id}.mp4"
+                        # Persist generated audio for single-clip LTX-2 scenes
+                        if results[0].generated_audio_path:
+                            gap = results[0].generated_audio_path
+                            scene.generated_audio = str(gap.relative_to(proj.paths.root))
+                            log.info("Generated audio persisted: %s", scene.generated_audio)
+
+                    from musicvision.utils.video import update_scene_resolution
+                    update_scene_resolution(scene, proj.paths.root)
+                    generated.append(scene.id)
+                    consecutive_ooms = 0
+                    proj.save_scenes()
+
+                except Exception as exc:
+                    if is_oom_error(exc):
+                        consecutive_ooms += 1
+                        engine_config = (
+                            proj.config.ltx_video if engine_type == VideoEngineType.LTX_VIDEO else proj.config.humo
+                        )
+                        log.error(
+                            "OOM on %s (%d consecutive): %s", scene.id, consecutive_ooms, exc,
                         )
                         failed.append({
                             "scene_id": scene.id,
-                            "error": f"Skipped after {consecutive_ooms} consecutive OOMs",
-                            "error_type": "oom_skipped",
+                            "error": str(exc),
+                            "error_type": "oom",
                             "oom_context": {
                                 "engine": engine_type.value,
                                 "image_size": getattr(engine_config, "image_size", 0),
                                 "suggestion": _oom_suggestion(engine_type.value, engine_config),
                             },
                         })
-                        continue
-
-                    try:
-                        import random
-                        if scene.video_status.value == "approved" and scene.video_seed is not None:
-                            scene_seed = scene.video_seed
-                        else:
-                            scene_seed = random.randint(0, 2**31 - 1)
-                            scene.video_seed = scene_seed
-
-                        if engine_type == VideoEngineType.LTX_VIDEO:
-                            proj.config.ltx_video.seed = scene_seed
-                        else:
-                            proj.config.humo.seed = scene_seed
-                            # Apply per-scene sigma shift override
-                            if scene.sigma_shift is not None:
-                                proj.config.humo.shift = scene.sigma_shift
-                            else:
-                                proj.config.humo.shift = _humo_default_shift
-
-                        ref_image = proj.resolve_path(scene.reference_image)
-                        segment = _resolve_scene_audio(proj, scene, audio_path)
-
-                        subclip_audio = None
-                        if scene.generation_audio_segments and len(scene.generation_audio_segments) > 1:
-                            subclip_audio = [
-                                proj.resolve_path(p) if not Path(p).is_absolute() else Path(p)
-                                for p in scene.generation_audio_segments
-                            ]
-
-                        results = engine.generate_scene(
-                            text_prompt=scene.effective_video_prompt,
-                            reference_image=ref_image,
-                            audio_segment=segment,
-                            output_dir=proj.paths.clips_dir,
-                            scene_id=scene.id,
-                            duration=scene.duration,
-                            subclip_frame_counts=scene.subclip_frame_counts,
-                            subclip_audio_paths=subclip_audio,
-                        )
-
-                        if len(results) > 1:
-                            scene.sub_clips = []
-                            suffixes = sub_clip_suffixes(len(results))
-                            frame_counts = scene.subclip_frame_counts or []
-                            cursor = 0
-                            for j, (r, suffix) in enumerate(zip(results, suffixes)):
-                                fc = frame_counts[j] if j < len(frame_counts) else None
-                                sub_start = scene.time_start + frames_to_seconds(cursor, constraints.fps)
-                                cursor += fc or 0
-                                sub_end = scene.time_start + frames_to_seconds(cursor, constraints.fps)
-                                scene.sub_clips.append(SubClip(
-                                    id=f"{scene.id}_{suffix}",
-                                    time_start=sub_start,
-                                    time_end=min(sub_end, scene.time_end),
-                                    video_prompt=scene.effective_video_prompt,
-                                    video_clip=str(r.video_path.relative_to(proj.paths.root)),
-                                    frame_count=fc,
-                                ))
-                            from musicvision.utils.audio import concat_videos
-
-                            sub_paths = [r.video_path for r in results]
-                            joined = proj.paths.clips_dir / f"{scene.id}_joined.mp4"
-                            concat_videos(sub_paths, joined)
-                            scene.video_clip = str(joined.relative_to(proj.paths.root))
-                            # Multi-sub-clip scenes cannot use generated audio
-                            if any(r.generated_audio_path for r in results):
-                                from musicvision.models import SceneAudioMode
-                                log.info(
-                                    "Scene %s split into %d sub-clips — forcing song_only audio mode",
-                                    scene.id, len(results),
-                                )
-                                scene.generated_audio = None
-                                scene.audio_mode = SceneAudioMode.SONG_ONLY
-                        else:
-                            scene.video_clip = f"clips/{scene.id}.mp4"
-                            # Persist generated audio for single-clip LTX-2 scenes
-                            if results[0].generated_audio_path:
-                                gap = results[0].generated_audio_path
-                                scene.generated_audio = str(gap.relative_to(proj.paths.root))
-                                log.info("Generated audio persisted: %s", scene.generated_audio)
-
-                        from musicvision.utils.video import update_scene_resolution
-                        update_scene_resolution(scene, proj.paths.root)
-                        generated.append(scene.id)
+                    else:
                         consecutive_ooms = 0
-                        proj.save_scenes()
+                        log.error("Video generation failed for %s: %s", scene.id, exc)
+                        failed.append({"scene_id": scene.id, "error": str(exc)})
+                done += 1
+                ctx.report(done, total, message=f"Finished {scene.id}", scene_id=scene.id)
+        finally:
+            engine.unload()
 
-                    except Exception as exc:
-                        if is_oom_error(exc):
-                            consecutive_ooms += 1
-                            engine_config = proj.config.ltx_video if engine_type == VideoEngineType.LTX_VIDEO else proj.config.humo
-                            log.error(
-                                "OOM on %s (%d consecutive): %s", scene.id, consecutive_ooms, exc,
-                            )
-                            failed.append({
-                                "scene_id": scene.id,
-                                "error": str(exc),
-                                "error_type": "oom",
-                                "oom_context": {
-                                    "engine": engine_type.value,
-                                    "image_size": getattr(engine_config, "image_size", 0),
-                                    "suggestion": _oom_suggestion(engine_type.value, engine_config),
-                                },
-                            })
-                        else:
-                            consecutive_ooms = 0
-                            log.error("Video generation failed for %s: %s", scene.id, exc)
-                            failed.append({"scene_id": scene.id, "error": str(exc)})
-            finally:
-                engine.unload()
-
-        result: dict = {
-            "status": "complete",
-            "generated": generated,
-            "failed": failed,
-            "total": len(scenes),
-        }
-        if vram_warnings:
-            result["vram_warnings"] = vram_warnings
-        return result
-
-    return await asyncio.to_thread(_run_generation)
+    result: dict = {
+        "status": "complete",
+        "generated": generated,
+        "failed": failed,
+        "total": total,
+    }
+    if vram_warnings:
+        result["vram_warnings"] = vram_warnings
+    return result
 
 
 class UpscaleRequest(BaseModel):
@@ -1602,21 +1695,24 @@ class UpscaleRequest(BaseModel):
     render_mode: str = "final"          # "preview" | "final"
 
 
+class UpscaleSceneJobParams(UpscaleRequest):
+    """Params for the upscale_scene job kind (single scene)."""
+    scene_id: str
+
+
 class AssembleRequest(BaseModel):
     approved_only: bool = False
     export_edl: bool = True
     export_fcpxml: bool = True
 
 
-@app.post("/api/pipeline/upscale")
-async def upscale_videos(req: UpscaleRequest):
-    """Stage 4b: Upscale video clips to target resolution."""
+def _run_upscale(req: UpscaleRequest, scene_ids: list[str] | None, ctx: JobContext) -> dict:
+    """Shared body for the upscale and upscale_scene jobs."""
+    from musicvision.jobs import JobCancelledError
     from musicvision.models import TargetResolution, UpscalerType
     from musicvision.upscaling.pipeline import upscale_clips
 
-    import asyncio
-
-    proj = get_project()
+    proj = _job_project()
 
     # Apply overrides (ephemeral, not saved to disk)
     if req.resolution:
@@ -1624,141 +1720,208 @@ async def upscale_videos(req: UpscaleRequest):
     if req.upscaler:
         proj.config.upscaler.upscaler_override = UpscalerType(req.upscaler)
 
-    scene_ids = req.scene_ids or None
+    device_map = None
+    try:
+        from musicvision.utils.gpu import detect_devices
+        device_map = detect_devices()
+    except Exception:
+        pass
 
-    def _run() -> dict:
-        device_map = None
-        try:
-            from musicvision.utils.gpu import detect_devices
-            device_map = detect_devices()
-        except Exception:
-            pass
-
-        result = upscale_clips(
-            scenes=proj.scenes,
-            paths=proj.paths,
-            upscaler_config=proj.config.upscaler,
-            default_engine=proj.config.video_engine,
-            render_mode=req.render_mode,
-            scene_ids=scene_ids,
-            device_map=device_map,
-        )
-        proj.save_scenes()
-        return {
-            "status": "complete",
-            "upscaled": result["upscaled"],
-            "failed": result["failed"],
-            "total": len(result["upscaled"]) + len(result["failed"]),
-        }
-
-    return await asyncio.to_thread(_run)
+    ctx.report(0, 0, message="Preparing upscale")
+    result = upscale_clips(
+        scenes=proj.scenes,
+        paths=proj.paths,
+        upscaler_config=proj.config.upscaler,
+        default_engine=proj.config.video_engine,
+        render_mode=req.render_mode,
+        scene_ids=scene_ids,
+        device_map=device_map,
+        on_progress=lambda p: ctx.report(p.current, p.total, p.unit, p.message, p.scene_id),
+        should_cancel=ctx.cancelled,
+    )
+    proj.save_scenes()
+    if result.get("cancelled"):
+        raise JobCancelledError()
+    return {
+        "status": "complete",
+        "upscaled": result["upscaled"],
+        "failed": result["failed"],
+        "total": len(result["upscaled"]) + len(result["failed"]),
+    }
 
 
-@app.post("/api/scenes/{scene_id}/upscale")
-async def upscale_scene(scene_id: str, req: UpscaleRequest):
-    """Upscale a single scene's video clip."""
-    from musicvision.models import TargetResolution, UpscalerType
-    from musicvision.upscaling.pipeline import upscale_clips
+@app.post("/api/pipeline/upscale", status_code=202)
+async def upscale_videos(req: UpscaleRequest) -> Job:
+    """Stage 4b: Upscale video clips to target resolution (all scenes with
+    clips when scene_ids is empty).
 
-    import asyncio
+    Runs as a job: returns 202 with the queued Job. Progress is per scene;
+    cancel takes effect between scenes. ``result`` on success:
+    {upscaled, failed, total}."""
+    return _submit_job(JobKind.UPSCALE, req)
 
-    proj = get_project()
-    scene = proj.scenes.get_scene(scene_id)
-    if not scene:
-        raise HTTPException(status_code=404, detail=f"Scene {scene_id} not found")
+
+def _job_upscale(params: dict, ctx: JobContext) -> dict:
+    req = UpscaleRequest.model_validate(params)
+    return _run_upscale(req, req.scene_ids or None, ctx)
+
+
+@app.post("/api/scenes/{scene_id}/upscale", status_code=202)
+async def upscale_scene(scene_id: str, req: UpscaleRequest) -> Job:
+    """Upscale one scene's video clip.
+
+    Runs as a job: returns 202 with the queued Job; ``result`` on success:
+    {upscaled, failed, total}. The scene's clip is checked when the job runs."""
+    params = UpscaleSceneJobParams(scene_id=scene_id, **req.model_dump(exclude={"scene_ids"}))
+    return _submit_job(JobKind.UPSCALE_SCENE, params)
+
+
+def _job_upscale_scene(params: dict, ctx: JobContext) -> dict:
+    req = UpscaleSceneJobParams.model_validate(params)
+    proj = _job_project()
+    scene = _job_scenes(proj, [req.scene_id])[0]
     if not scene.video_clip and not scene.sub_clips:
-        raise HTTPException(status_code=400, detail="Scene has no video clip to upscale")
-
-    if req.resolution:
-        proj.config.upscaler.target_resolution = TargetResolution(req.resolution)
-    if req.upscaler:
-        proj.config.upscaler.upscaler_override = UpscalerType(req.upscaler)
-
-    def _run() -> dict:
-        device_map = None
-        try:
-            from musicvision.utils.gpu import detect_devices
-            device_map = detect_devices()
-        except Exception:
-            pass
-
-        result = upscale_clips(
-            scenes=proj.scenes,
-            paths=proj.paths,
-            upscaler_config=proj.config.upscaler,
-            default_engine=proj.config.video_engine,
-            render_mode=req.render_mode,
-            scene_ids=[scene_id],
-            device_map=device_map,
+        raise JobFailureError(
+            "missing_prerequisite",
+            "Scene has no video clip to upscale",
+            {"scene_id": scene.id, "missing": "video_clip"},
         )
-        proj.save_scenes()
-        return {
-            "status": "complete",
-            "upscaled": result["upscaled"],
-            "failed": result["failed"],
-        }
-
-    return await asyncio.to_thread(_run)
+    return _run_upscale(req, [scene.id], ctx)
 
 
-@app.post("/api/pipeline/assemble")
-async def assemble(req: AssembleRequest = AssembleRequest()):
-    """Stage 4: Concatenate clips, sync audio, export EDL/FCPXML."""
+@app.post("/api/pipeline/assemble", status_code=202)
+async def assemble(req: AssembleRequest = AssembleRequest()) -> Job:
+    """Stage 5: Concatenate clips, sync audio, export EDL/FCPXML.
+
+    Runs as a job: returns 202 with the queued Job. ``result`` on success:
+    {rough_cut, clip_count, total_scenes, duration_seconds,
+    video_duration_seconds, drift_seconds, output_dir, edl?, fcpxml?}."""
+    return _submit_job(JobKind.ASSEMBLE, req)
+
+
+def _job_assemble(params: dict, ctx: JobContext) -> dict:
     from musicvision.assembly.concatenator import assemble_rough_cut
     from musicvision.assembly.exporter import export_edl, export_fcpxml
     from musicvision.utils.audio import get_duration
 
-    proj = get_project()
+    req = AssembleRequest.model_validate(params)
+    proj = _job_project()
     audio_file = proj.config.song.audio_file
     if not audio_file:
-        raise HTTPException(status_code=400, detail="No audio file set in project config.")
+        raise JobFailureError("missing_prerequisite", "No audio file set in project config.", {"missing": "audio_file"})
 
     audio_path = proj.resolve_path(audio_file)
     if not audio_path.exists():
-        raise HTTPException(status_code=404, detail=f"Audio file not found: {audio_path}")
+        raise JobFailureError(
+            "missing_prerequisite", f"Audio file not found: {audio_path}", {"missing": "audio_file"},
+        )
 
-    def _run() -> dict:
+    ctx.report(0, 0, unit="steps", message="Assembling rough cut")
+    try:
+        rough_cut = assemble_rough_cut(
+            scenes=proj.scenes,
+            paths=proj.paths,
+            original_audio=audio_path,
+            approved_only=req.approved_only,
+        )
+    except (RuntimeError, ValueError) as e:
+        raise JobFailureError("assembly_failed", str(e))
+
+    scene_dur = proj.scenes.total_duration
+    video_dur = get_duration(rough_cut)
+
+    result: dict = {
+        "status": "complete",
+        "rough_cut": str(rough_cut.relative_to(proj.paths.root)),
+        "clip_count": len([s for s in proj.scenes.scenes if s.video_clip or s.sub_clips]),
+        "total_scenes": len(proj.scenes.scenes),
+        "duration_seconds": scene_dur,
+        "video_duration_seconds": video_dur,
+        "drift_seconds": round(video_dur - scene_dur, 3),
+        "output_dir": str(proj.paths.root / "output"),
+    }
+
+    if req.export_edl:
+        ctx.report(0, 0, unit="steps", message="Exporting EDL")
+        edl = export_edl(proj.scenes, proj.paths)
+        result["edl"] = str(edl.relative_to(proj.paths.root))
+
+    if req.export_fcpxml:
+        ctx.report(0, 0, unit="steps", message="Exporting FCPXML")
+        humo = proj.config.humo
+        fcpxml = export_fcpxml(
+            proj.scenes,
+            proj.paths,
+            width=humo.width,
+            height=humo.height,
+        )
+        result["fcpxml"] = str(fcpxml.relative_to(proj.paths.root))
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Job registration (AGENT_INTERFACE_SPEC.md §4.2)
+#
+# Every long-running endpoint above is a thin "validate -> submit" wrapper;
+# the work runs on the JobManager's single worker thread via these handlers.
+# _JOB_PARAM_MODELS validates POST /api/jobs params per kind before queueing.
+# ---------------------------------------------------------------------------
+
+_JOB_PARAM_MODELS: dict[JobKind, type[BaseModel]] = {
+    JobKind.ANALYZE: AnalyzeParams,
+    JobKind.INTAKE: IntakeParams,
+    JobKind.GENERATE_DESCRIPTIONS: GenerateDescriptionsRequest,
+    JobKind.GENERATE_IMAGES: GenerateImagesRequest,
+    JobKind.GENERATE_VIDEO_DESCRIPTIONS: GenerateVideoDescriptionsRequest,
+    JobKind.GENERATE_VIDEOS: GenerateVideosRequest,
+    JobKind.UPSCALE: UpscaleRequest,
+    JobKind.ASSEMBLE: AssembleRequest,
+    JobKind.REGENERATE_IMAGE: RegenerateImageJobParams,
+    JobKind.REGENERATE_VIDEO: RegenerateVideoJobParams,
+    JobKind.UPSCALE_SCENE: UpscaleSceneJobParams,
+}
+
+_JOB_HANDLERS = {
+    JobKind.ANALYZE: _job_analyze,
+    JobKind.INTAKE: _job_intake,
+    JobKind.GENERATE_DESCRIPTIONS: _job_generate_descriptions,
+    JobKind.GENERATE_IMAGES: _job_generate_images,
+    JobKind.GENERATE_VIDEO_DESCRIPTIONS: _job_generate_video_descriptions,
+    JobKind.GENERATE_VIDEOS: _job_generate_videos,
+    JobKind.UPSCALE: _job_upscale,
+    JobKind.ASSEMBLE: _job_assemble,
+    JobKind.REGENERATE_IMAGE: _job_regenerate_image,
+    JobKind.REGENERATE_VIDEO: _job_regenerate_video,
+    JobKind.UPSCALE_SCENE: _job_upscale_scene,
+}
+
+
+def _oom_to_vram_exhausted(handler):
+    """Turn a CUDA OOM escaping a handler into a typed vram_exhausted failure."""
+
+    def wrapped(params: dict, ctx: JobContext) -> dict:
         try:
-            rough_cut = assemble_rough_cut(
-                scenes=proj.scenes,
-                paths=proj.paths,
-                original_audio=audio_path,
-                approved_only=req.approved_only,
-            )
-        except (RuntimeError, ValueError) as e:
-            raise HTTPException(status_code=400, detail=str(e))
+            return handler(params, ctx)
+        except JobFailureError:
+            raise
+        except Exception as exc:
+            from musicvision.utils.gpu import is_oom_error
 
-        scene_dur = proj.scenes.total_duration
-        video_dur = get_duration(rough_cut)
+            if is_oom_error(exc):
+                raise JobFailureError("vram_exhausted", str(exc), {"exception_type": type(exc).__name__}) from exc
+            raise
 
-        result: dict = {
-            "status": "complete",
-            "rough_cut": str(rough_cut.relative_to(proj.paths.root)),
-            "clip_count": len([s for s in proj.scenes.scenes if s.video_clip or s.sub_clips]),
-            "total_scenes": len(proj.scenes.scenes),
-            "duration_seconds": scene_dur,
-            "video_duration_seconds": video_dur,
-            "drift_seconds": round(video_dur - scene_dur, 3),
-            "output_dir": str(proj.paths.root / "output"),
-        }
+    return wrapped
 
-        if req.export_edl:
-            edl = export_edl(proj.scenes, proj.paths)
-            result["edl"] = str(edl.relative_to(proj.paths.root))
 
-        if req.export_fcpxml:
-            humo = proj.config.humo
-            fcpxml = export_fcpxml(
-                proj.scenes,
-                proj.paths,
-                width=humo.width,
-                height=humo.height,
-            )
-            result["fcpxml"] = str(fcpxml.relative_to(proj.paths.root))
+def register_job_handlers(manager: JobManager) -> None:
+    """Register the real pipeline handler for every JobKind on ``manager``."""
+    for kind, handler in _JOB_HANDLERS.items():
+        manager.register(kind, _oom_to_vram_exhausted(handler))
 
-        return result
 
-    return await asyncio.to_thread(_run)
+register_job_handlers(job_manager)
 
 
 # ---------------------------------------------------------------------------
