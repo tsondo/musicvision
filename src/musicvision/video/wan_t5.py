@@ -13,6 +13,10 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import torch
 
 log = logging.getLogger(__name__)
 
@@ -65,7 +69,7 @@ class WanT5Encoder:
 
         log.info("WanT5Encoder ready.")
 
-    def _pad_context(self, context_list: list) -> "torch.Tensor":
+    def _pad_context(self, context_list: list) -> torch.Tensor:
         """
         Pad variable-length T5 outputs to fixed [1, text_len, 4096].
 
@@ -87,7 +91,7 @@ class WanT5Encoder:
         ])  # [B, text_len, 4096]
         return padded
 
-    def encode(self, prompt: str) -> "torch.Tensor":
+    def encode(self, prompt: str) -> torch.Tensor:
         """
         Encode a text prompt into T5 hidden states.
 
@@ -105,7 +109,7 @@ class WanT5Encoder:
 
     def encode_pair(
         self, positive: str, negative: str = ""
-    ) -> "tuple[torch.Tensor, torch.Tensor]":
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Encode a positive + negative prompt pair for CFG.
 
@@ -123,6 +127,7 @@ class WanT5Encoder:
     def unload(self) -> None:
         """Release model from VRAM."""
         import gc
+
         import torch
 
         self._model = None

@@ -9,8 +9,10 @@ torch = pytest.importorskip("torch", reason="torch required for image engine tes
 
 from musicvision.imaging.base import ImageEngine, ImageResult
 from musicvision.imaging.factory import create_engine
-from musicvision.imaging.flux_engine import FluxEngine, MODEL_IDS as FLUX_MODEL_IDS
-from musicvision.imaging.zimage_engine import ZImageEngine, MODEL_IDS as ZIMAGE_MODEL_IDS
+from musicvision.imaging.flux_engine import MODEL_IDS as FLUX_MODEL_IDS
+from musicvision.imaging.flux_engine import FluxEngine
+from musicvision.imaging.zimage_engine import MODEL_IDS as ZIMAGE_MODEL_IDS
+from musicvision.imaging.zimage_engine import ZImageEngine
 from musicvision.models import (
     FluxConfig,
     FluxModel,
@@ -19,7 +21,6 @@ from musicvision.models import (
     ProjectConfig,
 )
 from musicvision.utils.gpu import DeviceMap
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

@@ -11,24 +11,18 @@ upstream Phantom-video/HuMo state_dict keys exactly) and adds:
 
 from __future__ import annotations
 
-import math
-from typing import Optional
-
 import torch
 import torch.amp  # noqa: F401 — used inline as torch.amp.autocast
-import torch.nn as nn
 
 from musicvision.video.vendor.wan_dit_arch import (
-    WanModel as _WanModel,
-    AudioProjModel,
     AudioCrossAttentionWrapper,
+    AudioProjModel,
     WanAttentionBlock,
-    WanRMSNorm,
-    WanLayerNorm,
-    Head,
-    sinusoidal_embedding_1d,
     rope_params,
-    rope_apply,
+    sinusoidal_embedding_1d,
+)
+from musicvision.video.vendor.wan_dit_arch import (
+    WanModel as _WanModel,
 )
 
 __all__ = [
@@ -66,7 +60,7 @@ class WanModel(_WanModel):
     )
 
     @classmethod
-    def from_config(cls, config_name: str, device: str = "meta", **kwargs) -> "WanModel":
+    def from_config(cls, config_name: str, device: str = "meta", **kwargs) -> WanModel:
         """
         Construct a WanModel from a named preset.
 
@@ -105,7 +99,7 @@ class WanModel(_WanModel):
         x: torch.Tensor,
         timestep: torch.Tensor,
         text_embeds: torch.Tensor,
-        audio_features: Optional[torch.Tensor] = None,
+        audio_features: torch.Tensor | None = None,
     ):
         """
         Execute everything before the transformer block loop.
@@ -226,7 +220,7 @@ class WanModel(_WanModel):
         x: torch.Tensor,
         timestep: torch.Tensor,
         text_embeds: torch.Tensor,
-        audio_features: Optional[torch.Tensor] = None,
+        audio_features: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         Batch-tensor forward pass for direct inference (no block swap).

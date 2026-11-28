@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -152,24 +151,24 @@ class OpenProjectRequest(BaseModel):
 
 
 class UpdateSceneRequest(BaseModel):
-    lyrics: Optional[str] = None
-    image_prompt_user_override: Optional[str] = None
-    video_prompt_user_override: Optional[str] = None
-    image_status: Optional[ApprovalStatus] = None
-    video_status: Optional[ApprovalStatus] = None
-    lip_sync: Optional[bool] = None
-    treatment: Optional[str] = None
-    video_engine: Optional[str] = None
-    sigma_shift: Optional[float] = None
-    notes: Optional[str] = None
+    lyrics: str | None = None
+    image_prompt_user_override: str | None = None
+    video_prompt_user_override: str | None = None
+    image_status: ApprovalStatus | None = None
+    video_status: ApprovalStatus | None = None
+    lip_sync: bool | None = None
+    treatment: str | None = None
+    video_engine: str | None = None
+    sigma_shift: float | None = None
+    notes: str | None = None
     # LTX-2 generated audio mixing
-    audio_mode: Optional[str] = None
-    generated_audio_volume: Optional[float] = None
-    song_duck_volume: Optional[float] = None
-    audio_fade_in: Optional[float] = None
-    audio_fade_out: Optional[float] = None
-    song_duck_fade_in: Optional[float] = None
-    song_duck_fade_out: Optional[float] = None
+    audio_mode: str | None = None
+    generated_audio_volume: float | None = None
+    song_duck_volume: float | None = None
+    audio_fade_in: float | None = None
+    audio_fade_out: float | None = None
+    song_duck_fade_in: float | None = None
+    song_duck_fade_out: float | None = None
 
 
 class GenerateImagesRequest(BaseModel):
@@ -1057,7 +1056,7 @@ class LyricsAssignmentItem(BaseModel):
 class CreateScenesRequest(BaseModel):
     boundaries: list[SceneBoundary]
     snap_to_beats: bool = False
-    lyrics_assignments: Optional[list[LyricsAssignmentItem]] = None
+    lyrics_assignments: list[LyricsAssignmentItem] | None = None
 
 
 @app.post("/api/pipeline/create-scenes")

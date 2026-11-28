@@ -24,8 +24,8 @@ import logging
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
 import uvicorn
+from dotenv import load_dotenv
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -64,7 +64,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
         print("  Use the frontend to create or open a project")
 
     print(f"  API:      http://localhost:{args.port}/docs")
-    print(f"  Frontend: http://localhost:5173")
+    print("  Frontend: http://localhost:5173")
 
     uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="info")
 
@@ -82,7 +82,8 @@ def cmd_info(args: argparse.Namespace) -> None:
     print(f"Duration:   {svc.config.song.duration_seconds or '(unknown)'}s")
     print(f"Scenes:     {len(svc.scenes.scenes)}")
     print(f"Video:      engine={svc.config.video_engine.value}")
-    print(f"  HuMo:     tier={svc.config.humo.tier.value} ({svc.config.humo.model_size}) @ {svc.config.humo.resolution}")
+    humo = svc.config.humo
+    print(f"  HuMo:     tier={humo.tier.value} ({humo.model_size}) @ {humo.resolution}")
     print(f"Image:      {svc.config.image_gen.model.value}, {svc.config.image_gen.effective_steps} steps")
 
     if svc.scenes.scenes:
@@ -149,7 +150,8 @@ def cmd_intake(args: argparse.Namespace) -> None:
     )
     print(f"Segmented into {len(scene_list.scenes)} scenes.")
     for s in scene_list.scenes:
-        print(f"  {s.id}: {s.time_start:.2f}–{s.time_end:.2f}s ({s.duration:.1f}s) {s.lyrics[:50] if s.lyrics else '(instrumental)'}…")
+        lyric = s.lyrics[:50] if s.lyrics else "(instrumental)"
+        print(f"  {s.id}: {s.time_start:.2f}–{s.time_end:.2f}s ({s.duration:.1f}s) {lyric}…")
 
 
 def cmd_generate_images(args: argparse.Namespace) -> None:
@@ -161,7 +163,7 @@ def cmd_generate_images(args: argparse.Namespace) -> None:
     )
     from musicvision.imaging.factory import create_engine
     from musicvision.imaging.prompt_generator import generate_image_prompt
-    from musicvision.models import ImageGenConfig, ImageModel
+    from musicvision.models import ImageModel
     from musicvision.project import ProjectService
     from musicvision.utils.gpu import detect_devices
 
@@ -311,8 +313,8 @@ def cmd_assemble(args: argparse.Namespace) -> None:
 def cmd_detect_hardware(args: argparse.Namespace) -> None:
     """Print GPU info and recommended HuMo tier."""
     try:
-        from musicvision.utils.gpu import detect_devices, recommend_tier, vram_info
         from musicvision.models import TIER_VRAM_GB
+        from musicvision.utils.gpu import detect_devices, recommend_tier, vram_info
     except ImportError as exc:
         print(f"Error importing GPU module: {exc}")
         print("Ensure torch is installed: pip install torch")
@@ -351,6 +353,7 @@ def cmd_detect_hardware(args: argparse.Namespace) -> None:
 def cmd_download_weights(args: argparse.Namespace) -> None:
     """Download HuMo weights for a tier."""
     import os
+
     from musicvision.models import HumoTier
     from musicvision.video.weight_registry import download_all_for_tier, weight_status
 
@@ -393,7 +396,7 @@ def cmd_download_weights(args: argparse.Namespace) -> None:
 
 def cmd_upscale(args: argparse.Namespace) -> None:
     """Upscale video clips for a project."""
-    from musicvision.models import TargetResolution, UpscalerType, VideoEngineType
+    from musicvision.models import TargetResolution, UpscalerType
     from musicvision.project import ProjectService
     from musicvision.upscaling.pipeline import upscale_clips
 
@@ -484,7 +487,7 @@ def cmd_generate_video(args: argparse.Namespace) -> None:
         svc.save_scenes()
 
     # Pre-compute sub-clip frame plans
-    from musicvision.engine_registry import get_constraints, plan_subclips, sub_clip_suffixes, frames_to_seconds
+    from musicvision.engine_registry import frames_to_seconds, get_constraints, plan_subclips, sub_clip_suffixes
     constraints = get_constraints(engine_type.value)
     plan_subclips(targets, constraints, svc.paths.segments_dir, svc.paths.sub_segments_dir)
     svc.save_scenes()
@@ -581,7 +584,7 @@ def cmd_generate_video(args: argparse.Namespace) -> None:
                     if len(outputs) == 1:
                         scene.video_clip = str(outputs[0].video_path.relative_to(svc.paths.root))
                     else:
-                        from musicvision.models import SubClip, ApprovalStatus
+                        from musicvision.models import ApprovalStatus, SubClip
                         suffixes = sub_clip_suffixes(len(outputs))
                         frame_counts = scene.subclip_frame_counts or []
                         scene.sub_clips = []
@@ -624,7 +627,7 @@ def cmd_generate_video(args: argparse.Namespace) -> None:
         suggestion = _oom_suggestion(engine_type.value, engine_config)
         print(f"\nOOM failures ({len(oom_scenes)} scenes): {oom_scenes}")
         print(f"  Suggestion: {suggestion}")
-        print(f"  Re-run with adjusted settings:")
+        print("  Re-run with adjusted settings:")
         print(f"    musicvision generate-video --project {project_dir} --scene-ids {' '.join(oom_scenes)}")
 
 
@@ -642,7 +645,9 @@ def main() -> None:
 
     # serve
     p_serve = sub.add_parser("serve", help="Start the API server (optionally with a project)")
-    p_serve.add_argument("directory", nargs="?", default=None, help="Project directory path (optional — omit to start empty)")
+    p_serve.add_argument(
+        "directory", nargs="?", default=None, help="Project directory path (optional — omit to start empty)",
+    )
     p_serve.add_argument("--port", type=int, default=8000, help="Port to serve on")
 
     # info

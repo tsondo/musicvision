@@ -5,8 +5,6 @@ from __future__ import annotations
 import pytest
 
 from musicvision.engine_registry import (
-    ENGINES,
-    EngineConstraints,
     compute_subclip_frames,
     compute_subclip_frames_at_silences,
     frames_to_seconds,
@@ -14,7 +12,6 @@ from musicvision.engine_registry import (
     scene_frames,
     sub_clip_suffixes,
 )
-
 
 # ---------------------------------------------------------------------------
 # get_constraints

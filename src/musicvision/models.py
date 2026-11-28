@@ -14,11 +14,9 @@ import json
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
-
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -190,21 +188,21 @@ class ConsistencyMethod(str, Enum):
 class CharacterDef(BaseModel):
     id: str
     description: str
-    reference_image: Optional[str] = None
-    lora_path: Optional[str] = None
+    reference_image: str | None = None
+    lora_path: str | None = None
     lora_weight: float = 0.8
 
 
 class PropDef(BaseModel):
     id: str
     description: str
-    reference_image: Optional[str] = None
+    reference_image: str | None = None
 
 
 class SettingDef(BaseModel):
     id: str
     description: str
-    reference_image: Optional[str] = None
+    reference_image: str | None = None
 
 
 # --- Unified asset model (replaces CharacterDef/PropDef/SettingDef) ---
@@ -229,13 +227,13 @@ class AssetDef(BaseModel):
 
     # Consistency configuration
     consistency: ConsistencyMethod = ConsistencyMethod.NONE
-    lora_path: Optional[str] = None                      # relative to project root (e.g. "loras/singer.safetensors")
+    lora_path: str | None = None                      # relative to project root (e.g. "loras/singer.safetensors")
     lora_weight: float = 0.8                             # LoRA fusion scale (0.0–1.0)
     ip_adapter_scale: float = 0.6                        # IP-Adapter influence (0.0–1.0)
-    ip_adapter_embedding_path: Optional[str] = None      # cached precomputed embedding (e.g. "ip_cache/singer.ipadpt")
+    ip_adapter_embedding_path: str | None = None      # cached precomputed embedding (e.g. "ip_cache/singer.ipadpt")
 
     @property
-    def primary_image(self) -> Optional[AssetImage]:
+    def primary_image(self) -> AssetImage | None:
         """Return the primary reference image, or the first image if none is marked primary."""
         for img in self.images:
             if img.is_primary:
@@ -276,7 +274,7 @@ class StyleSheet(BaseModel):
 
     # --- Unified asset library ---
     assets: list[AssetDef] = Field(default_factory=list)
-    style_lora_path: Optional[str] = None    # project-wide style LoRA applied to all generations
+    style_lora_path: str | None = None    # project-wide style LoRA applied to all generations
     style_lora_weight: float = 0.7
 
     # --- DEPRECATED — migrated into `assets` on load (see _migrate_legacy_assets) ---
@@ -365,7 +363,7 @@ class StyleSheet(BaseModel):
         return data
 
     # --- Lookup helpers ---
-    def get_asset(self, asset_id: str) -> Optional[AssetDef]:
+    def get_asset(self, asset_id: str) -> AssetDef | None:
         """Find an asset by ID. Returns None if not found."""
         return next((a for a in self.assets if a.id == asset_id), None)
 
@@ -392,7 +390,7 @@ class HumoConfig(BaseModel):
     seed: int | None = None           # global seed (overridden by per-clip HumoInput.seed)
 
     @classmethod
-    def from_quality(cls, quality: HumoQuality | str, **overrides) -> "HumoConfig":
+    def from_quality(cls, quality: HumoQuality | str, **overrides) -> HumoConfig:
         """Create a HumoConfig from a quality preset.
 
         Any keyword argument overrides the preset defaults (e.g.
@@ -450,9 +448,9 @@ class IPAdapterConfig(BaseModel):
 class ImageGenConfig(BaseModel):
     model: ImageModel = ImageModel.FLUX_DEV
     quant: FluxQuant = FluxQuant.AUTO
-    steps: Optional[int] = None         # None → auto: 4 for schnell, 28 for dev
+    steps: int | None = None         # None → auto: 4 for schnell, 28 for dev
     guidance_scale: float = 3.5
-    lora_path: Optional[str] = None     # project-level style LoRA (relative to project root)
+    lora_path: str | None = None     # project-level style LoRA (relative to project root)
     lora_weight: float = 0.8
     ip_adapter: IPAdapterConfig = Field(default_factory=IPAdapterConfig)
 
@@ -515,10 +513,10 @@ class AceStepMeta(BaseModel):
     caption: str = ""                     # genre/mood/instrumentation description
     lyrics: str = ""                      # full lyrics with section markers
     instrumental: bool = False
-    bpm: Optional[float] = None
+    bpm: float | None = None
     keyscale: str = ""                    # e.g. "A minor"
-    duration: Optional[float] = None      # seconds
-    seed: Optional[int] = None
+    duration: float | None = None      # seconds
+    seed: int | None = None
     # Preserve the full original JSON for reference
     raw: dict = Field(default_factory=dict)
 
@@ -532,10 +530,10 @@ class SongSection(BaseModel):
 class SongInfo(BaseModel):
     audio_file: str = ""
     lyrics_file: str = ""
-    bpm: Optional[float] = None
-    duration_seconds: Optional[float] = None
+    bpm: float | None = None
+    duration_seconds: float | None = None
     keyscale: str = ""
-    acestep: Optional[AceStepMeta] = None  # populated if AceStep JSON was found
+    acestep: AceStepMeta | None = None  # populated if AceStep JSON was found
     beat_times: list[float] = Field(default_factory=list)
     sections: list[SongSection] = Field(default_factory=list)
     sections_source: str = ""  # "acestep" or "auto" — empty means not yet set
@@ -675,12 +673,12 @@ class SubClip(BaseModel):
     id: str                             # e.g. "scene_003_a"
     time_start: float
     time_end: float
-    audio_segment: Optional[str] = None
-    video_prompt: Optional[str] = None
-    video_clip: Optional[str] = None    # path to generated clip
-    upscaled_clip: Optional[str] = None # path to upscaled clip
+    audio_segment: str | None = None
+    video_prompt: str | None = None
+    video_clip: str | None = None    # path to generated clip
+    upscaled_clip: str | None = None # path to upscaled clip
     status: ApprovalStatus = ApprovalStatus.PENDING
-    frame_count: Optional[int] = None   # authoritative duration in frames
+    frame_count: int | None = None   # authoritative duration in frames
 
 
 # ---------------------------------------------------------------------------
@@ -697,39 +695,39 @@ class Scene(BaseModel):
     section: str = ""                   # e.g. "verse_1", "chorus" — from LLM or AceStep markers
 
     # Frame-accurate fields (populated by engine_registry.plan_subclips)
-    frame_start: Optional[int] = None
-    frame_end: Optional[int] = None
-    total_frames: Optional[int] = None
-    subclip_frame_counts: Optional[list[int]] = None
-    generation_audio_segments: Optional[list[str]] = None
+    frame_start: int | None = None
+    frame_end: int | None = None
+    total_frames: int | None = None
+    subclip_frame_counts: list[int] | None = None
+    generation_audio_segments: list[str] | None = None
 
     # Audio
-    audio_segment: Optional[str] = None         # path: segments/scene_001.wav
-    audio_segment_vocal: Optional[str] = None   # path: segments_vocal/scene_001_vocal.wav
+    audio_segment: str | None = None         # path: segments/scene_001.wav
+    audio_segment_vocal: str | None = None   # path: segments_vocal/scene_001_vocal.wav
 
     # Image generation
-    image_prompt: Optional[str] = None
-    image_prompt_user_override: Optional[str] = None
-    reference_image: Optional[str] = None       # path: images/scene_001.png
+    image_prompt: str | None = None
+    image_prompt_user_override: str | None = None
+    reference_image: str | None = None       # path: images/scene_001.png
     image_status: ApprovalStatus = ApprovalStatus.PENDING
 
     # Video generation
-    video_prompt: Optional[str] = None
-    video_prompt_user_override: Optional[str] = None
-    video_clip: Optional[str] = None            # path: clips/scene_001.mp4
-    video_width: Optional[int] = None            # resolution of current best clip
-    video_height: Optional[int] = None
-    upscaled_clip: Optional[str] = None          # path: clips_upscaled/scene_001.mp4
+    video_prompt: str | None = None
+    video_prompt_user_override: str | None = None
+    video_clip: str | None = None            # path: clips/scene_001.mp4
+    video_width: int | None = None            # resolution of current best clip
+    video_height: int | None = None
+    upscaled_clip: str | None = None          # path: clips_upscaled/scene_001.mp4
     video_status: ApprovalStatus = ApprovalStatus.PENDING
-    video_engine: Optional[VideoEngineType] = None  # None → use project default
-    video_seed: Optional[int] = None                # seed used for last generation (locked when approved)
-    lip_sync: Optional[bool] = None  # None → auto (depends on video_type + treatment)
-    treatment: Optional[SceneTreatment] = None  # None → auto from video_type
-    sigma_shift: Optional[float] = None  # None → use project default (HumoConfig.shift)
+    video_engine: VideoEngineType | None = None  # None → use project default
+    video_seed: int | None = None                # seed used for last generation (locked when approved)
+    lip_sync: bool | None = None  # None → auto (depends on video_type + treatment)
+    treatment: SceneTreatment | None = None  # None → auto from video_type
+    sigma_shift: float | None = None  # None → use project default (HumoConfig.shift)
     # TODO: per-scene face mask for multi-person lip sync targeting
 
     # LTX-2 generated audio mixing
-    generated_audio: Optional[str] = None                          # path to .gen_audio.wav
+    generated_audio: str | None = None                          # path to .gen_audio.wav
     audio_mode: SceneAudioMode = SceneAudioMode.SONG_ONLY
     generated_audio_volume: float = 0.8       # 0.0–1.0, gen audio loudness
     song_duck_volume: float = 0.3             # 0.0–1.0, song volume when ducking
@@ -775,11 +773,11 @@ class Scene(BaseModel):
         return self.duration > 3.88  # HuMo default
 
     @property
-    def effective_image_prompt(self) -> Optional[str]:
+    def effective_image_prompt(self) -> str | None:
         return self.image_prompt_user_override or self.image_prompt
 
     @property
-    def effective_video_prompt(self) -> Optional[str]:
+    def effective_video_prompt(self) -> str | None:
         return self.video_prompt_user_override or self.video_prompt
 
 
@@ -801,7 +799,7 @@ class SceneList(BaseModel):
         with open(path, "w") as f:
             json.dump(self.model_dump(mode="json"), f, indent=2)
 
-    def get_scene(self, scene_id: str) -> Optional[Scene]:
+    def get_scene(self, scene_id: str) -> Scene | None:
         return next((s for s in self.scenes if s.id == scene_id), None)
 
     @property

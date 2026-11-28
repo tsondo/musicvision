@@ -1,6 +1,7 @@
 """Tests for the intake pipeline components that don't require GPU or model weights."""
 
-from musicvision.engine_registry import EngineConstraints, get_constraints
+from musicvision.engine_registry import get_constraints
+from musicvision.intake.pipeline import _lyrics_for_scene_bpm
 from musicvision.intake.segmentation import (
     _engine_constraint_prompt,
     _format_lyrics_for_llm,
@@ -8,8 +9,7 @@ from musicvision.intake.segmentation import (
     _validate_and_adjust_scenes,
     segment_scenes_simple,
 )
-from musicvision.intake.pipeline import _lyrics_for_scene_bpm
-from musicvision.intake.transcription import WordTimestamp, align_lyrics_with_timestamps, TranscriptionResult
+from musicvision.intake.transcription import TranscriptionResult, WordTimestamp, align_lyrics_with_timestamps
 from musicvision.models import Scene, SceneType
 
 
@@ -304,7 +304,7 @@ class TestSongInfoFields:
     """Test new SongInfo fields survive roundtrip."""
 
     def test_beat_times_roundtrip(self, tmp_path):
-        from musicvision.models import ProjectConfig, SongSection
+        from musicvision.models import ProjectConfig
 
         config = ProjectConfig(
             song={"audio_file": "test.wav", "beat_times": [0.5, 1.0, 1.5],

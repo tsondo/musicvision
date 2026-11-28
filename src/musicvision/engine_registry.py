@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -244,8 +245,8 @@ def sub_clip_suffixes(n: int) -> list[str]:
 def plan_subclips(
     scenes: list,
     constraints: EngineConstraints,
-    segments_dir: "Path",
-    sub_segments_dir: "Path",
+    segments_dir: Path,
+    sub_segments_dir: Path,
 ) -> None:
     """
     Pre-compute sub-clip frame counts and slice audio for all scenes.
@@ -262,7 +263,6 @@ def plan_subclips(
         sub_segments_dir: Directory for sub-clip audio output.
     """
     import logging
-    from pathlib import Path
 
     from musicvision.utils.audio import detect_silences, slice_subclip_audio
 

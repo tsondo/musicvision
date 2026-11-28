@@ -2,16 +2,11 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
-import pytest
-
 from musicvision.utils.gpu import (
     _oom_suggestion,
     estimate_vram_gb,
     is_oom_error,
 )
-
 
 # ---------------------------------------------------------------------------
 # is_oom_error

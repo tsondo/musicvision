@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from musicvision.models import AssetDef, AssetImage, AssetType
 
@@ -31,14 +31,14 @@ class AssetService:
 
     # --- Read ---
 
-    def list_assets(self, asset_type: Optional[AssetType] = None) -> list[AssetDef]:
+    def list_assets(self, asset_type: AssetType | None = None) -> list[AssetDef]:
         """List all assets, optionally filtered by type."""
         assets = self.project.config.style_sheet.assets
         if asset_type is not None:
             return [a for a in assets if a.asset_type == asset_type]
         return list(assets)
 
-    def get_asset(self, asset_id: str) -> Optional[AssetDef]:
+    def get_asset(self, asset_id: str) -> AssetDef | None:
         """Return the asset with this id, or None if it does not exist."""
         return self.project.config.style_sheet.get_asset(asset_id)
 
