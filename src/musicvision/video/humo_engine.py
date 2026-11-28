@@ -705,7 +705,7 @@ class HumoEngine:
         else:
             new_h = H
             new_w = max(1, int(new_h * img_ratio))
-        img = img.resize((new_w, new_h), Image.LANCZOS)
+        img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
         delta_w = W - img.size[0]
         delta_h = H - img.size[1]
         padding = (delta_w // 2, delta_h // 2, delta_w - delta_w // 2, delta_h - delta_h // 2)
