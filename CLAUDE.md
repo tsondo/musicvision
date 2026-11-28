@@ -62,17 +62,17 @@ frontend/                    # React + Vite scene review GUI
 Two machines on the same LAN:
 
 **Inference workstation** (where this repo runs):
-- **Primary GPU**: RTX 5090 32 GB (`cuda:0`), display OFF, dedicated inference — runs DiT (FLUX diffusion, HuMo/LTX-2 transformer)
-- **Secondary GPU**: RTX 3080 Ti 12 GB (`cuda:1`) — DRIVES THE OS DISPLAY (~1.2 GB baseline); treat usable VRAM as **~10.5 GB**. Offloads T5, CLIP, VAE, Whisper, audio separator — the full encoder set does NOT fit co-resident; sequential load/encode/offload per component is mandatory.
-- OS: Windows + WSL (Fedora also used for dev)
+- **Primary GPU**: RTX 5090 32 GB (`cuda:1` in `nvidia-smi` order), display OFF, dedicated inference — runs DiT (FLUX diffusion, HuMo/LTX-2 transformer)
+- **Secondary GPU**: RTX 4080 16 GB (`cuda:0` in `nvidia-smi` order) — DRIVES THE OS DISPLAY (~1.8 GB baseline); treat usable VRAM as **~14 GB**, less if other Windows apps are holding VRAM (check `nvidia-smi` before GPU runs). Offloads T5, CLIP, VAE, Whisper, audio separator — keep the sequential load/encode/offload per component; don't assume the full encoder set fits co-resident.
+- OS: Windows + Ubuntu WSL2 (reinstalled 2026-11-28 — the venv ML extras, `.env`, and model weights must be re-provisioned; see Environment Setup)
 
-> **CUDA index note:** The 5090 is now `cuda:0` and the 3080 Ti is `cuda:1` in `nvidia-smi` order (this flipped when the 4080 was removed). It does NOT matter for MusicVision — `gpu.py` auto-detects GPUs by VRAM and assigns the highest-VRAM GPU as primary regardless of CUDA index. Do not hardcode CUDA indices anywhere in pipeline code.
+> **CUDA index note:** In `nvidia-smi` order the 4080 is `cuda:0` and the 5090 is `cuda:1`. It does NOT matter for MusicVision — `gpu.py` auto-detects GPUs by VRAM and assigns the highest-VRAM GPU as primary regardless of CUDA index. Do not hardcode CUDA indices anywhere in pipeline code.
 
 **vLLM server** (separate LAN machine, Fedora, hostname `vllm-host`):
 - GPU: RTX 3090 Ti 24GB (single GPU)
 - Model: `cyankiwi/Qwen3.6-27B-AWQ-INT4` (~17.7 GB, 4-bit AWQ, vision+text) via vLLM 0.27+, served as `qwen`
 - Endpoint: `http://192.168.68.53:8000/v1` (OpenAI-compatible; see `OPENAI_BASE_URL` in `.env`)
-- Max context 24576 tokens (KV-cache limit on 24 GB); reasoning parser `qwen3`, tool-call parser `qwen3_xml`
+- Max context 65536 tokens (`max_model_len` as of 2026-11-28); reasoning parser `qwen3`, tool-call parser `qwen3_xml`
 - Runs as a systemd user service on the host (`systemctl --user status vllm`), 24/7, no per-token cost
 
 ## Environment Setup
@@ -203,7 +203,7 @@ Run manually. Each has different hardware requirements — see docs/TESTING.md a
 - HuMo max output: 97 frames (~3.88s at 25fps). Scenes >4s are auto-split into sub-clips.
 - Sub-clip continuity: last frame of sub-clip N becomes reference image for sub-clip N+1.
 - FLUX and HuMo run sequentially (different stages), never simultaneously. Models fully unloaded between stages.
-- GPU0 (5090) runs DiT/UNet. GPU1 (3080 Ti, ~10.5 GB usable — shares the display) runs encoders/VAE, sequentially offloaded per component. This split is managed by `utils/gpu.py`.
+- Primary GPU (5090) runs DiT/UNet. Secondary GPU (4080, ~14 GB usable — shares the display) runs encoders/VAE, sequentially offloaded per component. This split is managed by `utils/gpu.py`.
 - VRAM tier system: fp16, fp8_scaled, gguf_q8, gguf_q6, gguf_q4, preview. `recommend_tier()` auto-selects based on available VRAM.
 - Upscaling: per-engine strategy — LTX-2 → LTX Spatial (latent-space), HuMo → SeedVR2 (pixel-space), preview → Real-ESRGAN or NONE. Assembly prefers upscaled clips.
 
