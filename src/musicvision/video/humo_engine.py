@@ -257,10 +257,19 @@ class HumoEngine:
             raise RuntimeError("Call load() before generate()")
 
         audio_dur = _audio_duration(inp.audio_segment)
-        n_frames  = min(MAX_FRAMES, math.ceil(audio_dur * FPS))
+        # Frames the clip must have. The epsilon stops float noise (3.52 s * 25 =
+        # 88.000000001) from rounding up a whole frame.
+        n_frames = min(MAX_FRAMES, math.ceil(audio_dur * FPS - 1e-6))
+        # The VAE's temporal stride is 4: a latent run decodes to 4k+1 frames, so
+        # any other length lost up to 3 frames per sub-clip (short clips drifted
+        # out of sync with the audio). Generate the next 4k+1 length (MAX_FRAMES is
+        # itself 4k+1) and trim back to n_frames after decoding. Frames past the
+        # audio's end get silent audio features and are the ones trimmed.
+        gen_frames = _round_up_to_4k1(n_frames)
         log.info(
-            "Generating %d frames (%.2fs) for %s",
+            "Generating %d frames (%.2fs) for %s%s",
             n_frames, n_frames / FPS, inp.output_path.name,
+            f" (sampled as {gen_frames}, trimmed)" if gen_frames != n_frames else "",
         )
 
         # Step 1-3: encode conditioning signals sequentially.
@@ -271,10 +280,10 @@ class HumoEngine:
         text_embeds = self._encode_text(inp.text_prompt)
         self._offload("t5")
 
-        image_cond = self._encode_image(inp.reference_image, n_frames)
+        image_cond = self._encode_image(inp.reference_image, gen_frames)
         self._offload("vae")
 
-        audio_embeds = self._encode_audio(inp.audio_segment, n_frames)
+        audio_embeds = self._encode_audio(inp.audio_segment, gen_frames)
         self._offload("whisper")
 
         # Resolve seed: use provided seed or generate a random one so the result
@@ -286,7 +295,7 @@ class HumoEngine:
 
         # Step 4-5: denoising loop
         video_latent = self._denoise(
-            n_frames=n_frames,
+            n_frames=gen_frames,
             text_embeds=text_embeds,
             image_cond=image_cond,
             audio_embeds=audio_embeds,
@@ -295,7 +304,7 @@ class HumoEngine:
 
         # Step 6-7: decode and save — reload VAE on encoder GPU for decode
         self._reload("vae")
-        frames = self._decode_latent(video_latent)
+        frames = self._decode_latent(video_latent)[:n_frames]
         self._offload("vae")
         _save_mp4(frames, inp.output_path, fps=FPS)
 
@@ -1177,6 +1186,11 @@ def _mux_clip_audio(video_path: Path, audio_path: Path) -> None:
         log.warning("Audio mux failed for %s: %s — keeping silent video", video_path.name, exc)
         if tmp_path.exists():
             tmp_path.unlink()
+
+
+def _round_up_to_4k1(n: int) -> int:
+    """Smallest frame count >= n of the form 4k+1 (what the VAE decodes to)."""
+    return n if (n - 1) % 4 == 0 else n + (4 - (n - 1) % 4)
 
 
 def _save_mp4(frames: Any, path: Path, fps: int = 25) -> None:

@@ -123,14 +123,14 @@ class TestSilenceSplit:
         # Should split near silence midpoints (frame 125 for 5.0s, frame 225 for 9.0s)
         assert len(result) == 3
 
-    def test_no_silences_hard_cuts(self):
-        """No silences at all → hard cuts at max_frames."""
+    def test_no_silences_balanced(self):
+        """No silences at all → equal lengths, no short tail (#30)."""
         result = compute_subclip_frames_at_silences(300, self.MAX, self.MIN, self.FPS, silences=[])
         assert sum(result) == 300
         assert all(c >= self.MIN for c in result)
         assert all(c <= self.MAX for c in result)
-        # Greedy walk: 129 + 129 + 42 (hard cut at max, last chunk gets remainder)
-        assert result == [129, 129, 42]
+        # Was 129 + 129 + 42: the short last clip came out framed differently.
+        assert result == [100, 100, 100]
 
     def test_respects_min_frames(self):
         """Silence too close to start is skipped (would create chunk < min_frames)."""
@@ -145,8 +145,19 @@ class TestSilenceSplit:
         # First chunk should NOT be ~13 frames (that's < min)
         assert result[0] >= self.MIN
 
+    def test_humo_scene_without_short_tail(self):
+        """Regression (#30): 437 frames at HuMo limits split 4x97+49; the 49-frame clip jumped."""
+        result = compute_subclip_frames_at_silences(437, 97, 25, 25, silences=[])
+        assert result == [88, 88, 87, 87, 87]
+
+    def test_silence_nearest_balanced_target_wins(self):
+        """Among valid silences, cut at the one nearest the balanced length, not the last."""
+        silences = [(1.9, 2.1), (3.9, 4.1)]  # frames 50 and 100; balanced target for 300 is 100
+        result = compute_subclip_frames_at_silences(300, self.MAX, self.MIN, self.FPS, silences)
+        assert result[0] == 100
+
     def test_respects_max_frames(self):
-        """Long stretch with no silence in range → hard cut at max_frames."""
+        """Silence beyond every clip's window is ignored; clips stay balanced and <= max."""
         # 300 frames, only silence at 11s (frame 275) — way beyond first clip's max window
         silences = [(10.9, 11.1)]
         result = compute_subclip_frames_at_silences(300, self.MAX, self.MIN, self.FPS, silences)
@@ -154,8 +165,7 @@ class TestSilenceSplit:
         assert sum(result) == 300
         assert all(c >= self.MIN for c in result)
         assert all(c <= self.MAX for c in result)
-        # First clip should be hard-cut at 129 since no silence before it
-        assert result[0] == self.MAX
+        assert result == [100, 100, 100]
 
     def test_sum_invariant(self):
         """sum(result) == total_frames for various inputs."""

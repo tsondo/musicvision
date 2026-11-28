@@ -255,3 +255,43 @@ class TestSaveFrames:
 
         with pytest.raises(RuntimeError, match="ffmpeg failed"):
             _save_frames_as_mp4_ffmpeg(frames, output)
+
+
+class TestFrameAlignment:
+    """#30: the VAE decodes 4k+1 frames; clips must still come out exactly as planned."""
+
+    @pytest.mark.parametrize(("n", "up"), [(1, 1), (49, 49), (70, 73), (71, 73), (88, 89), (96, 97), (97, 97)])
+    def test_round_up_to_4k1(self, n, up):
+        from musicvision.video.humo_engine import _round_up_to_4k1
+
+        assert _round_up_to_4k1(n) == up
+
+    @pytest.mark.parametrize(
+        ("audio_seconds", "planned"),
+        [(71 / 25, 71), (3.52, 88), (55 * 1920 / 48000, 55), (97 / 25, 97)],  # 55 frames: float gives 55.000...01
+    )
+    def test_generate_samples_4k1_and_trims_to_plan(self, monkeypatch, tmp_path, audio_seconds, planned):
+        import numpy as np
+
+        import musicvision.video.humo_engine as he
+
+        engine = object.__new__(he.HumoEngine)
+        engine._bundle = object()
+        engine.config = HumoConfig(seed=1)
+        seen: dict = {}
+
+        monkeypatch.setattr(he, "_audio_duration", lambda p: audio_seconds)
+        monkeypatch.setattr(he, "_mux_clip_audio", lambda *a: None)
+        monkeypatch.setattr(he, "_save_mp4", lambda frames, path, fps: seen.setdefault("saved", len(frames)))
+        for name in ("_offload", "_reload"):
+            monkeypatch.setattr(engine, name, lambda *a: None, raising=False)
+        monkeypatch.setattr(engine, "_encode_text", lambda p: None, raising=False)
+        monkeypatch.setattr(engine, "_encode_image", lambda p, n: seen.setdefault("image_n", n), raising=False)
+        monkeypatch.setattr(engine, "_encode_audio", lambda p, n: seen.setdefault("audio_n", n), raising=False)
+        monkeypatch.setattr(engine, "_denoise", lambda n_frames, **kw: n_frames, raising=False)
+        monkeypatch.setattr(engine, "_decode_latent", lambda n: np.zeros((n, 2, 2, 3), np.uint8), raising=False)
+
+        out = engine.generate(he.HumoInput("p", tmp_path / "r.png", tmp_path / "a.wav", tmp_path / "o.mp4"))
+        sampled = he._round_up_to_4k1(planned)
+        assert seen["image_n"] == seen["audio_n"] == sampled  # conditioned on the 4k+1 length
+        assert seen["saved"] == out.frames_generated == planned  # but saved at exactly the plan

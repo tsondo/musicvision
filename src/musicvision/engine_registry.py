@@ -151,9 +151,13 @@ def compute_subclip_frames_at_silences(
     """
     Divide total_frames into sub-clips, splitting at silence midpoints.
 
-    Greedy walk: accumulate frames toward max_frames, split at the last
-    valid silence midpoint before exceeding max. If no silence is available
-    in the valid range, hard-cut at max_frames (same as equal distribution).
+    Walk forward one sub-clip at a time. The target length for each step is
+    the remaining frames split evenly over the fewest clips that fit
+    (ceil(remaining / ceil(remaining / max))), so the scene ends without a
+    short tail. Cut at the valid silence midpoint nearest that target, or at
+    the target itself if there is none. (Previously: last silence, else a
+    hard cut at max_frames, which left e.g. 4x97 + 49 for 437 frames; the
+    short clip came out framed differently and jumped visibly, #30.)
 
     Falls back to compute_subclip_frames() if the result violates constraints.
 
@@ -190,32 +194,23 @@ def compute_subclip_frames_at_silences(
             counts.append(remaining)
             break
 
-        # Find the last silence midpoint frame within [cursor + min_frames, cursor + max_frames]
+        # Balanced target for this clip: spread what remains evenly over the fewest clips.
+        target = math.ceil(remaining / math.ceil(remaining / max_frames))
         window_lo = cursor + min_frames
         window_hi = cursor + max_frames
 
-        # Also ensure the remainder after this split is >= min_frames
-        # (unless the remainder would be the very last chunk, i.e. <= max_frames)
-        best_split = None
-        for sf in reversed(silence_frames):
-            if sf < window_lo:
-                break  # sorted, so no point continuing
-            if sf > window_hi:
-                continue
-            chunk = sf - cursor
-            leftover = total_frames - sf
-            # Accept if leftover fits in one clip, or leftover is large enough to split further
-            if leftover <= max_frames or leftover >= min_frames:
-                best_split = chunk
-                break
-
-        if best_split is not None:
-            counts.append(best_split)
-            cursor += best_split
+        # Valid silence cuts: inside [lo, hi] and leaving a remainder that is either
+        # empty, fits in one clip of at least min_frames, or can be split further.
+        candidates = [
+            sf for sf in silence_frames
+            if window_lo <= sf <= window_hi and (total_frames - sf >= min_frames)
+        ]
+        if candidates:
+            chunk = min(candidates, key=lambda sf: abs((sf - cursor) - target)) - cursor
         else:
-            # No silence in range — hard cut at max_frames
-            counts.append(max_frames)
-            cursor += max_frames
+            chunk = target
+        counts.append(chunk)
+        cursor += chunk
 
     # Validate
     valid = (
