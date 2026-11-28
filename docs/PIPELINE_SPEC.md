@@ -417,7 +417,7 @@ The active video engine is set in `project.yaml` → `video_engine`. All engines
 3. **Video Inference** (per sub-clip)
    - Input per sub-clip: text prompt + reference image + audio segment
    - For sub-clip 0: reference image is the scene's FLUX-generated image
-   - For sub-clip N (N>0): reference image is the last frame of sub-clip N-1 (continuity chaining)
+   - Every sub-clip uses the scene's reference image. Optional chaining (`sub_clip_continuity: true`) uses the last frame of sub-clip N-1 instead; off by default (compounds artifacts, see #30)
    - Seed: always resolved (random if not provided), recorded in output
    - Config from `project.yaml` (engine-specific section)
 
@@ -520,7 +520,7 @@ humo:
   sampler: "uni_pc"
   denoising_steps: 50
   block_swap_count: 0
-  sub_clip_continuity: true
+  sub_clip_continuity: false
   lora: null
   seed: null
 
@@ -632,7 +632,7 @@ vocal_separation:
 
 Each video engine has a maximum clip duration. Scenes exceeding it are automatically split into sub-clips using frame-count-first math (see Frame-Accurate Alignment System above).
 
-**Sub-clip continuity**: last frame of sub-clip N is extracted via ffmpeg and used as the reference image for sub-clip N+1. This prevents visual discontinuity within a long scene but requires sequential generation. Disable via engine config `sub_clip_continuity: false`.
+**Sub-clip continuity** (off by default): when enabled, the last frame of sub-clip N is extracted via ffmpeg and used as the reference image for sub-clip N+1. Testing (#30) showed it does not smooth boundaries (HuMo uses the reference for identity, not as the first frame; boundary jumps were 2x larger with chaining) and compounds VAE/denoise artifacts, ~7x more high-frequency grain by the 5th sub-clip. Enable via engine config `sub_clip_continuity: true`.
 
 **Sub-clip audio**: sliced from the scene's full-mix audio segment using frame-derived timestamps. Stored in `segments/sub/`. These are generation-only artifacts — assembly uses the original uncut audio.
 

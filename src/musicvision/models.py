@@ -388,7 +388,11 @@ class HumoConfig(BaseModel):
     # ~6 steps) want 1.0–1.5 instead; the fast presets set that explicitly.
     shift: float = 5.0
     block_swap_count: int = 0         # DiT blocks to keep on CPU (0 = all on GPU)
-    sub_clip_continuity: bool = True  # pass last frame of sub-clip N as reference for sub-clip N+1
+    # Chain sub-clips: use the last frame of sub-clip N as the reference for N+1.
+    # Off by default: HuMo's reference sets identity, not the first frame, so chaining
+    # gives no boundary continuity, and feeding decoded frames back compounds grain and
+    # speckle (~7x by the 5th sub-clip in testing, #30). Every sub-clip uses the scene image.
+    sub_clip_continuity: bool = False
     sampler: str = "uni_pc"           # "uni_pc" or "euler"
     lora: str | None = None           # LoRA key from weight_registry (e.g. "lightx2v_i2v_480p")
     seed: int | None = None           # global seed (overridden by per-clip HumoInput.seed)

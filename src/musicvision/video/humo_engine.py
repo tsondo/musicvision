@@ -329,8 +329,10 @@ class HumoEngine:
         (from ``engine_registry.plan_subclips``), those pre-computed values
         are used directly.  Otherwise falls back to the old float-based path.
 
-        Sub-clip continuity (config.sub_clip_continuity, default True):
-            Sub-clip N+1 uses the last frame of sub-clip N as its reference image.
+        Sub-clip continuity (config.sub_clip_continuity, default False):
+            When on, sub-clip N+1 uses the last frame of sub-clip N as its reference
+            image. Off by default: it compounds artifacts and does not make boundaries
+            smoother (HuMo's reference is identity, not the first frame). See #30.
 
         Returns:
             List of HumoOutput (one per sub-clip, or a single item for short scenes).

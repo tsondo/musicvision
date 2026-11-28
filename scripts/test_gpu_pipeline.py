@@ -435,8 +435,8 @@ def phase_scene_split(
     out_dir: Path,
 ) -> list[Path]:
     """
-    Test generate_scene() with a 7.5s scene — should split into 2 sub-clips
-    and use the last frame of sub-clip 0 as the reference for sub-clip 1.
+    Test generate_scene() with a 7.5s scene — should split into 2 sub-clips.
+    With sub_clip_continuity on, sub-clip 1 uses sub-clip 0's last frame as reference.
     """
     print(hdr("Phase 3 — generate_scene() with sub-clip splitting"))
 
@@ -517,16 +517,16 @@ def phase_scene_split(
             if valid:
                 clip_paths.append(out.video_path)
 
-        # Verify sub-clip continuity: sub-clip 1 reference is last frame of sub-clip 0
+        # Sub-clip continuity (opt-in): sub-clip 1 reference is last frame of sub-clip 0
         t_c = time.time()
         lastframe = clips_dir / f"{SCENE_ID}_a_lastframe.png"
-        continuity_ok = lastframe.exists()
-        results.record(
-            "Sub-clip continuity (last-frame ref exists)",
-            continuity_ok,
-            time.time() - t_c,
-            str(lastframe) if continuity_ok else "file not found",
-        )
+        if humo_cfg.sub_clip_continuity:
+            continuity_ok = lastframe.exists()
+            detail = str(lastframe) if continuity_ok else "file not found"
+        else:  # default: every sub-clip uses the scene reference; no last-frame file
+            continuity_ok = not lastframe.exists()
+            detail = "continuity off: no last-frame reference written" if continuity_ok else "unexpected lastframe"
+        results.record("Sub-clip reference handling", continuity_ok, time.time() - t_c, detail)
 
         return clip_paths
 

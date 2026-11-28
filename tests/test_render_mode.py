@@ -94,3 +94,10 @@ def test_preset_shift_matches_guidance(quality, shift):
 def test_default_humo_config_is_guided_with_shift_5():
     cfg = HumoConfig()
     assert cfg.scale_t > 1.0 and cfg.shift == 5.0
+
+
+def test_sub_clip_chaining_off_by_default():
+    """#30: chaining compounds artifacts and does not smooth boundaries."""
+    assert HumoConfig().sub_clip_continuity is False
+    for q in ("preview", "fast", "draft", "final"):
+        assert HumoConfig.from_quality(q).sub_clip_continuity is False

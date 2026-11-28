@@ -200,7 +200,7 @@ Run manually. Each has different hardware requirements — see docs/TESTING.md a
 ## Key Constraints
 
 - HuMo max output: 97 frames (~3.88s at 25fps). Scenes >4s are auto-split into sub-clips.
-- Sub-clip continuity: last frame of sub-clip N becomes reference image for sub-clip N+1.
+- Sub-clips all use the scene's reference image. Chaining (last frame of N → reference for N+1, `sub_clip_continuity`) is off by default: it compounds grain/speckle each hop and does not smooth boundaries, because HuMo's reference sets identity, not the first frame (#30).
 - FLUX and HuMo run sequentially (different stages), never simultaneously. Models fully unloaded between stages.
 - Primary GPU (5090) runs DiT/UNet. Secondary GPU (4080, ~14 GB usable — shares the display) runs encoders/VAE, sequentially offloaded per component. This split is managed by `utils/gpu.py`.
 - VRAM tier system: fp16, fp8_scaled, gguf_q8, gguf_q6, gguf_q4, preview. `recommend_tier()` auto-selects based on available VRAM.
