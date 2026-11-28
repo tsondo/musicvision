@@ -26,6 +26,7 @@ def assemble_rough_cut(
     paths: ProjectPaths,
     original_audio: Path,
     approved_only: bool = False,
+    fps: float | None = None,
 ) -> Path:
     """
     Assemble scene clips into a rough cut MP4.
@@ -92,7 +93,13 @@ def assemble_rough_cut(
     try:
         video_dur = get_duration(silent_cut)
         audio_dur = get_duration(original_audio)
-        fps = 25  # default; could be made configurable via engine constraints
+        if fps is None:
+            try:
+                from musicvision.utils.video import get_video_fps
+
+                fps = get_video_fps(silent_cut)
+            except Exception:
+                fps = 25.0  # last resort when the rough cut cannot be probed
         tolerance = 1.0 / fps
         drift = abs(video_dur - audio_dur)
 

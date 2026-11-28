@@ -67,9 +67,6 @@ def missing_render_weights(config: HumoConfig | LtxVideoConfig) -> dict | None:
         return {
             "missing": "lora",
             "lora": lora,
-            "hint": (
-                f"Download it with musicvision.video.weight_registry.download_lora({lora!r}), "
-                "or use render_mode='final'."
-            ),
+            "hint": f"Run: musicvision download-weights --lora {lora}  (or use render_mode='final').",
         }
     return None

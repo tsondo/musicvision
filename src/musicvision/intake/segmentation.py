@@ -260,7 +260,9 @@ Start numbering scenes at: {start_order}
 
     # Frame-accurate adjustment when engine constraints are available
     if engine_constraints:
-        scenes = _validate_and_adjust_scenes(scenes, song_duration, engine_constraints, beat_times)
+        scenes = _validate_and_adjust_scenes(
+            scenes, song_duration, engine_constraints, beat_times, min_scene_seconds=min_scene_seconds,
+        )
 
     log.info("Segmentation complete: %d scenes", len(scenes))
     return SceneList(scenes=scenes)
@@ -611,11 +613,63 @@ Duration guidance:
 Prefer {good_short:.1f}s or {good_long:.1f}s instead."""
 
 
+# Gaps between segmented scenes up to this long are absorbed into the previous
+# scene (breaths, phrase tails); longer ones become their own instrumental scene.
+LARGE_GAP_SECONDS = 3.0
+
+
+def _make_contiguous(scenes: list[Scene], song_duration: float, fps: int) -> list[Scene]:
+    """Tile the whole song with scenes: no gaps, no overlaps, boundaries on the frame grid.
+
+    The LLM segmenter often leaves small gaps between scenes; assembly joins clips
+    back to back, so every gap shortened the rough cut and pushed later scenes out
+    of sync with the audio (#30). Short gaps extend the previous scene; gaps longer
+    than LARGE_GAP_SECONDS (including a long intro or outro) become instrumental
+    scenes. On overlap the later scene starts where the earlier one ends. Ids and
+    order are renumbered.
+    """
+    snap = lambda t: round(t * fps) / fps  # noqa: E731
+    ordered = sorted((s for s in scenes if s.time_end > s.time_start), key=lambda s: s.time_start)
+    if not ordered:
+        return scenes
+    end_of_song = snap(song_duration)
+
+    def filler(start: float, end: float) -> Scene:
+        return Scene(id="", order=0, time_start=start, time_end=end, type=SceneType.INSTRUMENTAL, lyrics="")
+
+    out: list[Scene] = []
+    cursor = 0.0  # end of the last placed scene
+    for scene in ordered:
+        start, end = snap(scene.time_start), snap(min(scene.time_end, song_duration))
+        if end <= cursor:  # entirely inside the previous scene
+            continue
+        if start - cursor > LARGE_GAP_SECONDS:
+            out.append(filler(cursor, start))  # long gap: its own instrumental scene
+        elif start > cursor and out:
+            out[-1].time_end = start  # short gap: previous scene absorbs it
+        else:
+            start = cursor  # overlap, or short gap before the first scene
+        scene.time_start, scene.time_end = start, end
+        out.append(scene)
+        cursor = end
+
+    tail = end_of_song - cursor
+    if tail > LARGE_GAP_SECONDS:
+        out.append(filler(cursor, end_of_song))
+    else:
+        out[-1].time_end = end_of_song
+
+    for i, scene in enumerate(out, start=1):
+        scene.id, scene.order = f"scene_{i:03d}", i
+    return out
+
+
 def _validate_and_adjust_scenes(
     scenes: list[Scene],
     song_duration: float,
     constraints: EngineConstraints,
     beat_times: list[float] | None = None,
+    min_scene_seconds: float = 2.0,
 ) -> list[Scene]:
     """
     Post-process LLM segmentation to enforce frame-accurate constraints.
@@ -634,6 +688,14 @@ def _validate_and_adjust_scenes(
 
     fps = constraints.fps
     total_song_frames = scene_frames(0.0, song_duration, fps)
+    scenes = _make_contiguous(scenes, song_duration, fps)
+    # Beat snapping and gap filling can leave slivers (e.g. a 0.84 s one-word scene,
+    # below the engine's minimum clip); merging extends a neighbour, so tiling holds.
+    min_seconds = max(min_scene_seconds, constraints.min_frames / fps)
+    if any(s.time_end - s.time_start < min_seconds for s in scenes):
+        scenes = _merge_short_scenes(scenes, min_seconds)
+        for i, scene in enumerate(scenes, start=1):
+            scene.id, scene.order = f"scene_{i:03d}", i
 
     for scene in scenes:
         total = scene_frames(scene.time_start, scene.time_end, fps)
