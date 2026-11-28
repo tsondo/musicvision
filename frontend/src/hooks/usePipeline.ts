@@ -148,7 +148,9 @@ export function usePipeline(
   const cancelActiveJob = useCallback(async () => {
     if (!activeJob) return;
     try {
-      await apiCancelJob(activeJob.id);
+      const updated = await apiCancelJob(activeJob.id);
+      // Show "Cancelling…" right away instead of waiting for the next poll.
+      setActiveJob((cur) => (cur && cur.id === updated.id && !updated.finished_at ? updated : cur));
     } catch (err) {
       // Already finished between poll and click: nothing to cancel.
       if (!(err instanceof ApiError && err.code === "job_not_cancellable")) {

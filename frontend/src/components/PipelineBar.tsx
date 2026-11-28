@@ -493,13 +493,18 @@ export default function PipelineBar({
                 ? `${activeJob.progress.current}/${activeJob.progress.total}`
                 : "running"}
           </span>
-          <span className="job-strip-message">{activeJob.progress.message}</span>
+          <span className="job-strip-message">
+            {activeJob.cancel_requested
+              ? `Cancelling after ${activeJob.progress.scene_id ?? "the current step"} finishes…`
+              : activeJob.progress.message}
+          </span>
           <button
             className="btn-sm"
             onClick={onCancelJob}
+            disabled={activeJob.cancel_requested}
             title="Stops after the current scene finishes; finished scenes are kept"
           >
-            Cancel
+            {activeJob.cancel_requested ? "Cancelling…" : "Cancel"}
           </button>
         </div>
       )}

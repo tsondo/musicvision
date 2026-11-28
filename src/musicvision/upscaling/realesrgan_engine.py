@@ -69,6 +69,12 @@ class RealEsrganEngine(UpscaleEngine):
                 log.warning("No Real-ESRGAN backend found — will use ffmpeg lanczos scaling")
         self._loaded = True
 
+    @property
+    def backend_label(self) -> str:
+        if self._mode == "ffmpeg":
+            return "real_esrgan (unavailable: ffmpeg lanczos fallback)"
+        return f"real_esrgan ({self._mode})"
+
     def _try_load_python(self) -> bool:
         """Try loading the Python realesrgan package with CUDA."""
         try:

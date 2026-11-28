@@ -51,3 +51,8 @@ class UpscaleEngine(ABC):
     @abstractmethod
     def is_loaded(self) -> bool:
         """Whether the model is currently loaded in memory."""
+
+    @property
+    def backend_label(self) -> str:
+        """Human-readable name of the backend actually in use (for progress messages)."""
+        return type(self).__name__

@@ -311,6 +311,8 @@ class TestHandlers:
                     outputs.append(HumoOutput(video_path=clip, frames_generated=97, duration_seconds=3.88))
                 return outputs
 
+        for scene in proj.scenes.scenes:
+            scene.upscaled_clip = f"clips_upscaled/{scene.id}.mp4"  # from a previous video
         monkeypatch.setattr(video, "create_video_engine", lambda *a, **kw: FakeHumoEngine())
         monkeypatch.setattr("musicvision.api.app.missing_render_weights", lambda cfg: None)
         monkeypatch.setattr("musicvision.utils.video.update_scene_resolution", lambda *a, **kw: None)
@@ -322,6 +324,7 @@ class TestHandlers:
         assert final["result"]["failed"] == []
         assert final["result"]["generated"] == ["scene_001", "scene_002", "scene_003"]
         assert proj.scenes.get_scene("scene_002").video_clip == "clips/scene_002_joined.mp4"
+        assert all(sc.upscaled_clip is None for sc in proj.scenes.scenes)  # stale upscales invalidated
 
     def _video_ready(self, proj):
         song = proj.paths.root / "input" / "song.wav"
@@ -468,7 +471,7 @@ class TestUpscaleCallbacks:
         up, scenes, paths, config, engine, calls = self._setup(tmp_path, monkeypatch)
         seen: list[JobProgress] = []
         result = up.upscale_clips(scenes, paths, config, engine, on_progress=seen.append)
-        assert result == {"upscaled": ["s0", "s1", "s2"], "failed": []}
+        assert result == {"upscaled": ["s0", "s1", "s2"], "failed": [], "skipped": []}
         assert [p.current for p in seen if p.message.startswith("Upscaled")] == [1, 2, 3]
         assert all(p.total == 3 for p in seen)
 
@@ -480,6 +483,30 @@ class TestUpscaleCallbacks:
         assert result["upscaled"] == ["s0"]
         assert result["cancelled"] is True
         assert calls[-1] == "unload"
+
+    def test_cancel_after_last_scene_is_completion(self, tmp_path, monkeypatch):
+        up, scenes, paths, config, engine, calls = self._setup(tmp_path, monkeypatch)
+        result = up.upscale_clips(
+            scenes, paths, config, engine, should_cancel=lambda: len([c for c in calls if c != "unload"]) >= 3,
+        )
+        assert result["upscaled"] == ["s0", "s1", "s2"]
+        assert "cancelled" not in result
+
+    def test_skip_current_skips_only_matching_resolution(self, tmp_path, monkeypatch):
+        up, scenes, paths, config, engine, calls = self._setup(tmp_path, monkeypatch)
+        w, h = config.target_width_height()
+        res = {"s0": (w, h), "s1": (1280, 720)}  # s1 upscaled at an old resolution; s2 never upscaled
+        for sid in res:
+            clip = tmp_path / "clips_upscaled" / f"{sid}.mp4"
+            clip.parent.mkdir(parents=True, exist_ok=True)
+            clip.write_bytes(b"mp4")
+            scenes.get_scene(sid).upscaled_clip = f"clips_upscaled/{sid}.mp4"
+        monkeypatch.setattr("musicvision.utils.video.get_video_resolution", lambda p: res[p.stem])
+
+        result = up.upscale_clips(scenes, paths, config, engine, skip_current=True)
+        assert result["skipped"] == ["s0"]
+        assert result["upscaled"] == ["s1", "s2"]
+        assert up.upscale_clips(scenes, paths, config, engine)["skipped"] == []  # default: redo all
 
 
 # ---------------------------------------------------------------------------

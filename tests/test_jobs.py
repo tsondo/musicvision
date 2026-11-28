@@ -207,6 +207,86 @@ class TestCancellation:
         assert done.result["partial"] is True
         assert done.result["completed_units"] == 1  # finished exactly the in-flight unit
 
+    def test_cancel_running_sets_flag_and_journals_it(self, manager, tmp_path):
+        started, release = threading.Event(), threading.Event()
+
+        def handler(params, ctx):
+            started.set()
+            release.wait(timeout=5)
+            ctx.raise_if_cancelled()
+            return {}
+
+        manager.register(JobKind.GENERATE_VIDEOS, handler)
+        job = manager.submit(JobKind.GENERATE_VIDEOS)
+        assert started.wait(timeout=5)
+        snap = manager.cancel(job.id)
+        assert snap.state == JobState.RUNNING and snap.cancel_requested is True
+        assert manager.get(job.id).cancel_requested is True
+        journal = [json.loads(line) for line in (tmp_path / "jobs.jsonl").read_text().splitlines()]
+        assert any(e["id"] == job.id and e["state"] == "running" and e["cancel_requested"] for e in journal)
+        release.set()
+        wait_for(lambda: manager.get(job.id).state == JobState.CANCELLED)
+
+    def test_cancel_during_last_unit_ends_succeeded_with_flag(self, manager):
+        started, release = threading.Event(), threading.Event()
+
+        def handler(params, ctx):  # single-unit job, like regenerate_image
+            ctx.raise_if_cancelled()
+            started.set()
+            release.wait(timeout=5)
+            ctx.report(current=1, total=1)
+            return {"status": "complete"}
+
+        manager.register(JobKind.REGENERATE_IMAGE, handler)
+        job = manager.submit(JobKind.REGENERATE_IMAGE)
+        assert started.wait(timeout=5)
+        manager.cancel(job.id)
+        release.set()
+        wait_for(lambda: manager.get(job.id).is_terminal)
+        done = manager.get(job.id)
+        assert done.state == JobState.SUCCEEDED  # all work finished before a cancellation point
+        assert done.cancel_requested is True
+        assert done.result == {"status": "complete"}
+
+    def test_cancelled_result_reports_partial_lists(self, manager):
+        started, release = threading.Event(), threading.Event()
+
+        def handler(params, ctx):
+            generated, failed = [], []
+            ctx.partial_result(generated=generated, failed=failed)
+            for i, sid in enumerate(["s1", "s2", "s3", "s4"]):
+                ctx.raise_if_cancelled()
+                if sid == "s2":
+                    failed.append({"scene_id": sid, "error": "boom"})
+                else:
+                    generated.append(sid)
+                ctx.report(current=i + 1, total=4)
+                if i == 1:
+                    started.set()
+                    release.wait(timeout=5)
+            return {"generated": generated, "failed": failed}
+
+        manager.register(JobKind.GENERATE_VIDEOS, handler)
+        job = manager.submit(JobKind.GENERATE_VIDEOS)
+        assert started.wait(timeout=5)
+        manager.cancel(job.id)
+        release.set()
+        wait_for(lambda: manager.get(job.id).state == JobState.CANCELLED)
+        result = manager.get(job.id).result
+        assert result["partial"] is True
+        assert result["completed_units"] == 2          # processed, successful or not
+        assert result["generated"] == ["s1"]           # what actually succeeded
+        assert result["failed"] == [{"scene_id": "s2", "error": "boom"}]
+
+    def test_old_journal_entries_without_cancel_requested_load(self, tmp_path):
+        from musicvision.models import Job
+
+        legacy = {"id": "job_old", "kind": "generate_images", "params": {}, "state": "succeeded",
+                  "progress": {"current": 1, "total": 1, "unit": "scenes", "message": "", "scene_id": None},
+                  "error": None, "result": {}, "created_at": "2026-11-01T00:00:00Z",
+                  "started_at": None, "finished_at": None}
+        assert Job.model_validate(legacy).cancel_requested is False
+
     def test_cancel_terminal_job_rejected(self, manager):
         manager.register(JobKind.GENERATE_IMAGES, make_counting_handler(units=1))
         job = manager.submit(JobKind.GENERATE_IMAGES)

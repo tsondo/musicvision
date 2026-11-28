@@ -34,6 +34,7 @@ def upscale_clips(
     device_map: DeviceMap | None = None,
     on_progress: Callable[[JobProgress], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
+    skip_current: bool = False,
 ) -> dict:
     """Upscale video clips for scenes.
 
@@ -50,6 +51,10 @@ def upscale_clips(
         should_cancel: Optional cooperative-cancel check, polled between
             scenes (never mid-upscale). When it returns True the remaining
             scenes are skipped and the result reports ``cancelled: True``.
+        skip_current: Skip scenes whose upscaled clip exists on disk at the
+            target resolution (listed under ``skipped``). Video jobs clear
+            ``upscaled_clip`` when they record a new clip, so a skipped
+            upscale is never stale.
 
     Returns:
         Dict with "upscaled" and "failed" scene ID lists (plus
@@ -79,9 +84,21 @@ def upscale_clips(
     if scene_ids:
         targets = [s for s in targets if s.id in scene_ids]
 
+    skipped: list[str] = []
+    if skip_current:
+        keep = []
+        for s in targets:
+            if _upscale_is_current(s, paths, target_w, target_h):
+                skipped.append(s.id)
+            else:
+                keep.append(s)
+        targets = keep
+        if skipped:
+            log.info("Skipping %d scene(s) already upscaled to %dx%d", len(skipped), target_w, target_h)
+
     if not targets:
         log.info("No scenes with video clips to upscale")
-        return {"upscaled": [], "failed": []}
+        return {"upscaled": [], "failed": [], "skipped": skipped}
 
     # Group by video engine → select upscaler per group
     engine_groups: dict[UpscalerType, list[Scene]] = defaultdict(list)
@@ -95,7 +112,7 @@ def upscale_clips(
 
     if not engine_groups:
         log.info("All scenes mapped to NONE upscaler — skipping")
-        return {"upscaled": [], "failed": []}
+        return {"upscaled": [], "failed": [], "skipped": skipped}
 
     upscaled: list[str] = []
     failed: list[str] = []
@@ -117,7 +134,7 @@ def upscale_clips(
             for scene in group_scenes:
                 if should_cancel is not None and should_cancel():
                     break
-                _report(scene.id, f"Upscaling {scene.id} with {upscaler_type.value}")
+                _report(scene.id, f"Upscaling {scene.id} with {getattr(engine, 'backend_label', upscaler_type.value)}")
                 try:
                     _upscale_scene(scene, engine, paths, target_w, target_h)
                     # Update resolution metadata from the upscaled clip
@@ -133,10 +150,27 @@ def upscale_clips(
         finally:
             engine.unload()
 
-    result: dict = {"upscaled": upscaled, "failed": failed}
-    if should_cancel is not None and should_cancel():
+    result: dict = {"upscaled": upscaled, "failed": failed, "skipped": skipped}
+    # Cancelled only if scenes were actually left undone; a cancel that arrives
+    # after the last scene finished is a normal completion.
+    if done < total:
         result["cancelled"] = True
     return result
+
+
+def _upscale_is_current(scene: Scene, paths: ProjectPaths, target_w: int, target_h: int) -> bool:
+    """True if the scene's upscaled clip exists at exactly the target resolution."""
+    if not scene.upscaled_clip:
+        return False
+    p = _abs(scene.upscaled_clip, paths)
+    if not p.exists():
+        return False
+    try:
+        from musicvision.utils.video import get_video_resolution
+
+        return get_video_resolution(p) == (target_w, target_h)
+    except Exception:
+        return False
 
 
 def _has_video(scene: Scene) -> bool:

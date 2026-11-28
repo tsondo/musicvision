@@ -326,6 +326,8 @@ export interface Job {
   progress: JobProgress;
   error: JobError | null;
   result: Record<string, unknown>;
+  /** True once cancel was requested while running (job stops at the next scene boundary). */
+  cancel_requested?: boolean;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;

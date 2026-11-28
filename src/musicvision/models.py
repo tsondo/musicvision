@@ -887,6 +887,9 @@ class Job(BaseModel):
     progress: JobProgress = Field(default_factory=JobProgress)
     error: JobError | None = None
     result: dict = Field(default_factory=dict)
+    # True once cancel was requested while running. The job still ends
+    # "succeeded" if its last unit finishes before a cancellation checkpoint.
+    cancel_requested: bool = False
     created_at: datetime
     started_at: datetime | None = None
     finished_at: datetime | None = None

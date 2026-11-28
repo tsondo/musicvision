@@ -20,6 +20,7 @@ FAILED(server_restarted).
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import threading
@@ -130,6 +131,14 @@ class JobContext:
     def cancelled(self) -> bool:
         return self._manager._is_cancel_requested(self._job_id)
 
+    def partial_result(self, **fields) -> None:
+        """Register live per-unit results (e.g. generated=[...], failed=[...]).
+
+        Pass the handler's own lists once; if the job is cancelled, their
+        contents at that moment are copied into the job result, so a
+        cancelled job reports which units succeeded and which failed."""
+        self._manager._set_partial(self._job_id, fields)
+
     def raise_if_cancelled(self) -> None:
         """Call at unit boundaries (between scenes/sub-clips), never mid-denoise."""
         if self.cancelled():
@@ -159,6 +168,7 @@ class JobManager:
         self._queue: deque[str] = deque()
         self._handlers: dict[JobKind, JobHandler] = {}
         self._cancel_requested: set[str] = set()
+        self._partials: dict[str, dict] = {}
         self._journal_path: Path | None = None
         self._lock = threading.Lock()
         self._wake = threading.Event()
@@ -258,9 +268,9 @@ class JobManager:
                 self._finish_locked(job, JobState.CANCELLED)
             else:  # RUNNING — cooperative: worker observes the flag between units
                 self._cancel_requested.add(job_id)
+                job.cancel_requested = True
             snapshot = job.model_copy(deep=True)
-        if snapshot.is_terminal:
-            self._journal_append(snapshot)
+        self._journal_append(snapshot)
         return snapshot
 
     # -- worker ------------------------------------------------------------
@@ -318,7 +328,11 @@ class JobManager:
             if outcome == JobState.CANCELLED:
                 # Cooperative cancel keeps completed artifacts; handler-reported
                 # progress shows how far it got.
-                job.result = {"partial": True, "completed_units": job.progress.current}
+                job.result = {
+                    "partial": True,
+                    "completed_units": job.progress.current,  # units processed, successful or not
+                    **copy.deepcopy(self._partials.get(job_id, {})),
+                }
             else:
                 job.result = result if isinstance(result, dict) else {}
             self._finish_locked(job, outcome, error)
@@ -332,6 +346,11 @@ class JobManager:
         job.error = error
         job.finished_at = datetime.now(UTC)
         self._cancel_requested.discard(job.id)
+        self._partials.pop(job.id, None)
+
+    def _set_partial(self, job_id: str, fields: dict) -> None:
+        with self._lock:
+            self._partials.setdefault(job_id, {}).update(fields)
 
     def _update_progress(self, job_id: str, progress: JobProgress) -> None:
         with self._lock:

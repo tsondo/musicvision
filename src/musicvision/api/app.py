@@ -367,9 +367,12 @@ async def list_jobs(state: str | None = None, kind: str | None = None, limit: in
 
 @app.post("/api/jobs/{job_id}/cancel")
 async def cancel_job(job_id: str) -> Job:
-    """Request job cancellation. Queued jobs cancel immediately; a running job
-    finishes its current scene/sub-clip first (completed artifacts are kept)
-    and ends as cancelled with partial results. 409 if already finished."""
+    """Request job cancellation. Queued jobs cancel immediately. A running job
+    gets cancel_requested=true at once, finishes its current scene/sub-clip
+    (completed artifacts are kept), then ends as cancelled with partial results
+    (generated/failed lists where the job kind has them). If that was its last
+    unit, it ends as succeeded with cancel_requested=true. 409 if already
+    finished."""
     return job_manager.cancel(job_id)
 
 
@@ -968,6 +971,7 @@ def _job_regenerate_video(params: dict, ctx: JobContext) -> dict:
             subclip_audio_paths=subclip_audio,
         )
 
+        scene.upscaled_clip = None  # new video: any old upscale is stale
         if len(results) > 1:
             scene.sub_clips = []
             suffixes = sub_clip_suffixes(len(results))
@@ -1215,6 +1219,7 @@ def _run_prompt_batch(
     total = len(need_prompt)
     generated: list[str] = []
     failed: list[dict] = []
+    ctx.partial_result(generated=generated, failed=failed)
     if not need_prompt:
         return {"status": "complete", "generated": [], "failed": [], "total": 0}
 
@@ -1341,6 +1346,7 @@ def _job_generate_images(params: dict, ctx: JobContext) -> dict:
 
     generated: list[str] = []
     failed: list[dict] = []
+    ctx.partial_result(generated=generated, failed=failed)
 
     try:
         # Group by LoRA (minimize fuse/unfuse swaps), then by IP-Adapter
@@ -1527,6 +1533,7 @@ def _job_generate_videos(params: dict, ctx: JobContext) -> dict:
 
     generated: list[str] = []
     failed: list[dict] = []
+    ctx.partial_result(generated=generated, failed=failed)
     done = 0
 
     for engine_type, group_scenes in engine_groups.items():
@@ -1602,6 +1609,7 @@ def _job_generate_videos(params: dict, ctx: JobContext) -> dict:
                         subclip_audio_paths=subclip_audio,
                     )
 
+                    scene.upscaled_clip = None  # new video: any old upscale is stale
                     if len(results) > 1:
                         scene.sub_clips = []
                         suffixes = sub_clip_suffixes(len(results))
@@ -1691,6 +1699,7 @@ class UpscaleRequest(BaseModel):
     resolution: str | None = None       # "720p" | "1080p" | "1440p" | "4k"
     upscaler: str | None = None         # override: "ltx_spatial" | "seedvr2" | "real_esrgan"
     render_mode: str = "final"          # "preview" | "final"
+    force: bool = False                 # redo scenes already upscaled at the target resolution
 
 
 class UpscaleSceneJobParams(UpscaleRequest):
@@ -1704,7 +1713,9 @@ class AssembleRequest(BaseModel):
     export_fcpxml: bool = True
 
 
-def _run_upscale(req: UpscaleRequest, scene_ids: list[str] | None, ctx: JobContext) -> dict:
+def _run_upscale(
+    req: UpscaleRequest, scene_ids: list[str] | None, ctx: JobContext, *, skip_current: bool,
+) -> dict:
     """Shared body for the upscale and upscale_scene jobs."""
     from musicvision.jobs import JobCancelledError
     from musicvision.models import TargetResolution, UpscalerType
@@ -1712,11 +1723,12 @@ def _run_upscale(req: UpscaleRequest, scene_ids: list[str] | None, ctx: JobConte
 
     proj = _job_project()
 
-    # Apply overrides (ephemeral, not saved to disk)
+    # Overrides apply to a copy; proj.config is never mutated by a job.
+    upscaler_config = proj.config.upscaler.model_copy(deep=True)
     if req.resolution:
-        proj.config.upscaler.target_resolution = TargetResolution(req.resolution)
+        upscaler_config.target_resolution = TargetResolution(req.resolution)
     if req.upscaler:
-        proj.config.upscaler.upscaler_override = UpscalerType(req.upscaler)
+        upscaler_config.upscaler_override = UpscalerType(req.upscaler)
 
     device_map = None
     try:
@@ -1729,21 +1741,24 @@ def _run_upscale(req: UpscaleRequest, scene_ids: list[str] | None, ctx: JobConte
     result = upscale_clips(
         scenes=proj.scenes,
         paths=proj.paths,
-        upscaler_config=proj.config.upscaler,
+        upscaler_config=upscaler_config,
         default_engine=proj.config.video_engine,
         render_mode=req.render_mode,
         scene_ids=scene_ids,
         device_map=device_map,
         on_progress=lambda p: ctx.report(p.current, p.total, p.unit, p.message, p.scene_id),
         should_cancel=ctx.cancelled,
+        skip_current=skip_current,
     )
     proj.save_scenes()
     if result.get("cancelled"):
+        ctx.partial_result(upscaled=result["upscaled"], failed=result["failed"], skipped=result["skipped"])
         raise JobCancelledError()
     return {
         "status": "complete",
         "upscaled": result["upscaled"],
         "failed": result["failed"],
+        "skipped": result["skipped"],
         "total": len(result["upscaled"]) + len(result["failed"]),
     }
 
@@ -1761,7 +1776,7 @@ async def upscale_videos(req: UpscaleRequest) -> Job:
 
 def _job_upscale(params: dict, ctx: JobContext) -> dict:
     req = UpscaleRequest.model_validate(params)
-    return _run_upscale(req, req.scene_ids or None, ctx)
+    return _run_upscale(req, req.scene_ids or None, ctx, skip_current=not req.force)
 
 
 @app.post("/api/scenes/{scene_id}/upscale", status_code=202)
@@ -1784,7 +1799,7 @@ def _job_upscale_scene(params: dict, ctx: JobContext) -> dict:
             "Scene has no video clip to upscale",
             {"scene_id": scene.id, "missing": "video_clip"},
         )
-    return _run_upscale(req, [scene.id], ctx)
+    return _run_upscale(req, [scene.id], ctx, skip_current=False)  # explicit per-scene request: always redo
 
 
 @app.post("/api/pipeline/assemble", status_code=202)
