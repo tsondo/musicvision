@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 from musicvision.models import ImageModel, Scene, StyleSheet
 
@@ -28,7 +27,7 @@ class SceneConditioning:
     prompt_fragments: list[str] = field(default_factory=list)
 
     # LoRA — at most one active (first character with LoRA wins)
-    lora_path: Optional[str] = None
+    lora_path: str | None = None
     lora_weight: float = 0.8
 
     # IP-Adapter — can have multiple (one per asset)
@@ -56,7 +55,7 @@ def resolve_scene_conditioning(
     scene: Scene,
     style_sheet: StyleSheet,
     image_engine: ImageModel,
-    project_root: Optional[Path] = None,
+    project_root: Path | None = None,
 ) -> SceneConditioning:
     """
     Build conditioning for a scene from its referenced assets.

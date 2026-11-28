@@ -1,12 +1,11 @@
 """Tests for the core data models and project service."""
 
 import json
-from pathlib import Path
 
 import pytest
 
+from musicvision.assembly.timecode import scene_clip_filename, seconds_to_filename_stamp
 from musicvision.models import (
-    ApprovalStatus,
     CharacterDef,
     DemucsModel,
     FluxConfig,
@@ -23,7 +22,6 @@ from musicvision.models import (
     VocalSeparationConfig,
 )
 from musicvision.project import ProjectService
-from musicvision.assembly.timecode import seconds_to_filename_stamp, scene_clip_filename
 
 
 class TestModels:

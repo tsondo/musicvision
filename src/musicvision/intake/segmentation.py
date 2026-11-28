@@ -124,7 +124,9 @@ Start numbering scenes at: {start_order}
         if pass_num == 0 and acestep_lyrics:
             section_markers = _extract_section_markers(acestep_lyrics)
             if section_markers:
-                user_message += f"\nSection structure hints (from metadata, for boundary guidance only):\n{section_markers}\n"
+                user_message += (
+                    f"\nSection structure hints (from metadata, for boundary guidance only):\n{section_markers}\n"
+                )
 
         user_message += "\nPlease segment this song into scenes for a music video."
 

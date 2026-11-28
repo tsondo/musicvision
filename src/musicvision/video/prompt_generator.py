@@ -14,11 +14,10 @@ Backend controlled by LLM_BACKEND env var. See musicvision/llm.py for config.
 from __future__ import annotations
 
 import logging
-
 import sys
 
 from musicvision.llm import LLMClient, LLMConfig, get_client, llm_available
-from musicvision.models import ProjectConfig, Scene, SceneType, StyleSheet
+from musicvision.models import ProjectConfig, Scene, SceneType
 
 log = logging.getLogger(__name__)
 

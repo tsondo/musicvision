@@ -24,8 +24,12 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    import torch
 
 log = logging.getLogger(__name__)
 
@@ -91,7 +95,7 @@ class HumoAudioEncoder:
         audio_path: Path,
         num_latent_frames: int,
         include_ref_frame: bool = True,
-    ) -> "torch.Tensor":
+    ) -> torch.Tensor:
         """
         Extract audio conditioning features for a single video clip.
 
@@ -178,7 +182,7 @@ class HumoAudioEncoder:
     # Whisper feature extraction
     # ------------------------------------------------------------------
 
-    def _extract_whisper_features(self, wav: np.ndarray) -> "torch.Tensor":
+    def _extract_whisper_features(self, wav: np.ndarray) -> torch.Tensor:
         """
         Run the Whisper encoder on raw audio and return all hidden states,
         truncated to the actual audio length (excluding Whisper's 30-second padding).
@@ -270,7 +274,7 @@ class HumoAudioEncoder:
     # Band splitting
     # ------------------------------------------------------------------
 
-    def _split_bands(self, hidden_states: "torch.Tensor") -> "torch.Tensor":
+    def _split_bands(self, hidden_states: torch.Tensor) -> torch.Tensor:
         """
         Average Whisper hidden-state layers into 5 frequency-analogue bands.
 
@@ -306,8 +310,8 @@ class HumoAudioEncoder:
     # ------------------------------------------------------------------
 
     def _interpolate_to_fps(
-        self, bands: "torch.Tensor", duration: float
-    ) -> "torch.Tensor":
+        self, bands: torch.Tensor, duration: float
+    ) -> torch.Tensor:
         """
         Resample band features from Whisper's 50 fps to the target video fps.
 
@@ -318,7 +322,6 @@ class HumoAudioEncoder:
         Returns:
             [1, target_video_frames, 5, 1280]
         """
-        import torch
         import torch.nn.functional as F
 
         target_frames = max(1, int(duration * self.target_fps))
@@ -347,8 +350,8 @@ class HumoAudioEncoder:
     # ------------------------------------------------------------------
 
     def _extract_windows(
-        self, bands: "torch.Tensor", num_latent_frames: int
-    ) -> "torch.Tensor":
+        self, bands: torch.Tensor, num_latent_frames: int
+    ) -> torch.Tensor:
         """
         Extract a fixed-size temporal window of audio features per latent frame.
 
@@ -378,7 +381,7 @@ class HumoAudioEncoder:
         zero_embed = torch.zeros(B, 1, num_bands, dim, dtype=bands.dtype, device=bands.device)
         zero_3 = torch.zeros(B, 3, num_bands, dim, dtype=bands.dtype, device=bands.device)
 
-        def _gather(start: int, end: int) -> "torch.Tensor":
+        def _gather(start: int, end: int) -> torch.Tensor:
             """Gather features for indices [start..end), zero-pad OOB."""
             frames = []
             for i in range(start, end):
@@ -412,7 +415,7 @@ class HumoAudioEncoder:
 # Utility
 # ---------------------------------------------------------------------------
 
-def _concat_tensors(a: "torch.Tensor", b: "torch.Tensor", dim: int) -> "torch.Tensor":
+def _concat_tensors(a: torch.Tensor, b: torch.Tensor, dim: int) -> torch.Tensor:
     """torch.cat wrapper kept out of the class body to avoid import at module level."""
     import torch
     return torch.cat([a, b], dim=dim)

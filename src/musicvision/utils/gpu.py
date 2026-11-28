@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import torch
 
+    from musicvision.models import HumoTier
+
 log = logging.getLogger(__name__)
 
 
@@ -28,17 +30,17 @@ log = logging.getLogger(__name__)
 class DeviceMap:
     """Device assignments for the two-GPU split."""
 
-    dit_device: "torch.device"          # primary: DiT / UNet
-    encoder_device: "torch.device"      # secondary: T5, CLIP, Whisper
-    vae_device: "torch.device"          # secondary: VAE encode/decode
-    offload_device: "torch.device"      # CPU for idle models
+    dit_device: torch.device          # primary: DiT / UNet
+    encoder_device: torch.device      # secondary: T5, CLIP, Whisper
+    vae_device: torch.device          # secondary: VAE encode/decode
+    offload_device: torch.device      # CPU for idle models
 
     @property
-    def primary(self) -> "torch.device":
+    def primary(self) -> torch.device:
         return self.dit_device
 
     @property
-    def secondary(self) -> "torch.device":
+    def secondary(self) -> torch.device:
         return self.encoder_device
 
 
@@ -167,6 +169,7 @@ def log_vram_usage() -> None:
 def clear_vram() -> None:
     """Aggressively free VRAM/RAM. Call between pipeline stages (FLUX → HuMo swap)."""
     import gc
+
     import torch
 
     gc.collect()
@@ -181,7 +184,7 @@ def clear_vram() -> None:
     log.info("VRAM cleared")
 
 
-def recommend_tier(device_map: DeviceMap) -> "HumoTier":
+def recommend_tier(device_map: DeviceMap) -> HumoTier:
     """
     Suggest the best HumoTier for the detected hardware.
 
@@ -200,6 +203,7 @@ def recommend_tier(device_map: DeviceMap) -> "HumoTier":
         sequential load/encode/offload (see HumoEngine.generate).
     """
     import torch
+
     from musicvision.models import HumoTier
 
     # MPS: preview tier only (no FP8, limited quantization support)
@@ -402,7 +406,7 @@ def _set_power_limit(gpu_index: int, watts: float) -> bool:
 def _is_wsl() -> bool:
     """Detect if running under WSL."""
     try:
-        with open("/proc/version", "r") as f:
+        with open("/proc/version") as f:
             return "microsoft" in f.read().lower()
     except OSError:
         return False
@@ -457,7 +461,7 @@ def restore_power_limit(device_map: DeviceMap) -> bool:
     return _set_power_limit(gpu_index, default)
 
 
-def _device_to_index(device: "torch.device") -> int | None:
+def _device_to_index(device: torch.device) -> int | None:
     """Extract the CUDA index from a torch device, or None if not CUDA."""
     if device.type != "cuda":
         return None

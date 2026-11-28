@@ -18,7 +18,6 @@ from pathlib import Path
 from musicvision.intake.audio_analysis import create_separator, detect_bpm, detect_sections, get_beat_times
 from musicvision.intake.segmentation import segment_scenes, segment_scenes_simple
 from musicvision.intake.transcription import (
-    TranscriptionResult,
     WordTimestamp,
     align_lyrics_with_timestamps,
     load_lyrics_file,
@@ -29,7 +28,6 @@ from musicvision.models import (
     Scene,
     SceneBoundary,
     SceneList,
-    SceneType,
     SongSection,
 )
 from musicvision.project import ProjectService
@@ -641,11 +639,10 @@ def _transcribe_scene_slices(
             return
 
     log.info("Transcribing %d scene slices with Whisper for accurate lyrics...", len(scenes))
-    transcription_fn = transcribe  # import already at top
-
     # Load model once, transcribe all scenes
     import torch
-    from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline as hf_pipeline
+    from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
+    from transformers import pipeline as hf_pipeline
 
     model_name = "openai/whisper-large-v3"
     torch_dtype = torch.float16 if "cuda" in device else torch.float32

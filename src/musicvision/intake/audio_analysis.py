@@ -510,11 +510,11 @@ class DemucsSeparator:
 # ---------------------------------------------------------------------------
 
 def create_separator(
-    method: "SeparationMethod",
+    method: SeparationMethod,
     *,
     device: str = "cuda:1",
     demucs_model: str = "htdemucs",
-) -> "DemucsSeparator":
+) -> DemucsSeparator:
     """
     Create and return a Demucs vocal separator.
 
@@ -523,7 +523,7 @@ def create_separator(
         device: CUDA device string (e.g. "cuda:0", "cuda:1", "cpu")
         demucs_model: Demucs variant name (htdemucs, htdemucs_ft, mdx_extra, etc.)
     """
-    from musicvision.models import SeparationMethod as SM
+    from musicvision.models import SeparationMethod as SM  # noqa: N817
 
     if method == SM.DEMUCS:
         return DemucsSeparator(model_name=demucs_model, device=device)

@@ -11,7 +11,7 @@ import logging
 import shutil
 from pathlib import Path
 
-from musicvision.models import ProjectConfig, SceneList, AceStepMeta
+from musicvision.models import AceStepMeta, ProjectConfig, SceneList
 from musicvision.utils.paths import ProjectPaths
 
 log = logging.getLogger(__name__)

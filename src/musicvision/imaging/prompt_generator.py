@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import logging
-
 import sys
 
 from musicvision.llm import LLMClient, LLMConfig, get_client, llm_available
@@ -57,8 +56,14 @@ def _resolve_treatment(scene: Scene, config: ProjectConfig) -> str:
 def _treatment_context(treatment: str) -> str:
     """Return hidden prompt context based on scene treatment."""
     if treatment == "performance":
-        return "This is a performance scene. The performer is on stage, singing or playing. Camera captures the live performance energy."
-    return "This is a narrative/cinematic scene. Focus on mood, story, and visual atmosphere. No performer on stage unless specified."
+        return (
+            "This is a performance scene. The performer is on stage, singing or playing. "
+            "Camera captures the live performance energy."
+        )
+    return (
+        "This is a narrative/cinematic scene. Focus on mood, story, and visual atmosphere. "
+        "No performer on stage unless specified."
+    )
 
 
 def _build_style_context(config: ProjectConfig, scene: Scene | None = None) -> str:

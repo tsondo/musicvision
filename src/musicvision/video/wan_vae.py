@@ -19,6 +19,10 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import torch
 
 log = logging.getLogger(__name__)
 
@@ -71,7 +75,7 @@ class WanVideoVAE:
 
         log.info("WanVideoVAE ready.")
 
-    def encode(self, pixels: "torch.Tensor") -> "torch.Tensor":
+    def encode(self, pixels: torch.Tensor) -> torch.Tensor:
         """
         Encode pixel video tensor into VAE latents.
 
@@ -96,7 +100,7 @@ class WanVideoVAE:
         # Stack back into batch: list of [16, T', H', W'] → [B, 16, T', H', W']
         return torch.stack(latent_list, dim=0)
 
-    def encode_image(self, image: "torch.Tensor") -> "torch.Tensor":
+    def encode_image(self, image: torch.Tensor) -> torch.Tensor:
         """
         Encode a single reference image into a one-frame latent.
 
@@ -110,7 +114,7 @@ class WanVideoVAE:
             image = image.unsqueeze(2)   # → [B, 3, 1, H, W]
         return self.encode(image)
 
-    def decode(self, latent: "torch.Tensor") -> "torch.Tensor":
+    def decode(self, latent: torch.Tensor) -> torch.Tensor:
         """
         Decode VAE latents to pixel frames.
 
@@ -138,6 +142,7 @@ class WanVideoVAE:
     def unload(self) -> None:
         """Release model from VRAM."""
         import gc
+
         import torch
 
         self._vae = None

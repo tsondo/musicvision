@@ -51,11 +51,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from musicvision.engine_registry import (
-    ENGINES,
     get_constraints,
+)
+from musicvision.engine_registry import (
     sub_clip_suffixes as _registry_sub_clip_suffixes,
 )
-from musicvision.models import HumoConfig, HumoTier
+from musicvision.models import HumoConfig
 from musicvision.video.model_loader import HumoModelBundle, get_loader
 
 if TYPE_CHECKING:
@@ -117,11 +118,11 @@ class HumoEngine:
     the conditioning pipeline and denoising loop.
     """
 
-    def __init__(self, config: HumoConfig, device_map: "DeviceMap") -> None:
+    def __init__(self, config: HumoConfig, device_map: DeviceMap) -> None:
         self.config = config
         self.device_map = device_map
         self._bundle: HumoModelBundle | None = None
-        self._zero_vae: "Any" = None  # cached VAE encoding of black frame, on CPU
+        self._zero_vae: Any = None  # cached VAE encoding of black frame, on CPU
 
     @property
     def _is_dual_gpu(self) -> bool:
@@ -166,7 +167,9 @@ class HumoEngine:
         import os
 
         from musicvision.video.weight_registry import (
-            weight_status, download_dit, download_shared,
+            download_dit,
+            download_shared,
+            weight_status,
         )
 
         tier = self.config.tier
@@ -518,7 +521,6 @@ class HumoEngine:
         The causal 3D convolution produces position-dependent latent values,
         so encoding a single frame and tiling is WRONG.
         """
-        import torch
 
         if self._bundle is None or self._bundle.vae is None:
             log.warning("VAE not loaded — cannot compute zero_vae")
@@ -537,8 +539,9 @@ class HumoEngine:
 
     def _try_load_official_zero_vae(self, lat_h: int, lat_w: int) -> bool:
         """Try to load official pre-computed zero_vae if resolution matches."""
-        import torch
         from pathlib import Path
+
+        import torch
 
         weights_dir = Path.home() / ".cache/musicvision/weights/humo/reference"
 
@@ -568,8 +571,9 @@ class HumoEngine:
 
     def _compute_zero_vae_from_vae(self, H: int, W: int) -> None:
         """Compute zero_vae by encoding mid-gray video through VAE."""
-        import torch
         import gc
+
+        import torch
 
         vae = self._bundle.vae
         dit_device = self._bundle.dit_device
@@ -639,7 +643,7 @@ class HumoEngine:
     # Internal: conditioning encoders
     # ------------------------------------------------------------------
 
-    def _encode_text(self, prompt: str) -> "Any":
+    def _encode_text(self, prompt: str) -> Any:
         """
         Encode prompt via the UMT5-XXL text encoder.
         Returns (pos_embeds, neg_embeds) tuple, each [1, 512, 4096].
@@ -650,7 +654,7 @@ class HumoEngine:
         pos_embeds, neg_embeds = self._bundle.t5.encode_pair(prompt, _NEGATIVE_PROMPT)
         return pos_embeds, neg_embeds
 
-    def _encode_image(self, image_path: Path, n_frames: int) -> "Any":
+    def _encode_image(self, image_path: Path, n_frames: int) -> Any:
         """
         Process reference image into image conditioning tensors.
 
@@ -667,9 +671,9 @@ class HumoEngine:
         if self._bundle is None or self._bundle.vae is None:
             raise RuntimeError("VAE not loaded — call load() first")
 
+        import numpy as np
         import torch
         from PIL import Image
-        import numpy as np
 
         vae = self._bundle.vae
         enc_device = self._bundle.encoder_device
@@ -759,7 +763,7 @@ class HumoEngine:
 
         return image_cond_pos, image_cond_neg
 
-    def _encode_audio(self, audio_path: Path, n_frames: int) -> "Any":
+    def _encode_audio(self, audio_path: Path, n_frames: int) -> Any:
         """
         Encode audio segment via Whisper encoder → windowed audio features.
         Returns [1, total_lat_f, 8, 5, 1280] tensor.
@@ -771,7 +775,6 @@ class HumoEngine:
         from musicvision.video.audio_encoder import HumoAudioEncoder
 
         lat_f = (n_frames - 1) // 4 + 1
-        total_lat_f = lat_f + 1  # +1 for ref frame
 
         encoder = HumoAudioEncoder(
             whisper_model=self._bundle.whisper,
@@ -791,11 +794,11 @@ class HumoEngine:
     def _denoise(
         self,
         n_frames: int,
-        text_embeds: "Any",
-        image_cond: "Any",
-        audio_embeds: "Any",
+        text_embeds: Any,
+        image_cond: Any,
+        audio_embeds: Any,
         seed: int | None = None,
-    ) -> "Any":
+    ) -> Any:
         """
         Flow-Matching denoising loop with TIA dual CFG guidance.
 
@@ -809,6 +812,7 @@ class HumoEngine:
             v_text_neg  = dit(z + img_neg, t, neg_text, audio)
         """
         import torch
+
         from musicvision.video.scheduler import FlowMatchScheduler, FlowMatchUniPCScheduler
 
         if self._bundle is None or self._bundle.dit is None:
@@ -816,7 +820,6 @@ class HumoEngine:
 
         dit = self._bundle.dit
         dit_device = self._bundle.dit_device
-        enc_device = self._bundle.encoder_device
 
         # Unpack conditioning
         pos_text, neg_text = text_embeds        # each [1, 512, 4096]
@@ -1000,18 +1003,17 @@ class HumoEngine:
 
     def _forward_with_swap(
         self,
-        x: "Any",
-        timestep: "Any",
-        text_embeds: "Any",
-        audio_features: "Any",
-    ) -> "Any":
+        x: Any,
+        timestep: Any,
+        text_embeds: Any,
+        audio_features: Any,
+    ) -> Any:
         """
         DiT forward pass with block swap: executes blocks one at a time,
         moving each from CPU to GPU and back.
 
         Calls dit.pre_blocks() → BlockSwapManager.execute_block() × N → dit.post_blocks()
         """
-        import torch
 
         dit = self._bundle.dit
         swap = self._bundle.block_swap
@@ -1037,7 +1039,7 @@ class HumoEngine:
     # Internal: VAE decode
     # ------------------------------------------------------------------
 
-    def _decode_latent(self, latent: "Any") -> "Any":
+    def _decode_latent(self, latent: Any) -> Any:
         """
         Decode video latent → pixel-space frames tensor (T, H, W, 3) uint8.
 
@@ -1095,7 +1097,6 @@ class HumoEngine:
 
 # Re-export so existing callers that imported from here continue to work.
 from musicvision.utils.gpu import recommend_tier  # noqa: E402, F401
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1171,7 +1172,7 @@ def _mux_clip_audio(video_path: Path, audio_path: Path) -> None:
             tmp_path.unlink()
 
 
-def _save_mp4(frames: "Any", path: Path, fps: int = 25) -> None:
+def _save_mp4(frames: Any, path: Path, fps: int = 25) -> None:
     """
     Save frames tensor to a silent MP4 file.
 

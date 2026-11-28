@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+
 from musicvision.engine_registry import get_constraints, snap_subclip_frames_ltx
 from musicvision.models import (
     HumoConfig,
@@ -11,7 +12,6 @@ from musicvision.models import (
     VideoEngineType,
 )
 from musicvision.video.factory import create_video_engine
-
 
 # ---------------------------------------------------------------------------
 # VideoEngineType enum

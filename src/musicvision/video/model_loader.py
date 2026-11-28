@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -266,9 +266,10 @@ class BaseHumoLoader(ABC):
 
     def _load_t5(self, device: Any, weights_dir: Path | None = None) -> Any:
         """Load UMT5-XXL text encoder onto *device*. Auto-downloads on first use."""
+        import torch
+
         from musicvision.video.wan_t5 import WanT5Encoder
         from musicvision.video.weight_registry import download_shared
-        import torch
 
         try:
             path = locate_shared("t5", weights_dir)
@@ -286,9 +287,10 @@ class BaseHumoLoader(ABC):
 
     def _load_vae(self, device: Any, weights_dir: Path | None = None) -> Any:
         """Load Wan2.1 Video VAE onto *device*. Auto-downloads on first use."""
+        import torch
+
         from musicvision.video.wan_vae import WanVideoVAE
         from musicvision.video.weight_registry import download_shared
-        import torch
 
         try:
             path = locate_shared("vae", weights_dir)
@@ -384,8 +386,8 @@ class FP16Loader(BaseHumoLoader):
 
     def _load_wan_dit(self, weight_path: Path, dtype: Any, dit_device: Any, device_map: Any) -> Any:
         """Load WanModel from safetensors shards in FP16."""
-        import torch
         from safetensors.torch import load_file
+
         from musicvision.video.wan_model import WanModel
 
         model = WanModel.from_config("14B")
@@ -429,7 +431,6 @@ class FP8ScaledLoader(BaseHumoLoader):
     """
 
     def load(self, config: HumoConfig, device_map: Any, weights_dir: Path | None = None) -> HumoModelBundle:
-        import torch
 
         dit_device = device_map.dit_device
         enc_device = device_map.encoder_device
@@ -461,6 +462,7 @@ class FP8ScaledLoader(BaseHumoLoader):
         """Load FP8 scaled safetensors and patch nn.Linear layers with FP8ScaledLinear."""
         import torch
         from safetensors.torch import load_file
+
         from musicvision.video.wan_model import WanModel
 
         log.info("Loading FP8 DiT from %s onto %s", weight_path.name, dit_device)
@@ -617,7 +619,6 @@ class FP8ScaledLinearWithLoRA(FP8ScaledLinear):
         lora_B: Any,  # [out_features, rank], bf16
         lora_scale: float = 1.0,
     ) -> None:
-        import torch
         super().__init__(base_linear.weight, base_linear.scale,
                          getattr(base_linear, 'bias', None))
         self.register_buffer("lora_A", lora_A)
@@ -625,14 +626,13 @@ class FP8ScaledLinearWithLoRA(FP8ScaledLinear):
         self.lora_scale = lora_scale
 
     def forward(self, x: Any) -> Any:
-        import torch
         import torch.nn.functional as F
         base_out = super().forward(x)
         lora_out = F.linear(F.linear(x.float(), self.lora_A.float()), self.lora_B.float())
         return base_out + (lora_out * self.lora_scale).to(base_out.dtype)
 
 
-def apply_lora(model: Any, lora_path: "Path", dit_device: Any, lora_scale: float = 1.0) -> int:
+def apply_lora(model: Any, lora_path: Path, dit_device: Any, lora_scale: float = 1.0) -> int:
     """Apply a Lightx2V distillation LoRA to a WanModel with FP8ScaledLinear layers.
 
     Lightx2V LoRA key format (from ComfyUI/Kijai):
@@ -825,7 +825,6 @@ class GGUFLoader(BaseHumoLoader):
         self.tier = tier
 
     def load(self, config: HumoConfig, device_map: Any, weights_dir: Path | None = None) -> HumoModelBundle:
-        import torch
 
         dit_device  = device_map.dit_device
         enc_device  = device_map.encoder_device
@@ -846,8 +845,9 @@ class GGUFLoader(BaseHumoLoader):
 
     def _load_gguf_dit(self, gguf_path: Path, dit_device: Any) -> Any:
         """Parse GGUF file and construct a WanModel with GGUFLinear layers."""
-        import torch
         import gguf
+        import torch
+
         from musicvision.video.wan_model import WanModel
 
         log.info("Parsing GGUF file: %s", gguf_path.name)
@@ -897,7 +897,6 @@ class GGUFLoader(BaseHumoLoader):
             module_path = pt_key[:-len(".weight")]
             quant_type_name = gguf_type.name  # e.g. "Q8_0", "Q6_K", "Q4_K_M"
             try:
-                import numpy as np
                 raw_data = torch.from_numpy(tensor.data.copy())
                 shape = tuple(tensor.shape[::-1])  # GGUF stores transposed
                 bias_key = module_path + ".bias"
@@ -1000,7 +999,7 @@ class GGUFLinear(__import__("torch").nn.Module):
 # Preview 1.7B Loader (Tier: preview)
 # ---------------------------------------------------------------------------
 
-class Preview1_7BLoader(BaseHumoLoader):
+class Preview1_7BLoader(BaseHumoLoader):  # noqa: N801 — "1_7B" means 1.7B params
     """
     Load HuMo-1.7B in FP16 for fast iteration.
 
@@ -1039,6 +1038,7 @@ class Preview1_7BLoader(BaseHumoLoader):
         """Load 1.7B WanModel variant in FP16."""
         import torch
         from safetensors.torch import load_file
+
         from musicvision.video.wan_model import WanModel
 
         model = WanModel.from_config("1_7B")

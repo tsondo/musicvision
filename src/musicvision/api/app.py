@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -151,24 +150,24 @@ class OpenProjectRequest(BaseModel):
 
 
 class UpdateSceneRequest(BaseModel):
-    lyrics: Optional[str] = None
-    image_prompt_user_override: Optional[str] = None
-    video_prompt_user_override: Optional[str] = None
-    image_status: Optional[ApprovalStatus] = None
-    video_status: Optional[ApprovalStatus] = None
-    lip_sync: Optional[bool] = None
-    treatment: Optional[str] = None
-    video_engine: Optional[str] = None
-    sigma_shift: Optional[float] = None
-    notes: Optional[str] = None
+    lyrics: str | None = None
+    image_prompt_user_override: str | None = None
+    video_prompt_user_override: str | None = None
+    image_status: ApprovalStatus | None = None
+    video_status: ApprovalStatus | None = None
+    lip_sync: bool | None = None
+    treatment: str | None = None
+    video_engine: str | None = None
+    sigma_shift: float | None = None
+    notes: str | None = None
     # LTX-2 generated audio mixing
-    audio_mode: Optional[str] = None
-    generated_audio_volume: Optional[float] = None
-    song_duck_volume: Optional[float] = None
-    audio_fade_in: Optional[float] = None
-    audio_fade_out: Optional[float] = None
-    song_duck_fade_in: Optional[float] = None
-    song_duck_fade_out: Optional[float] = None
+    audio_mode: str | None = None
+    generated_audio_volume: float | None = None
+    song_duck_volume: float | None = None
+    audio_fade_in: float | None = None
+    audio_fade_out: float | None = None
+    song_duck_fade_in: float | None = None
+    song_duck_fade_out: float | None = None
 
 
 class GenerateImagesRequest(BaseModel):
@@ -966,7 +965,7 @@ class LyricsAssignmentItem(BaseModel):
 class CreateScenesRequest(BaseModel):
     boundaries: list[SceneBoundary]
     snap_to_beats: bool = False
-    lyrics_assignments: Optional[list[LyricsAssignmentItem]] = None
+    lyrics_assignments: list[LyricsAssignmentItem] | None = None
 
 
 @app.post("/api/pipeline/create-scenes")
@@ -1380,8 +1379,6 @@ async def generate_videos(req: GenerateVideosRequest):
 
     from musicvision.utils.gpu import _oom_suggestion, estimate_vram_gb, is_oom_error
 
-    generated: list[str] = []
-    failed: list[dict] = []
     vram_warnings: list[dict] = []
 
     # --- Pre-flight VRAM check (advisory, does not block) ---
@@ -1454,7 +1451,9 @@ async def generate_videos(req: GenerateVideosRequest):
             try:
                 for scene in group_scenes:
                     if consecutive_ooms >= 2:
-                        engine_config = proj.config.ltx_video if engine_type == VideoEngineType.LTX_VIDEO else proj.config.humo
+                        engine_config = (
+                            proj.config.ltx_video if engine_type == VideoEngineType.LTX_VIDEO else proj.config.humo
+                        )
                         log.warning(
                             "Skipping %s — %d consecutive OOMs, remaining scenes in "
                             "%s group will also fail",
@@ -1561,7 +1560,9 @@ async def generate_videos(req: GenerateVideosRequest):
                     except Exception as exc:
                         if is_oom_error(exc):
                             consecutive_ooms += 1
-                            engine_config = proj.config.ltx_video if engine_type == VideoEngineType.LTX_VIDEO else proj.config.humo
+                            engine_config = (
+                                proj.config.ltx_video if engine_type == VideoEngineType.LTX_VIDEO else proj.config.humo
+                            )
                             log.error(
                                 "OOM on %s (%d consecutive): %s", scene.id, consecutive_ooms, exc,
                             )
@@ -1611,10 +1612,10 @@ class AssembleRequest(BaseModel):
 @app.post("/api/pipeline/upscale")
 async def upscale_videos(req: UpscaleRequest):
     """Stage 4b: Upscale video clips to target resolution."""
+    import asyncio
+
     from musicvision.models import TargetResolution, UpscalerType
     from musicvision.upscaling.pipeline import upscale_clips
-
-    import asyncio
 
     proj = get_project()
 
@@ -1657,10 +1658,10 @@ async def upscale_videos(req: UpscaleRequest):
 @app.post("/api/scenes/{scene_id}/upscale")
 async def upscale_scene(scene_id: str, req: UpscaleRequest):
     """Upscale a single scene's video clip."""
+    import asyncio
+
     from musicvision.models import TargetResolution, UpscalerType
     from musicvision.upscaling.pipeline import upscale_clips
-
-    import asyncio
 
     proj = get_project()
     scene = proj.scenes.get_scene(scene_id)

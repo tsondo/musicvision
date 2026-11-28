@@ -20,7 +20,6 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Optional
 
 from musicvision.imaging.base import ImageEngine, ImageResult
 from musicvision.models import FluxQuant, ImageGenConfig, ImageModel
@@ -59,13 +58,13 @@ class FluxEngine(ImageEngine):
         self,
         config: ImageGenConfig,
         device_map: DeviceMap,
-        project_root: Optional[Path] = None,
+        project_root: Path | None = None,
     ):
         self.config = config
         self.device_map = device_map
         self.project_root = project_root
         self._pipe = None
-        self._loaded_lora: Optional[str] = None
+        self._loaded_lora: str | None = None
         self._ip_adapter_loaded = False
         self._ip_adapter_count = 0
         self._placement = ""
@@ -172,12 +171,12 @@ class FluxEngine(ImageEngine):
         output_path: Path,
         width: int = 1280,
         height: int = 720,
-        seed: Optional[int] = None,
-        lora_path: Optional[str] = None,
+        seed: int | None = None,
+        lora_path: str | None = None,
         lora_weight: float = 0.8,
-        ip_adapter_images: Optional[list[Path]] = None,
-        ip_adapter_scales: Optional[list[float]] = None,
-        ip_adapter_embeddings: Optional[list[Path]] = None,
+        ip_adapter_images: list[Path] | None = None,
+        ip_adapter_scales: list[float] | None = None,
+        ip_adapter_embeddings: list[Path] | None = None,
     ) -> ImageResult:
         """
         Generate a single image and save it as PNG.
@@ -345,9 +344,9 @@ class FluxEngine(ImageEngine):
 
     def _prepare_ip_adapter(
         self,
-        images: Optional[list[Path]],
-        scales: Optional[list[float]],
-        embeddings: Optional[list[Path]],
+        images: list[Path] | None,
+        scales: list[float] | None,
+        embeddings: list[Path] | None,
     ) -> dict:
         """Build IP-Adapter kwargs for the pipeline call.
 
@@ -411,7 +410,7 @@ class FluxEngine(ImageEngine):
     # Internal loading helpers (build → IP-Adapter → place; see load())
     # ------------------------------------------------------------------
 
-    def _build_pipeline(self, model_id: str, token: Optional[str], primary, quant_type=None):
+    def _build_pipeline(self, model_id: str, token: str | None, primary, quant_type=None):
         """Stage 1: from_pretrained, CPU-resident. Optional quanto quantization.
 
         No device placement and no offload hooks here — the IP-Adapter must be

@@ -127,6 +127,7 @@ class BlockSwapManager:
         Call after the denoising loop finishes (before VAE decode).
         """
         import gc
+
         import torch
 
         cpu = self.cpu_device or torch.device("cpu")
@@ -145,7 +146,7 @@ class BlockSwapManager:
         blocks: Any,
         block_swap_count: int,
         gpu_device: Any,
-    ) -> "BlockSwapManager":
+    ) -> BlockSwapManager:
         """
         Factory from HumoConfig.block_swap_count.
 
