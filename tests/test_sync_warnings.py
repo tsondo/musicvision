@@ -31,3 +31,17 @@ def test_longer_video_without_gaps():
     assert w["detail"]["drift_seconds"] == 1.0
     assert w["detail"]["scene_gaps"] == []
     assert "longer" in w["message"]
+
+
+def test_get_video_fps_parses_rational(tmp_path, monkeypatch):
+    import json
+    import subprocess
+
+    from musicvision.utils import video
+
+    def fake_run(cmd, **kw):
+        return subprocess.CompletedProcess(cmd, 0, json.dumps({"streams": [{"r_frame_rate": "24000/1001"}]}), "")
+
+    monkeypatch.setattr(video, "_check_ffprobe", lambda: "ffprobe")
+    monkeypatch.setattr(video.subprocess, "run", fake_run)
+    assert abs(video.get_video_fps(tmp_path / "x.mp4") - 23.976) < 0.001

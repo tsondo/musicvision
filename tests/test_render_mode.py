@@ -64,7 +64,7 @@ class TestMissingWeights:
         monkeypatch.setenv("MUSICVISION_WEIGHTS_DIR", str(tmp_path))
         missing = missing_render_weights(HumoConfig(lora=LORA))
         assert missing["missing"] == "lora" and missing["lora"] == LORA
-        assert "download_lora" in missing["hint"]
+        assert "download-weights --lora" in missing["hint"]
 
     def test_present_lora_is_fine(self, tmp_path, monkeypatch):
         from musicvision.video.weight_registry import LORA_SPECS

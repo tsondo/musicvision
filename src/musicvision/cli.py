@@ -259,6 +259,7 @@ def cmd_assemble(args: argparse.Namespace) -> None:
     """Assemble clips into rough cut + export EDL/FCPXML."""
     from musicvision.assembly.concatenator import assemble_rough_cut
     from musicvision.assembly.exporter import export_edl, export_fcpxml
+    from musicvision.engine_registry import get_constraints
     from musicvision.project import ProjectService
 
     project_dir = Path(args.project).resolve()
@@ -281,6 +282,7 @@ def cmd_assemble(args: argparse.Namespace) -> None:
             paths=svc.paths,
             original_audio=audio_path,
             approved_only=args.approved_only,
+            fps=get_constraints(svc.config.video_engine.value).fps,
         )
     except (RuntimeError, ValueError) as e:
         print(f"Assembly failed: {e}")
@@ -346,14 +348,17 @@ def cmd_detect_hardware(args: argparse.Namespace) -> None:
 
 
 def cmd_download_weights(args: argparse.Namespace) -> None:
-    """Download HuMo weights for a tier."""
+    """Download HuMo weights for a tier and/or named LoRAs."""
     import os
 
     from musicvision.models import HumoTier
-    from musicvision.video.weight_registry import download_all_for_tier, weight_status
+    from musicvision.video.weight_registry import download_all_for_tier, download_lora, weight_status
 
+    if not args.tier and not args.lora:
+        print("Specify --tier <tier> and/or --lora <key>.")
+        sys.exit(1)
     try:
-        tier = HumoTier(args.tier)
+        tier = HumoTier(args.tier) if args.tier else None
     except ValueError:
         valid = [t.value for t in HumoTier]
         print(f"Unknown tier '{args.tier}'. Valid tiers: {', '.join(valid)}")
@@ -374,18 +379,22 @@ def cmd_download_weights(args: argparse.Namespace) -> None:
 
     base_dir = Path(args.dir) if args.dir else None
 
-    print(f"Checking weight status for tier '{tier.value}'…")
-    status = weight_status(tier, base_dir)
-    missing = [k for k, present in status.items() if not present]
-    if not missing:
-        print(f"All weights for tier '{tier.value}' are already present.")
-        return
+    if tier is not None:
+        print(f"Checking weight status for tier '{tier.value}'…")
+        status = weight_status(tier, base_dir)
+        missing = [k for k, present in status.items() if not present]
+        if not missing:
+            print(f"All weights for tier '{tier.value}' are already present.")
+        else:
+            print(f"Missing: {missing}")
+            print(f"Downloading weights for tier '{tier.value}'…")
+            paths = download_all_for_tier(tier, base_dir=base_dir, hf_token=hf_token)
+            for key, path in paths.items():
+                print(f"  ✓ {key}: {path}")
 
-    print(f"Missing: {missing}")
-    print(f"Downloading weights for tier '{tier.value}'…")
-    paths = download_all_for_tier(tier, base_dir=base_dir, hf_token=hf_token)
-    for key, path in paths.items():
-        print(f"  ✓ {key}: {path}")
+    for key in args.lora:
+        path = download_lora(key, base_dir=base_dir, hf_token=hf_token)
+        print(f"  ✓ lora {key}: {path}")
     print("Download complete.")
 
 
@@ -686,11 +695,16 @@ def main() -> None:
     sub.add_parser("detect-hardware", help="Detect GPUs and print recommended HuMo tier")
 
     # download-weights
-    p_dl = sub.add_parser("download-weights", help="Download HuMo weights for a tier")
+    p_dl = sub.add_parser("download-weights", help="Download HuMo weights for a tier and/or LoRAs")
     p_dl.add_argument(
-        "--tier", required=True,
+        "--tier", default=None,
         choices=[t.value for t in __import__("musicvision.models", fromlist=["HumoTier"]).HumoTier],
         help="Precision tier to download",
+    )
+    p_dl.add_argument(
+        "--lora", action="append", default=[],
+        choices=sorted(__import__("musicvision.video.weight_registry", fromlist=["LORA_SPECS"]).LORA_SPECS),
+        help="LoRA to download (repeatable), e.g. lightx2v_i2v_480p for the fast preview preset",
     )
     p_dl.add_argument("--token", default=None, help="HuggingFace token (overrides env var)")
     p_dl.add_argument("--dir", default=None, help="Override weights directory")

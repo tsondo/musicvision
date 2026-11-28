@@ -59,6 +59,33 @@ def get_video_resolution(video_path: Path) -> tuple[int, int]:
     return (int(w), int(h))
 
 
+def get_video_fps(video_path: Path) -> float:
+    """Get a video's frame rate (r_frame_rate) using ffprobe.
+
+    Raises:
+        RuntimeError: If ffprobe fails or the rate cannot be parsed.
+    """
+    ffprobe = _check_ffprobe()
+    cmd = [
+        ffprobe, "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=r_frame_rate",
+        "-of", "json",
+        str(video_path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffprobe failed on {video_path}: {result.stderr.strip()}")
+    streams = json.loads(result.stdout).get("streams", [])
+    if not streams:
+        raise RuntimeError(f"No video stream found in {video_path}")
+    num, _, den = streams[0]["r_frame_rate"].partition("/")
+    fps = float(num) / float(den or 1)
+    if fps <= 0:
+        raise RuntimeError(f"Invalid frame rate {streams[0]['r_frame_rate']!r} in {video_path}")
+    return fps
+
+
 def scale_video(
     input_path: Path,
     output_path: Path,

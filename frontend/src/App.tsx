@@ -98,6 +98,7 @@ export default function App() {
         videosRemaining={pipeline.videosRemaining}
         videosUnapproved={pipeline.videosUnapproved}
         upscaleRemaining={pipeline.upscaleRemaining}
+        upscaledCount={pipeline.upscaledCount}
         uploadStatus={pipeline.uploadStatus}
         analyzeStatus={pipeline.analyzeStatus}
         scenesStatus={pipeline.scenesStatus}
@@ -150,6 +151,7 @@ export default function App() {
           videoEngine={state.config.video_engine}
           suggestedMarkers={suggestedMarkers}
           isRunning={pipeline.isRunning}
+          isSegmenting={pipeline.isSegmenting}
           onClearScenes={clearScenes}
         />
       )}

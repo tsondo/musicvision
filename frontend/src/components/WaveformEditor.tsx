@@ -38,7 +38,10 @@ interface Props {
     lyricsAssignments?: LyricsAssignment[],
   ) => void;
   onAutoSegment: (useLlm: boolean) => void;
+  /** Any pipeline job running: disables editing. */
   isRunning: boolean;
+  /** Segmentation specifically running: drives the "Segmenting..." label. */
+  isSegmenting?: boolean;
   videoEngine?: VideoEngineType;
   /** Externally-suggested markers (e.g. from auto-segment). Consumed once. */
   suggestedMarkers?: number[] | null;
@@ -180,6 +183,7 @@ export default function WaveformEditor({
   onConfirm,
   onAutoSegment,
   isRunning,
+  isSegmenting = false,
   videoEngine,
   suggestedMarkers,
   onClearScenes,
@@ -818,7 +822,7 @@ export default function WaveformEditor({
           disabled={isRunning}
           title="Run LLM auto-segmentation and populate timeline"
         >
-          {isRunning ? "Segmenting..." : "Suggest Segmentation"}
+          {isSegmenting ? "Segmenting..." : "Suggest Segmentation"}
         </button>
         <button
           className="btn btn-sm btn-primary"

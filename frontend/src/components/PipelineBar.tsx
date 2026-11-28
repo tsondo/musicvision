@@ -37,6 +37,7 @@ interface Props {
   videosRemaining: number;
   videosUnapproved: number;
   upscaleRemaining: number;
+  upscaledCount: number;
   uploadStatus: StepStatus;
   analyzeStatus: StepStatus;
   scenesStatus: StepStatus;
@@ -104,6 +105,7 @@ export default function PipelineBar({
   videosRemaining,
   videosUnapproved,
   upscaleRemaining,
+  upscaledCount,
   uploadStatus,
   analyzeStatus,
   scenesStatus,
@@ -427,9 +429,9 @@ export default function PipelineBar({
       <div className={`pipeline-step ${stepState("upscale", stage, upscaleStatus, upscaleRemaining)}`}>
         <div className="step-label">
           <span className="step-num">8</span> Upscale
-          {sceneCount - upscaleRemaining > 0 && (
-            <span className="step-check" title={`${sceneCount - upscaleRemaining}/${sceneCount} upscaled`}>
-              {sceneCount - upscaleRemaining}/{sceneCount}
+          {upscaledCount > 0 && (
+            <span className="step-check" title={`${upscaledCount}/${sceneCount} upscaled`}>
+              {upscaledCount}/{sceneCount}
             </span>
           )}
         </div>
@@ -449,10 +451,10 @@ export default function PipelineBar({
             className="btn-sm"
             disabled={sceneCount === 0 || isRunning || upscaleRemaining === 0}
             onClick={() => onUpscaleVideos(undefined, targetResolution)}
-            style={upscaleStatus === "running" ? progressStyle(sceneCount - upscaleRemaining, sceneCount) : undefined}
+            style={upscaleStatus === "running" ? progressStyle(upscaledCount, sceneCount) : undefined}
           >
             {upscaleStatus === "running"
-              ? `Upscaling ${sceneCount - upscaleRemaining}/${sceneCount}...`
+              ? `Upscaling ${upscaledCount}/${sceneCount}...`
               : upscaleRemaining > 0
                 ? `Upscale ${upscaleRemaining} clip${upscaleRemaining > 1 ? "s" : ""}`
                 : "All Done"}

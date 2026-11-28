@@ -1889,6 +1889,7 @@ def _job_assemble(params: dict, ctx: JobContext) -> dict:
             paths=proj.paths,
             original_audio=audio_path,
             approved_only=req.approved_only,
+            fps=get_constraints(proj.config.video_engine.value).fps,
         )
     except (RuntimeError, ValueError) as e:
         raise JobFailureError("assembly_failed", str(e))

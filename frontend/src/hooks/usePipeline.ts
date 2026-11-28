@@ -52,7 +52,11 @@ export interface PipelineState {
   videosUnapproved: number;
   unapprovedSceneIds: string[];
   upscaleRemaining: number;
+  /** Scenes that actually have an upscaled clip. */
+  upscaledCount: number;
   isRunning: boolean;
+  /** True only while scene segmentation itself runs (not any other job). */
+  isSegmenting: boolean;
   batchDone: number;
   batchTotal: number;
   /** The queued/running job (ours or one an agent submitted), if any. */
@@ -180,6 +184,7 @@ export function usePipeline(
   );
   const videosUnapproved = unapprovedScenes.length;
   const unapprovedSceneIds = unapprovedScenes.map((s) => s.id);
+  const upscaledCount = scenes.filter((s) => !!s.upscaled_clip).length;
   const upscaleRemaining = scenes.filter(
     (s) =>
       (s.video_clip || s.sub_clips.some((sc) => sc.video_clip)) &&
@@ -548,7 +553,9 @@ export function usePipeline(
     videosUnapproved,
     unapprovedSceneIds,
     upscaleRemaining,
+    upscaledCount,
     isRunning,
+    isSegmenting: scenesStatus === "running",
     batchDone,
     batchTotal,
     activeJob,
