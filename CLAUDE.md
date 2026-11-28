@@ -154,7 +154,7 @@ When video/image generation produces bad output (noise, black frames, artifacts)
 6. **Subprocess engines (SeedVR2)**: Check stderr first — the subprocess may fail silently from the caller's perspective. Parse return codes.
 7. **Known gotchas** (see FIXLOG.md):
    - Timestep must be scaled ×1000 for HuMo
-   - Sigma shift 8.0 (not 5.0) matches ComfyUI
+   - Sigma shift: 5.0 for CFG runs (draft/final, upstream default) — best identity hold; 1.0–1.5 only for distilled-LoRA runs (CFG off, ~6 steps). Values >2 with a distill LoRA look bad
    - FP8 needs dynamic per-tensor input scaling
    - Reference frame goes at LAST temporal position, not first
 

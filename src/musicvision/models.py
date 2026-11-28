@@ -382,7 +382,10 @@ class HumoConfig(BaseModel):
     scale_a: float = 5.5              # audio guidance strength (original HuMo default 5.5)
     scale_t: float = 5.0              # text guidance strength (original HuMo default 5.0)
     denoising_steps: int = 50         # 6 with LoRA, 15–30 standard, 50 max quality
-    shift: float = 1.5                # sigma schedule shift (1.0–1.5 best for stage/performance scenes)
+    # Sigma schedule shift. 5.0 (upstream HuMo default) for CFG runs: holds the
+    # reference identity better than lower values. Distilled-LoRA runs (CFG off,
+    # ~6 steps) want 1.0–1.5 instead; the fast presets set that explicitly.
+    shift: float = 5.0
     block_swap_count: int = 0         # DiT blocks to keep on CPU (0 = all on GPU)
     sub_clip_continuity: bool = True  # pass last frame of sub-clip N as reference for sub-clip N+1
     sampler: str = "uni_pc"           # "uni_pc" or "euler"
@@ -404,14 +407,14 @@ class HumoConfig(BaseModel):
                 shift=1.5, scale_t=1.0, scale_a=1.0, lora="lightx2v_i2v_480p",
             ),
             HumoQuality.DRAFT: dict(
-                tier=HumoTier.FP8_SCALED, resolution="480p", denoising_steps=20,
+                tier=HumoTier.FP8_SCALED, resolution="480p", denoising_steps=20, shift=5.0,
             ),
             HumoQuality.FAST: dict(
                 tier=HumoTier.FP8_SCALED, resolution="480p", denoising_steps=6,
                 shift=1.5, scale_t=1.0, scale_a=1.0, lora="lightx2v_i2v_480p",
             ),
             HumoQuality.FINAL: dict(
-                tier=HumoTier.FP8_SCALED, resolution="720p", denoising_steps=50,
+                tier=HumoTier.FP8_SCALED, resolution="720p", denoising_steps=50, shift=5.0,
             ),
         }
         params = presets[quality]

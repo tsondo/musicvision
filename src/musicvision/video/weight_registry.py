@@ -107,6 +107,16 @@ LORA_SPECS: dict[str, WeightSpec] = {
         subfolder="Lightx2v",
         local_subdir="lora",
     ),
+    # T2V step/CFG distill. HuMo-17B is built on Wan2.1-T2V-14B (no CLIP image
+    # branch), so this matches its modules better than the I2V distill above.
+    "lightx2v_t2v_v2": WeightSpec(
+        repo_id="Kijai/WanVideo_comfy",
+        filename="lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank64_bf16.safetensors",
+        fmt="safetensors",
+        expected_gb=0.63,
+        subfolder="Lightx2v",
+        local_subdir="lora",
+    ),
 }
 
 

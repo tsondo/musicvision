@@ -164,6 +164,7 @@ export default function App() {
           imageGenStatus={imageGenStatus}
           videoGenStatus={videoGenStatus}
           pipelineRunning={pipeline.isRunning}
+          defaultShift={state.config.humo?.shift ?? 5}
           onUpdate={updateScene}
           onRegenImage={regenerateImage}
           onRegenVideo={regenerateVideo}

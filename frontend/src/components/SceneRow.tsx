@@ -19,6 +19,8 @@ interface Props {
   imageGenStatus: SceneGenStatus;
   videoGenStatus: SceneGenStatus;
   disabled?: boolean;
+  /** Project HuMo sigma shift, used when the scene has no override. */
+  defaultShift: number;
   onUpdate: (sceneId: string, updates: UpdateSceneRequest) => Promise<Scene>;
   onRegenImage: (sceneId: string, req: RegenerateImageRequest) => void;
   onRegenVideo: (sceneId: string, req: RegenerateVideoRequest) => void;
@@ -38,6 +40,7 @@ export default function SceneRow({
   imageGenStatus,
   videoGenStatus,
   disabled,
+  defaultShift,
   onUpdate,
   onRegenImage,
   onRegenVideo,
@@ -512,21 +515,23 @@ export default function SceneRow({
         )}
         {videoEngine === "humo" && (
           <div className="sigma-shift-row">
-            <label title="Lower = better lip sync, higher = more dynamic motion">
+            <label title="Guided (draft/final) runs: ~5 holds identity best. Fast distilled preview runs use 1.5 regardless.">
               Sigma shift
             </label>
             <input
               type="range"
               min={0.5}
-              max={4}
+              max={8}
               step={0.5}
-              value={scene.sigma_shift ?? 1.5}
+              value={scene.sigma_shift ?? defaultShift}
               onChange={(e) => {
                 const val = parseFloat(e.target.value);
                 onUpdate(scene.id, { sigma_shift: val });
               }}
             />
-            <span className="sigma-shift-value">{scene.sigma_shift ?? 1.5}</span>
+            <span className="sigma-shift-value">
+              {scene.sigma_shift ?? `${defaultShift} (default)`}
+            </span>
             <span className="sigma-shift-labels">
               <span>Lip sync</span>
               <span>Motion</span>

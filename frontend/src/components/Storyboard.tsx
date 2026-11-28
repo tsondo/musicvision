@@ -14,6 +14,8 @@ interface Props {
   imageGenStatus: (sceneId: string) => SceneGenStatus;
   videoGenStatus: (sceneId: string) => SceneGenStatus;
   pipelineRunning?: boolean;
+  /** Project HuMo sigma shift, used when a scene has no override. */
+  defaultShift: number;
   onUpdate: (sceneId: string, updates: UpdateSceneRequest) => Promise<Scene>;
   onRegenImage: (sceneId: string, req: RegenerateImageRequest) => void;
   onRegenVideo: (sceneId: string, req: RegenerateVideoRequest) => void;
@@ -27,6 +29,7 @@ export default function Storyboard({
   imageGenStatus,
   videoGenStatus,
   pipelineRunning,
+  defaultShift,
   onUpdate,
   onRegenImage,
   onRegenVideo,
@@ -62,6 +65,7 @@ export default function Storyboard({
           imageGenStatus={imageGenStatus(scene.id)}
           videoGenStatus={videoGenStatus(scene.id)}
           disabled={pipelineRunning}
+          defaultShift={defaultShift}
           onUpdate={onUpdate}
           onRegenImage={onRegenImage}
           onRegenVideo={onRegenVideo}
