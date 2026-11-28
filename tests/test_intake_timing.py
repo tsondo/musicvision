@@ -117,3 +117,50 @@ class TestAssignLyrics:
         scenes = _scenes((0, 2), kind=SceneType.VOCAL)
         _assign_lyrics_from_words(scenes, [], set_type=False)
         assert scenes[0].type == SceneType.VOCAL and scenes[0].lyrics == ""
+
+
+class TestAlignProvidedLyrics:
+    @staticmethod
+    def _tx(*spec):
+        from musicvision.intake.transcription import TranscriptionResult
+
+        return TranscriptionResult(text="", words=[WordTimestamp(w, a, b) for w, a, b in spec])
+
+    def test_section_tags_dropped_and_do_not_shift_timings(self):
+        from musicvision.intake.transcription import align_lyrics_with_timestamps
+
+        tx = self._tx(("hello", 1.0, 1.5), ("world", 1.6, 2.0), ("again", 5.0, 5.5))
+        out = align_lyrics_with_timestamps("[Verse 1]\nhello world\n[Chorus]\nagain", tx)
+        assert [(w.word, w.start) for w in out] == [("hello", 1.0), ("world", 1.6), ("again", 5.0)]
+
+    def test_uneven_mishearing_spread_over_heard_span(self):
+        from musicvision.intake.transcription import align_lyrics_with_timestamps
+
+        # Karina: "rush past and miss" heard as "rush past endless"
+        tx = self._tx(("rush", 1.0, 1.4), ("past", 1.5, 2.0), ("endless", 2.0, 3.0), ("Sharp", 6.0, 6.5))
+        out = align_lyrics_with_timestamps("rush past and miss Sharp", tx)
+        assert [w.word for w in out] == ["rush", "past", "and", "miss", "Sharp"]
+        assert (out[2].start, out[3].end) == (2.0, 3.0)
+        assert out[4].start == 6.0  # later words keep their own timing
+
+    def test_word_whisper_missed_is_interpolated(self):
+        from musicvision.intake.transcription import align_lyrics_with_timestamps
+
+        tx = self._tx(("a", 1.0, 2.0), ("c", 4.0, 5.0))
+        out = align_lyrics_with_timestamps("a b c", tx)
+        assert out[1].start == 2.0 and out[1].end == 4.0 and out[2].start == 4.0
+
+    def test_curly_apostrophes_match(self):
+        from musicvision.intake.transcription import align_lyrics_with_timestamps
+
+        out = align_lyrics_with_timestamps("doesn’t", self._tx(("doesn't", 3.0, 3.4)))
+        assert out[0].start == 3.0
+
+
+def test_sliver_scene_merged_after_tiling():
+    """A one-word 0.84 s scene (below HuMo's 1 s minimum clip) is merged into a neighbour."""
+    c = get_constraints("humo")
+    scenes = _scenes((0, 13.56), (13.56, 14.40), (14.40, 17.36), (17.36, 24.0))
+    out = _validate_and_adjust_scenes(scenes, 24.0, c)
+    assert all(s.time_end - s.time_start >= 2.0 for s in out)
+    _assert_tiles(out, 24.0)

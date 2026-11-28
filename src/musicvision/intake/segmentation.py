@@ -260,7 +260,9 @@ Start numbering scenes at: {start_order}
 
     # Frame-accurate adjustment when engine constraints are available
     if engine_constraints:
-        scenes = _validate_and_adjust_scenes(scenes, song_duration, engine_constraints, beat_times)
+        scenes = _validate_and_adjust_scenes(
+            scenes, song_duration, engine_constraints, beat_times, min_scene_seconds=min_scene_seconds,
+        )
 
     log.info("Segmentation complete: %d scenes", len(scenes))
     return SceneList(scenes=scenes)
@@ -667,6 +669,7 @@ def _validate_and_adjust_scenes(
     song_duration: float,
     constraints: EngineConstraints,
     beat_times: list[float] | None = None,
+    min_scene_seconds: float = 2.0,
 ) -> list[Scene]:
     """
     Post-process LLM segmentation to enforce frame-accurate constraints.
@@ -686,6 +689,13 @@ def _validate_and_adjust_scenes(
     fps = constraints.fps
     total_song_frames = scene_frames(0.0, song_duration, fps)
     scenes = _make_contiguous(scenes, song_duration, fps)
+    # Beat snapping and gap filling can leave slivers (e.g. a 0.84 s one-word scene,
+    # below the engine's minimum clip); merging extends a neighbour, so tiling holds.
+    min_seconds = max(min_scene_seconds, constraints.min_frames / fps)
+    if any(s.time_end - s.time_start < min_seconds for s in scenes):
+        scenes = _merge_short_scenes(scenes, min_seconds)
+        for i, scene in enumerate(scenes, start=1):
+            scene.id, scene.order = f"scene_{i:03d}", i
 
     for scene in scenes:
         total = scene_frames(scene.time_start, scene.time_end, fps)
