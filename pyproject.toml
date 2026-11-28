@@ -41,7 +41,10 @@ dependencies = [
     # --- Utilities ---
     "Pillow>=10.0",
     "numpy>=1.26",
-    "torchcodec>=0.10.0",
+    # torchcodec ships C++ built against one torch minor version but does not declare it,
+    # so the resolver cannot catch a mismatch: bump it together with torch and test an audio
+    # decode (torch 2.10 <-> 0.10, torch 2.13 <-> 0.16).
+    "torchcodec>=0.16.0",
 ]
 
 [project.optional-dependencies]
