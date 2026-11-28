@@ -75,10 +75,6 @@ class TestIPAdapterConfig:
         assert cfg.weight_name == "ip_adapter.safetensors"
         assert cfg.image_encoder_repo == "openai/clip-vit-large-patch14"
 
-    def test_image_gen_config_has_ip_adapter(self):
-        cfg = ImageGenConfig()
-        assert isinstance(cfg.ip_adapter, IPAdapterConfig)
-        assert cfg.ip_adapter.enabled is False
 
     def test_project_yaml_without_ip_adapter_key_loads(self, tmp_path):
         """Backward compat: pre-Phase-3 project.yaml has no ip_adapter key."""

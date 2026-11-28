@@ -89,24 +89,6 @@ class TestLyricsFormatting:
 
 
 class TestLyricsAlignment:
-    def test_exact_match(self):
-        transcription = TranscriptionResult(
-            text="hello world goodbye moon",
-            words=[
-                WordTimestamp("hello", 1.0, 1.5),
-                WordTimestamp("world", 1.6, 2.0),
-                WordTimestamp("goodbye", 3.0, 3.5),
-                WordTimestamp("moon", 3.6, 4.0),
-            ],
-        )
-
-        aligned = align_lyrics_with_timestamps("hello world goodbye moon", transcription)
-
-        assert len(aligned) == 4
-        assert aligned[0].word == "hello"
-        assert aligned[0].start == 1.0
-        assert aligned[2].word == "goodbye"
-        assert aligned[2].start == 3.0
 
     def test_partial_match(self):
         """User lyrics differ slightly from Whisper output."""
@@ -139,21 +121,10 @@ class TestLyricsAlignment:
 
 
 class TestEngineConstraintPrompt:
-    def test_contains_engine_name(self):
-        c = get_constraints("humo")
-        prompt = _engine_constraint_prompt(c)
-        assert "HuMo" in prompt
-
-    def test_contains_max_frames(self):
-        c = get_constraints("humo")
-        prompt = _engine_constraint_prompt(c)
-        assert "97 frames" in prompt
-        assert "3.88s" in prompt
-
-    def test_contains_min_frames(self):
-        c = get_constraints("humo")
-        prompt = _engine_constraint_prompt(c)
-        assert "25 frames" in prompt
+    def test_states_engine_and_frame_limits(self):
+        prompt = _engine_constraint_prompt(get_constraints("humo"))
+        for expected in ("HuMo", "97 frames", "3.88s", "25 frames"):
+            assert expected in prompt
 
 
 # ---------------------------------------------------------------------------

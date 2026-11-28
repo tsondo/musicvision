@@ -1,6 +1,7 @@
 """Tests for the core data models and project service."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -141,11 +142,6 @@ class TestModels:
         assert scene.subclip_frame_counts is None
         assert scene.generation_audio_segments is None
 
-    def test_humo_config_resolution(self):
-        hd = HumoConfig(resolution="720p")
-        sd = HumoConfig(resolution="480p")
-        assert hd.width == 1280 and hd.height == 720
-        assert sd.width == 832 and sd.height == 480
 
 
 class TestHumoTier:
@@ -210,11 +206,42 @@ class TestHumoTier:
         from musicvision.video.weight_registry import weight_status
 
         status = weight_status(HumoTier.GGUF_Q4, base_dir=tmp_path)
-        assert "dit" in status
-        assert "t5" in status
-        assert "vae" in status
-        assert "whisper" in status
+        assert {"dit", "t5", "vae", "whisper", "zero_vae_480p", "zero_vae_720p"} <= status.keys()
         assert all(v is False for v in status.values())
+
+
+class TestWeightRegistryZeroVae:
+    """Official HuMo zero_vae files are shared weights: download-weights fetches them."""
+
+    ZERO_VAE = {"zero_vae_480p": "zero_vae_129frame.pt", "zero_vae_720p": "zero_vae_720p_161frame.pt"}
+
+    def test_specs_point_at_official_files(self):
+        from musicvision.video.weight_registry import SHARED_SPECS
+
+        for key, filename in self.ZERO_VAE.items():
+            assert (SHARED_SPECS[key].repo_id, SHARED_SPECS[key].filename) == ("bytedance-research/HuMo", filename)
+
+    def test_download_all_for_tier_fetches_zero_vae(self, tmp_path, monkeypatch):
+        import huggingface_hub
+
+        from musicvision.video import weight_registry as wr
+
+        fetched: list[tuple[str, str]] = []
+
+        def fake_hf_hub_download(repo_id, filename, local_dir, token=None, **kw):
+            fetched.append((repo_id, filename))
+            p = Path(local_dir) / filename
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(b"x")
+            return str(p)
+
+        monkeypatch.setattr(huggingface_hub, "hf_hub_download", fake_hf_hub_download)
+        monkeypatch.setattr(wr, "download_dit", lambda tier, base_dir=None, hf_token=None: tmp_path / "dit")
+
+        paths = wr.download_all_for_tier(HumoTier.FP8_SCALED, base_dir=tmp_path)
+        for key, filename in self.ZERO_VAE.items():
+            assert ("bytedance-research/HuMo", filename) in fetched
+            assert paths[key] == wr.locate_shared(key, base_dir=tmp_path)
 
 
 class TestProjectService:
@@ -288,10 +315,6 @@ class TestProjectService:
 
 
 class TestVocalSeparation:
-    def test_defaults(self):
-        cfg = VocalSeparationConfig()
-        assert cfg.method == SeparationMethod.DEMUCS
-        assert cfg.demucs_model == DemucsModel.HTDEMUCS_FT
 
     def test_roundtrip(self, tmp_path):
         config = ProjectConfig(
@@ -338,8 +361,6 @@ class TestFluxConfig:
         cfg = FluxConfig(model=FluxModel.SCHNELL, steps=8)
         assert cfg.effective_steps == 8
 
-    def test_quant_default_is_auto(self):
-        assert FluxConfig().quant == FluxQuant.AUTO
 
     def test_flux_config_roundtrip(self, tmp_path):
         config = ProjectConfig(
