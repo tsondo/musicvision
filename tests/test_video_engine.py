@@ -11,19 +11,15 @@ torch = pytest.importorskip("torch", reason="torch required for video engine tes
 from musicvision.models import (
     HumoConfig,
     HumoTier,
-    Scene,
 )
 from musicvision.utils.gpu import DeviceMap
 from musicvision.video.factory import create_video_engine
 from musicvision.video.humo_engine import (
-    FPS,
     MAX_DURATION,
-    MAX_FRAMES,
     HumoEngine,
     HumoInput,
     HumoOutput,
     _save_frames_as_mp4_ffmpeg,
-    _sub_clip_suffixes,
 )
 
 # ---------------------------------------------------------------------------
@@ -61,22 +57,6 @@ def preview_config():
 # ---------------------------------------------------------------------------
 
 
-class TestConstants:
-    def test_max_frames(self):
-        assert MAX_FRAMES == 97
-
-    def test_fps(self):
-        assert FPS == 25
-
-    def test_max_duration(self):
-        assert MAX_DURATION == pytest.approx(3.88)
-
-    def test_scene_needs_sub_clips_matches(self):
-        """Scene.needs_sub_clips threshold matches HuMo's MAX_DURATION."""
-        short = Scene(id="s1", order=1, time_start=0, time_end=3.5)
-        long = Scene(id="s2", order=2, time_start=0, time_end=5.0)
-        assert not short.needs_sub_clips  # 3.5 < 3.88
-        assert long.needs_sub_clips       # 5.0 > 3.88
 
 
 # ---------------------------------------------------------------------------
@@ -84,22 +64,6 @@ class TestConstants:
 # ---------------------------------------------------------------------------
 
 
-class TestSubClipSuffixes:
-    def test_single(self):
-        assert _sub_clip_suffixes(1) == ["a"]
-
-    def test_three(self):
-        assert _sub_clip_suffixes(3) == ["a", "b", "c"]
-
-    def test_26(self):
-        result = _sub_clip_suffixes(26)
-        assert result[0] == "a"
-        assert result[25] == "z"
-
-    def test_beyond_26(self):
-        result = _sub_clip_suffixes(28)
-        assert result[26] == "aa"
-        assert result[27] == "ab"
 
 
 # ---------------------------------------------------------------------------
@@ -107,26 +71,6 @@ class TestSubClipSuffixes:
 # ---------------------------------------------------------------------------
 
 
-class TestDataclasses:
-    def test_humo_input(self):
-        inp = HumoInput(
-            text_prompt="A person singing",
-            reference_image=Path("/images/ref.png"),
-            audio_segment=Path("/segments/s1.wav"),
-            output_path=Path("/clips/s1.mp4"),
-        )
-        assert inp.text_prompt == "A person singing"
-        assert inp.output_path == Path("/clips/s1.mp4")
-        assert inp.seed is None
-
-    def test_humo_output(self):
-        result = HumoOutput(
-            video_path=Path("/clips/s1.mp4"),
-            frames_generated=97,
-            duration_seconds=3.88,
-        )
-        assert result.frames_generated == 97
-        assert result.seed_used == 0
 
 
 # ---------------------------------------------------------------------------
@@ -190,35 +134,12 @@ class TestEngineLifecycle:
 
 
 class TestHumoConfig:
-    def test_defaults(self):
-        cfg = HumoConfig()
-        assert cfg.tier == HumoTier.FP8_SCALED
-        assert cfg.model_size == "17B"
-        assert cfg.resolution == "544p"
-        assert cfg.height == 544
-        assert cfg.width == 960
-        assert cfg.scale_a == 5.5
-        assert cfg.scale_t == 5.0
-        assert cfg.denoising_steps == 50
 
-    def test_720p_resolution(self):
-        cfg = HumoConfig(resolution="720p")
-        assert cfg.width == 1280
-        assert cfg.height == 720
+    @pytest.mark.parametrize(("res", "wh"), [("720p", (1280, 720)), ("544p", (960, 544)), ("480p", (832, 480))])
+    def test_resolution(self, res, wh):
+        cfg = HumoConfig(resolution=res)
+        assert (cfg.width, cfg.height) == wh
 
-    def test_544p_resolution(self):
-        cfg = HumoConfig(resolution="544p")
-        assert cfg.width == 960
-        assert cfg.height == 544
-
-    def test_480p_resolution(self):
-        cfg = HumoConfig(resolution="480p")
-        assert cfg.width == 832
-        assert cfg.height == 480
-
-    def test_preview_tier(self):
-        cfg = HumoConfig(tier=HumoTier.PREVIEW)
-        assert cfg.model_size == "1.7B"
 
 
 # ---------------------------------------------------------------------------

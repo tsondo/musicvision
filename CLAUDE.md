@@ -175,7 +175,8 @@ Two-layer strategy. See docs/TESTING.md for full details.
 ```bash
 python -m pytest tests/ -v --tb=short
 ```
-No GPU, no network, fast (<10s). Run after every code change. Currently ~359 tests (with the `ml` extra installed; torch-dependent modules skip without it).
+No GPU, no network, fast (~6 s). Run after every code change. Currently ~417 tests (with the `ml` extra installed; torch-dependent modules skip without it).
+`tests/conftest.py` keeps runs hermetic: it disables `load_dotenv()` (so your `.env` never leaks in) and clears MusicVision/LLM/HF env vars per test. Don't use sleeps to hold a job "active" in tests — use a gated handler (see `make_gated_handler` in `tests/test_jobs.py`).
 
 Test files:
 - `test_core.py` — project config, scene models, style sheet, ProjectService lifecycle

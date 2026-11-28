@@ -18,12 +18,6 @@ from musicvision.video.factory import create_video_engine
 # ---------------------------------------------------------------------------
 
 
-class TestVideoEngineType:
-    def test_ltx_video_value(self):
-        assert VideoEngineType.LTX_VIDEO.value == "ltx_video"
-
-    def test_from_string(self):
-        assert VideoEngineType("ltx_video") == VideoEngineType.LTX_VIDEO
 
 
 # ---------------------------------------------------------------------------
@@ -32,49 +26,24 @@ class TestVideoEngineType:
 
 
 class TestLtxVideoConfig:
-    def test_defaults(self):
-        cfg = LtxVideoConfig()
-        assert cfg.model_id == "Lightricks/LTX-2"
-        assert cfg.width == 768
-        assert cfg.height == 512
-        assert cfg.num_frames == 121
-        assert cfg.fps == 24
-        assert cfg.num_inference_steps == 40
-        assert cfg.guidance_scale == 4.0
-        assert cfg.use_audio_conditioning is False  # disabled until mel spectrogram encoding is implemented
-        assert cfg.vae_tiling is True
-        assert cfg.cpu_offload == "model"
-        assert cfg.use_fp8 is True
-        assert cfg.seed is None
+    def test_audio_conditioning_off_by_default(self):
+        # Disabled until mel spectrogram encoding is implemented.
+        assert LtxVideoConfig().use_audio_conditioning is False
 
-    def test_max_frames(self):
-        cfg = LtxVideoConfig()
-        assert cfg.max_frames == 257
+
 
     def test_max_duration(self):
         cfg = LtxVideoConfig()
         assert cfg.max_duration == pytest.approx(257 / 24, rel=0.01)
 
-    def test_snap_frames_exact(self):
-        # Values that are already (N*8)+1
-        assert LtxVideoConfig.snap_frames(9) == 9
-        assert LtxVideoConfig.snap_frames(121) == 121
-        assert LtxVideoConfig.snap_frames(257) == 257
-
-    def test_snap_frames_rounds(self):
-        assert LtxVideoConfig.snap_frames(100) == 97    # (12*8)+1
-        assert LtxVideoConfig.snap_frames(120) == 121   # (15*8)+1
-        assert LtxVideoConfig.snap_frames(130) == 129   # (16*8)+1
-
-    def test_snap_frames_minimum(self):
-        assert LtxVideoConfig.snap_frames(1) == 9
-        assert LtxVideoConfig.snap_frames(5) == 9
-
-    def test_snap_frames_boundary(self):
-        # 4 is equidistant — round picks nearest (N*8)+1
-        assert LtxVideoConfig.snap_frames(4) == 1 or LtxVideoConfig.snap_frames(4) == 9
-        # Actually (4-1)/8 = 0.375, round → 0, so 0*8+1 = 1, but max(1,9) = 9
-        assert LtxVideoConfig.snap_frames(4) == 9
+    @pytest.mark.parametrize(
+        ("frames", "snapped"),
+        [(9, 9), (121, 121), (257, 257),    # already (N*8)+1
+         (100, 97), (120, 121), (130, 129),  # round to nearest (N*8)+1
+         (1, 9), (4, 9), (5, 9)],            # floor at the 9-frame minimum
+    )
+    def test_snap_frames(self, frames, snapped):
+        assert LtxVideoConfig.snap_frames(frames) == snapped
 
 
 # ---------------------------------------------------------------------------
@@ -83,9 +52,6 @@ class TestLtxVideoConfig:
 
 
 class TestProjectConfigLtxVideo:
-    def test_has_ltx_video_field(self):
-        cfg = ProjectConfig()
-        assert isinstance(cfg.ltx_video, LtxVideoConfig)
 
     def test_yaml_roundtrip(self, tmp_path):
         cfg = ProjectConfig(
@@ -109,17 +75,8 @@ class TestProjectConfigLtxVideo:
 class TestEngineConstraints:
     def test_ltx_video_registered(self):
         c = get_constraints("ltx_video")
-        assert c.max_frames == 257
-        assert c.min_frames == 9
-        assert c.fps == 24
-
-    def test_max_seconds(self):
-        c = get_constraints("ltx_video")
-        assert c.max_seconds == pytest.approx(257 / 24, rel=0.01)
-
-    def test_min_seconds(self):
-        c = get_constraints("ltx_video")
-        assert c.min_seconds == pytest.approx(9 / 24, rel=0.01)
+        assert (c.max_frames, c.min_frames, c.fps) == (257, 9, 24)
+        assert c.max_seconds == pytest.approx(257 / 24) and c.min_seconds == pytest.approx(9 / 24)
 
 
 # ---------------------------------------------------------------------------

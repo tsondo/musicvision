@@ -56,6 +56,16 @@ def make_counting_handler(units=3, unit_time=0.0, record=None):
     return handler
 
 
+def make_gated_handler(gate: threading.Event):
+    """Handler that stays running until *gate* is set: keeps a job active
+    deterministically, with no sleeps for the test to wait out."""
+    def handler(params, ctx):
+        gate.wait(timeout=5)
+        ctx.report(current=1, total=1)
+        return {}
+    return handler
+
+
 @pytest.fixture
 def manager(tmp_path):
     m = JobManager()
@@ -301,9 +311,15 @@ class TestCancellation:
 
 class TestDuplicateGuard:
     @pytest.fixture
-    def slow_manager(self, manager):
-        manager.register(JobKind.REGENERATE_IMAGE, make_counting_handler(units=1, unit_time=0.2))
-        manager.register(JobKind.GENERATE_IMAGES, make_counting_handler(units=1, unit_time=0.2))
+    def gate(self):
+        gate = threading.Event()
+        yield gate
+        gate.set()  # release running jobs before the manager shuts down
+
+    @pytest.fixture
+    def slow_manager(self, manager, gate):
+        manager.register(JobKind.REGENERATE_IMAGE, make_gated_handler(gate))
+        manager.register(JobKind.GENERATE_IMAGES, make_gated_handler(gate))
         return manager
 
     def test_same_kind_whole_project_conflicts(self, slow_manager):
@@ -331,8 +347,9 @@ class TestDuplicateGuard:
         slow_manager.submit(JobKind.GENERATE_IMAGES)
         slow_manager.submit(JobKind.REGENERATE_IMAGE, {"scene_ids": ["scene_001"]})
 
-    def test_terminal_job_frees_the_scope(self, slow_manager):
+    def test_terminal_job_frees_the_scope(self, slow_manager, gate):
         j1 = slow_manager.submit(JobKind.GENERATE_IMAGES)
+        gate.set()
         wait_for(lambda: slow_manager.get(j1.id).state == JobState.SUCCEEDED)
         slow_manager.submit(JobKind.GENERATE_IMAGES)  # no conflict after terminal
 
@@ -476,12 +493,16 @@ class TestJobEndpoints:
 
     def test_duplicate_submit_conflict(self, client):
         c, manager = client
-        manager.register(JobKind.GENERATE_IMAGES, make_counting_handler(units=1, unit_time=0.2))
-        assert c.post("/api/jobs", json={"kind": "generate_images"}).status_code == 202
-        resp = c.post("/api/jobs", json={"kind": "generate_images"})
-        assert resp.status_code == 409
-        assert resp.json()["error"]["code"] == "job_already_active"
-        assert resp.json()["error"]["detail"]["job_id"].startswith("job_")
+        gate = threading.Event()
+        manager.register(JobKind.GENERATE_IMAGES, make_gated_handler(gate))
+        try:
+            assert c.post("/api/jobs", json={"kind": "generate_images"}).status_code == 202
+            resp = c.post("/api/jobs", json={"kind": "generate_images"})
+            assert resp.status_code == 409
+            assert resp.json()["error"]["code"] == "job_already_active"
+            assert resp.json()["error"]["detail"]["job_id"].startswith("job_")
+        finally:
+            gate.set()
 
     def test_get_unknown_job_404(self, client):
         c, _ = client

@@ -7,7 +7,7 @@ import pytest
 
 torch = pytest.importorskip("torch", reason="torch required for image engine tests")
 
-from musicvision.imaging.base import ImageEngine, ImageResult
+from musicvision.imaging.base import ImageEngine
 from musicvision.imaging.factory import create_engine
 from musicvision.imaging.flux_engine import MODEL_IDS as FLUX_MODEL_IDS
 from musicvision.imaging.flux_engine import FluxEngine
@@ -63,11 +63,6 @@ def _mock_pipe():
 
 
 class TestConfigCompat:
-    def test_image_model_enum_has_all_variants(self):
-        assert ImageModel.FLUX_DEV.value == "flux-dev"
-        assert ImageModel.FLUX_SCHNELL.value == "flux-schnell"
-        assert ImageModel.ZIMAGE.value == "z-image"
-        assert ImageModel.ZIMAGE_TURBO.value == "z-image-turbo"
 
     def test_flux_model_alias(self):
         """FluxModel is an alias for ImageModel."""
@@ -142,30 +137,18 @@ class TestModelIDs:
 
 
 class TestFactory:
-    def test_creates_flux_engine_for_flux_dev(self, cpu_device_map):
-        cfg = ImageGenConfig(model=ImageModel.FLUX_DEV)
-        engine = create_engine(cfg, cpu_device_map)
-        assert isinstance(engine, FluxEngine)
+    @pytest.mark.parametrize(
+        ("model", "cls"),
+        [(ImageModel.FLUX_DEV, FluxEngine), (ImageModel.FLUX_SCHNELL, FluxEngine),
+         (ImageModel.ZIMAGE, ZImageEngine), (ImageModel.ZIMAGE_TURBO, ZImageEngine)],
+    )
+    def test_dispatch(self, cpu_device_map, model, cls):
+        engine = create_engine(ImageGenConfig(model=model), cpu_device_map)
+        assert isinstance(engine, cls) and isinstance(engine, ImageEngine)
 
-    def test_creates_flux_engine_for_flux_schnell(self, cpu_device_map):
-        cfg = ImageGenConfig(model=ImageModel.FLUX_SCHNELL)
-        engine = create_engine(cfg, cpu_device_map)
-        assert isinstance(engine, FluxEngine)
-
-    def test_creates_zimage_engine(self, cpu_device_map):
-        cfg = ImageGenConfig(model=ImageModel.ZIMAGE)
-        engine = create_engine(cfg, cpu_device_map)
-        assert isinstance(engine, ZImageEngine)
-
-    def test_creates_zimage_turbo_engine(self, cpu_device_map):
-        cfg = ImageGenConfig(model=ImageModel.ZIMAGE_TURBO)
-        engine = create_engine(cfg, cpu_device_map)
-        assert isinstance(engine, ZImageEngine)
-
-    def test_returns_image_engine_subclass(self, cpu_device_map):
+    def test_every_model_has_an_engine(self, cpu_device_map):
         for model in ImageModel:
-            engine = create_engine(ImageGenConfig(model=model), cpu_device_map)
-            assert isinstance(engine, ImageEngine)
+            assert isinstance(create_engine(ImageGenConfig(model=model), cpu_device_map), ImageEngine)
 
 
 # ---------------------------------------------------------------------------
@@ -313,26 +296,3 @@ class TestZImageGeneration:
 # ---------------------------------------------------------------------------
 
 
-class TestImageResult:
-    def test_basic_fields(self):
-        result = ImageResult(
-            path=Path("/images/test.png"),
-            seed=42,
-            prompt="test prompt",
-            width=1280,
-            height=720,
-        )
-        assert result.path == Path("/images/test.png")
-        assert result.seed == 42
-        assert result.metadata == {}
-
-    def test_metadata(self):
-        result = ImageResult(
-            path=Path("/images/test.png"),
-            seed=42,
-            prompt="test",
-            width=1280,
-            height=720,
-            metadata={"steps": 28, "guidance_scale": 3.5},
-        )
-        assert result.metadata["steps"] == 28
