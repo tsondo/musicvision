@@ -139,6 +139,23 @@ SHARED_SPECS: dict[str, WeightSpec] = {
         expected_gb=1.5,
         local_subdir="whisper",
     ),
+    # Official pre-computed VAE encodings of a mid-gray video (HuMo's null image
+    # condition). The engine can recompute these, but the official files are the
+    # exact tensors HuMo was trained against. ~13 MB / ~38 MB.
+    "zero_vae_480p": WeightSpec(
+        repo_id="bytedance-research/HuMo",
+        filename="zero_vae_129frame.pt",
+        fmt="pth",
+        expected_gb=0.013,
+        local_subdir="zero_vae",
+    ),
+    "zero_vae_720p": WeightSpec(
+        repo_id="bytedance-research/HuMo",
+        filename="zero_vae_720p_161frame.pt",
+        fmt="pth",
+        expected_gb=0.038,
+        local_subdir="zero_vae",
+    ),
 }
 
 
@@ -195,7 +212,7 @@ def locate_dit(tier: HumoTier, base_dir: Path | None = None) -> Path:
 
 
 def locate_shared(key: str, base_dir: Path | None = None) -> Path:
-    """Return local path to a shared weight file (t5 / vae / whisper)."""
+    """Return local path to a shared weight file (t5 / vae / whisper / zero_vae_*)."""
     base = base_dir or weights_dir()
     spec = SHARED_SPECS[key]
     p = base / "shared" / spec.local_subdir / spec.filename
@@ -293,7 +310,8 @@ def download_shared(
         return dest
 
     token = hf_token or os.environ.get("HUGGINGFACE_TOKEN") or os.environ.get("HF_TOKEN")
-    log.info("Downloading shared weight '%s' from %s (~%.1f GB)…", key, spec.repo_id, spec.expected_gb)
+    size = f"~{spec.expected_gb:.1f} GB" if spec.expected_gb >= 0.1 else f"~{spec.expected_gb * 1000:.0f} MB"
+    log.info("Downloading shared weight '%s' from %s (%s)…", key, spec.repo_id, size)
     hf_hub_download(
         repo_id=spec.repo_id,
         filename=spec.filename,
