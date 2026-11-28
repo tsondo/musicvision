@@ -205,6 +205,20 @@ def _guard_no_active_job() -> None:
         )
 
 
+def load_project_at_startup(project_dir: Path) -> ProjectService:
+    """Open *project_dir* as the served project before the server starts.
+
+    Used by ``musicvision serve <dir>``. Mirrors /api/projects/open: binds the
+    job journal (jobs.jsonl) and mounts project files, so jobs are journaled
+    and stale ones from a previous run are failed on startup."""
+    global _project
+    project_dir = project_dir.resolve()
+    _project = ProjectService.open(project_dir)
+    job_manager.attach_project(project_dir)
+    mount_project_files(project_dir)
+    return _project
+
+
 @app.post("/api/projects/create")
 async def create_project(req: CreateProjectRequest):
     global _project

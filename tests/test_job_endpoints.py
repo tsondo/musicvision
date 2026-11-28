@@ -367,3 +367,42 @@ class TestUpscaleCallbacks:
         assert result["upscaled"] == ["s0"]
         assert result["cancelled"] is True
         assert calls[-1] == "unload"
+
+
+# ---------------------------------------------------------------------------
+# Startup project (musicvision serve <dir>)
+# ---------------------------------------------------------------------------
+
+class TestStartupProject:
+    def test_serve_startup_project_journals_jobs(self, tmp_path, monkeypatch, fake_image_engine):
+        """`musicvision serve <dir>` must bind the job journal like /api/projects/open does."""
+        from fastapi.testclient import TestClient
+
+        import musicvision.api.app as app_module
+        import musicvision.utils.gpu as gpu
+        from musicvision.project import ProjectService
+
+        project_dir = tmp_path / "served"
+        svc = ProjectService.create(project_dir, name="Served")
+        svc.scenes = SceneList(scenes=[
+            Scene(id="scene_001", order=1, time_start=0.0, time_end=2.0, image_prompt="shot"),
+        ])
+        svc.save_scenes()
+
+        fresh = JobManager()
+        app_module.register_job_handlers(fresh)
+        monkeypatch.setattr(app_module, "job_manager", fresh)
+        monkeypatch.setattr(app_module, "_project", None)
+        monkeypatch.setattr(gpu, "detect_devices", lambda: None)
+        fake_image_engine()
+
+        app_module.load_project_at_startup(project_dir)
+        try:
+            with TestClient(app_module.app) as c:
+                job = c.post("/api/pipeline/generate-images", json={"scene_ids": ["scene_001"]}).json()
+                assert wait_terminal(c, job["id"])["state"] == "succeeded"
+            journal = project_dir / "jobs.jsonl"
+            assert journal.exists()
+            assert job["id"] in journal.read_text()
+        finally:
+            fresh.shutdown()
