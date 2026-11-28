@@ -314,16 +314,16 @@ class TestVocalSeparation:
         demucs = create_separator(SeparationMethod.DEMUCS, device="cpu")
         assert isinstance(demucs, DemucsSeparator)
 
-    def test_demucs_load_error_without_package(self):
+    def test_demucs_load_error_without_package(self, monkeypatch):
+        """Without demucs, load() raises a RuntimeError naming the install command."""
+        import sys
+
+        pytest.importorskip("torch")
         from musicvision.intake.audio_analysis import DemucsSeparator
-        sep = DemucsSeparator(model_name="htdemucs", device="cpu")
-        # Without demucs installed, load() should raise a clear RuntimeError
-        try:
-            sep.load()
-        except RuntimeError as e:
-            assert "demucs" in str(e).lower()
-        except Exception:
-            pass  # demucs is installed — skip
+
+        monkeypatch.setitem(sys.modules, "demucs.pretrained", None)  # import now raises ImportError
+        with pytest.raises(RuntimeError, match="demucs is not installed"):
+            DemucsSeparator(model_name="htdemucs", device="cpu").load()
 
 
 class TestFluxConfig:

@@ -353,7 +353,7 @@ class TestPipeline:
         assert result["upscaled"] == []
         assert scene.upscaled_clip is None
 
-    def test_scene_ids_filter(self, tmp_path):
+    def test_scene_ids_filter(self, tmp_path, monkeypatch):
         from musicvision.upscaling.pipeline import upscale_clips
 
         paths = ProjectPaths(tmp_path)
@@ -366,8 +366,20 @@ class TestPipeline:
         s2 = self._make_scene("scene_002", video_clip="clips/scene_002.mp4")
         scenes = SceneList(scenes=[s1, s2])
 
-        cfg = UpscalerConfig(enabled=False)  # disabled, so won't actually upscale
-        result = upscale_clips(scenes, paths, cfg, VideoEngineType.HUMO, scene_ids=["scene_001"])
+        import musicvision.upscaling.pipeline as up
 
-        # Both filtered by disabled config
-        assert result["upscaled"] == []
+        upscaled: list[str] = []
+
+        class FakeEngine:
+            def load(self):
+                pass
+
+            def unload(self):
+                pass
+
+        monkeypatch.setattr(up, "create_upscale_engine", lambda *a, **kw: FakeEngine())
+        monkeypatch.setattr(up, "_upscale_scene", lambda scene, *a, **kw: upscaled.append(scene.id))
+        monkeypatch.setattr("musicvision.utils.video.update_scene_resolution", lambda *a, **kw: None)
+        cfg = UpscalerConfig(enabled=True, upscaler_override=UpscalerType.REAL_ESRGAN)
+        result = upscale_clips(scenes, paths, cfg, VideoEngineType.HUMO, scene_ids=["scene_001"])
+        assert upscaled == ["scene_001"] and result["upscaled"] == ["scene_001"]

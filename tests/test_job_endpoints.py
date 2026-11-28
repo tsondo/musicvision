@@ -335,6 +335,33 @@ class TestHandlers:
             scene.reference_image = f"images/{scene.id}.png"
             scene.video_prompt = f"motion for {scene.id}"
 
+    def test_two_consecutive_ooms_skip_remaining_scenes(self, client, monkeypatch):
+        """The real early-abort in the video job: after 2 OOMs in a row, later scenes are skipped."""
+        import musicvision.video as video
+
+        c, _, proj = client
+        self._video_ready(proj)
+        rendered: list[str] = []
+
+        class OomEngine:
+            def load(self):
+                pass
+
+            def unload(self):
+                pass
+
+            def generate_scene(self, *, scene_id, **kwargs):
+                rendered.append(scene_id)
+                raise RuntimeError("CUDA out of memory. Tried to allocate 30.00 GiB")
+
+        monkeypatch.setattr(video, "create_video_engine", lambda *a, **kw: OomEngine())
+        monkeypatch.setattr("musicvision.api.app.missing_render_weights", lambda cfg: None)
+        final = wait_terminal(c, c.post("/api/pipeline/generate-videos", json={"render_mode": "final"}).json()["id"])
+        assert final["state"] == "succeeded", final["error"]
+        assert rendered == ["scene_001", "scene_002"]  # third never attempted
+        failed = {f["scene_id"]: f.get("error_type") for f in final["result"]["failed"]}
+        assert failed == {"scene_001": "oom", "scene_002": "oom", "scene_003": "oom_skipped"}
+
     def test_humo_preview_render_mode_reaches_engine_without_touching_project(self, client, monkeypatch):
         import musicvision.video as video
         from musicvision.video.humo_engine import HumoOutput
