@@ -276,6 +276,49 @@ class TestHandlers:
         assert FakeVideoEngine.unloaded
         assert proj.scenes.get_scene("scene_002").video_clip == "clips/scene_002.mp4"
 
+    def test_generate_videos_accepts_real_humo_outputs(self, client, monkeypatch):
+        """Regression: the job read .generated_audio_path, which HumoOutput lacked,
+        so every HuMo scene rendered and was then reported failed."""
+        import musicvision.video as video
+        from musicvision.video.humo_engine import HumoOutput
+
+        c, _, proj = client
+        song = proj.paths.root / "input" / "song.wav"
+        song.parent.mkdir(parents=True, exist_ok=True)
+        song.write_bytes(b"RIFF")
+        proj.config.song.audio_file = "input/song.wav"
+        for scene in proj.scenes.scenes:
+            scene.reference_image = f"images/{scene.id}.png"
+            scene.video_prompt = f"motion for {scene.id}"
+
+        class FakeHumoEngine:
+            def load(self):
+                pass
+
+            def unload(self):
+                pass
+
+            def generate_scene(self, *, output_dir, scene_id, **kwargs):
+                outputs = []
+                n = 2 if scene_id == "scene_002" else 1  # cover the multi-sub-clip branch too
+                for i in range(n):
+                    clip = output_dir / (f"{scene_id}_{'ab'[i]}.mp4" if n > 1 else f"{scene_id}.mp4")
+                    clip.parent.mkdir(parents=True, exist_ok=True)
+                    clip.write_bytes(b"mp4")
+                    outputs.append(HumoOutput(video_path=clip, frames_generated=97, duration_seconds=3.88))
+                return outputs
+
+        monkeypatch.setattr(video, "create_video_engine", lambda *a, **kw: FakeHumoEngine())
+        monkeypatch.setattr("musicvision.utils.video.update_scene_resolution", lambda *a, **kw: None)
+        monkeypatch.setattr("musicvision.utils.audio.concat_videos", lambda paths, out: out.write_bytes(b"mp4"))
+
+        job = c.post("/api/pipeline/generate-videos", json={}).json()
+        final = wait_terminal(c, job["id"])
+        assert final["state"] == "succeeded", final["error"]
+        assert final["result"]["failed"] == []
+        assert final["result"]["generated"] == ["scene_001", "scene_002", "scene_003"]
+        assert proj.scenes.get_scene("scene_002").video_clip == "clips/scene_002_joined.mp4"
+
     def test_descriptions_batch_reports_progress(self, client, monkeypatch):
         import musicvision.imaging.prompt_generator as pg
 
