@@ -66,7 +66,7 @@ Two machines on the same LAN:
 - **Secondary GPU**: RTX 4080 16 GB (`cuda:0` in `nvidia-smi` order) — DRIVES THE OS DISPLAY (~1.8 GB baseline); treat usable VRAM as **~14 GB**, less if other Windows apps are holding VRAM (check `nvidia-smi` before GPU runs). Offloads T5, CLIP, VAE, Whisper, audio separator — keep the sequential load/encode/offload per component; don't assume the full encoder set fits co-resident.
 - OS: Windows + Ubuntu WSL2 (reinstalled 2026-11-28 — the venv ML extras, `.env`, and model weights must be re-provisioned; see Environment Setup)
 
-> **CUDA index note:** In `nvidia-smi` order the 4080 is `cuda:0` and the 5090 is `cuda:1`. It does NOT matter for MusicVision — `gpu.py` auto-detects GPUs by VRAM and assigns the highest-VRAM GPU as primary regardless of CUDA index. Do not hardcode CUDA indices anywhere in pipeline code.
+> **CUDA index note:** The two orderings disagree. In `nvidia-smi` the 4080 is GPU 0 and the 5090 is GPU 1; in PyTorch (and therefore in MusicVision logs, `torch.cuda.*`, and `DeviceMap`) the 5090 is `cuda:0` and the 4080 is `cuda:1`, because CUDA's default `CUDA_DEVICE_ORDER=FASTEST_FIRST` differs from nvidia-smi's PCI bus order. It does NOT matter for MusicVision — `gpu.py` auto-detects GPUs by VRAM and assigns the highest-VRAM GPU as primary regardless of CUDA index. Do not hardcode CUDA indices anywhere in pipeline code.
 
 **vLLM server** (separate LAN machine, Fedora, hostname `vllm-host`):
 - GPU: RTX 3090 Ti 24GB (single GPU)
@@ -78,8 +78,7 @@ Two machines on the same LAN:
 ## Environment Setup
 
 ```bash
-uv sync --extra ml
-pip install "audio-separator[gpu]"
+uv sync --extra ml --extra dev   # audio-separator[gpu] is now part of the ml extra
 cp .env.example .env
 # Fill in: HUGGINGFACE_TOKEN, LLM_BACKEND + related vars
 ```
@@ -104,7 +103,7 @@ PyTorch: 2.10.0+cu128 (upgraded for RTX 5090 sm_120 support). Do not downgrade.
 - Python 3.11+, type hints everywhere
 - Pydantic v2 for all data models — no raw dicts
 - `from __future__ import annotations` in every module (required — prevents circular import issues with Pydantic v2 `model_rebuild()`, not just style)
-- Ruff for linting: `ruff check src/ tests/`
+- Ruff for linting: `ruff check src/ tests/` (must pass clean; `video/vendor/` is excluded and rule exceptions live in `pyproject.toml`)
 - Line length: 120 chars
 - Logging via `logging.getLogger(__name__)`, not print()
 - All pipeline logic in core modules (intake/, imaging/, video/, assembly/). UI and API are thin layers that call into these — never put generation logic in api.py or UI code.
@@ -175,7 +174,7 @@ Two-layer strategy. See docs/TESTING.md for full details.
 ```bash
 python -m pytest tests/ -v --tb=short
 ```
-No GPU, no network, fast (<10s). Run after every code change. Currently ~227 tests.
+No GPU, no network, fast (<10s). Run after every code change. Currently ~359 tests (with the `ml` extra installed; torch-dependent modules skip without it).
 
 Test files:
 - `test_core.py` — project config, scene models, style sheet, ProjectService lifecycle

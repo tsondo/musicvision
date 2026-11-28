@@ -73,9 +73,10 @@ ml = [
     "submitit==1.5.4",  # demucs dep
     "diffq==0.2.4",     # required by mdx_extra_q only (quantised MDX model)
     # --- MelBandRoFormer vocal separation ---
-    # audio-separator must be installed separately with GPU support:
-    # pip install "audio-separator[gpu]"
-    # (not listed here because it pulls onnxruntime-gpu which conflicts on some systems)
+    # [gpu] pulls onnxruntime-gpu. If that conflicts on a given system, install
+    # with `uv sync --extra ml --no-install-package onnxruntime-gpu` and add
+    # plain onnxruntime instead.
+    "audio-separator[gpu]>=0.44",
 ]
 dev = [
     "pytest>=8.0",
@@ -91,8 +92,21 @@ musicvision = "musicvision.cli:main"
 target-version = "py311"
 line-length = 120
 
+# Upstream model code; patches are tracked in docs/FIXLOG.md, not restyled.
+extend-exclude = ["src/musicvision/video/vendor"]
+
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
+ignore = [
+    "UP042",  # str+Enum -> StrEnum changes str()/format() output; these enums serialize into scenes.json
+    "N803",   # tensor-math names: lora_A, H, W, F_frames
+    "N806",   # tensor-math locals: B, H, W
+    "N812",   # `import torch.nn.functional as F` is the PyTorch convention
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402"]                  # pytest.importorskip("torch") must run before ML imports
+"src/musicvision/api/app.py" = ["E402"]  # load_dotenv() must run before imports that read env vars
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
