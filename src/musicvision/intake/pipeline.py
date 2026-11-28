@@ -20,6 +20,7 @@ from musicvision.intake.audio_analysis import (
     create_separator,
     detect_bpm,
     detect_sections,
+    estimate_vocal_activity,
     estimate_vocalist,
     get_beat_times,
 )
@@ -35,6 +36,7 @@ from musicvision.models import (
     Scene,
     SceneBoundary,
     SceneList,
+    SceneType,
     SongInfo,
     SongSection,
 )
@@ -195,6 +197,13 @@ def run_analyze(
         config.song.lyrics_file = "input/lyrics_whisper.txt"
         log.info("Saved Whisper transcription to %s", lyrics_out.name)
 
+    # --- Clamp phrase-initial words to actual vocal onsets ---
+    if vocal_audio_path is not None and words:
+        try:
+            words = _trim_words_to_vocal_activity(words, estimate_vocal_activity(vocal_audio_path))
+        except Exception as exc:
+            log.warning("Vocal-activity word trimming skipped: %s", exc)
+
     # --- Parse AceStep sections or auto-detect from audio ---
     step("Detecting song sections")
     sections: list[SongSection] = []
@@ -266,7 +275,7 @@ def create_scenes_from_boundaries(
     project: ProjectService,
     boundaries: list[SceneBoundary],
     snap_to_beats: bool = False,
-    device: str | None = None,
+    device: str | None = None,  # unused since per-scene Whisper was removed; kept for callers
     lyrics_assignments: list[dict] | None = None,
 ) -> SceneList:
     """
@@ -332,7 +341,8 @@ def create_scenes_from_boundaries(
             # Manual mode: use assignment if present, empty string if not
             lyrics = manual_lyrics.get(i, "")
         else:
-            lyrics = _lyrics_from_words(words, t_start, t_end) if words else ""
+            is_last = i == len(boundaries) - 1
+            lyrics = _lyrics_from_words(words, t_start, t_end, include_end=is_last) if words else ""
             if not lyrics and lyrics_text:
                 lyrics = _lyrics_for_scene_bpm(
                     lyrics_text, t_start, t_end, duration,
@@ -356,19 +366,10 @@ def create_scenes_from_boundaries(
     # Slice audio
     _slice_scenes(scene_list, audio_path, paths)
 
-    # Transcribe each scene's audio slice — skip if manual assignments provided
     if manual_lyrics is not None:
         lyrics_source = "manual_assignments"
-        log.info("Using manual lyrics assignments, skipping Whisper transcription")
     else:
         lyrics_source = "bpm_estimate" if not words else "word_timestamps"
-        if device is None:
-            device = _detect_whisper_device()
-        try:
-            _transcribe_scene_slices(scene_list.scenes, paths, device=device)
-            lyrics_source = "per_scene_whisper"
-        except Exception as exc:
-            log.warning("Per-scene transcription failed, keeping fallback lyrics: %s", exc)
 
     # Save
     project.scenes = scene_list
@@ -450,12 +451,9 @@ def run_auto_segment(
     step("Slicing scene audio")
     _slice_scenes(scene_list, audio_path, paths)
 
-    # Transcribe each scene's audio slice for accurate lyrics
-    step("Transcribing scene slices (Whisper)")
-    try:
-        _transcribe_scene_slices(scene_list.scenes, paths, device=_detect_whisper_device())
-    except Exception as exc:
-        log.warning("Per-scene transcription failed, keeping LLM-assigned lyrics: %s", exc)
+    # Lyrics come from the full-song word timestamps, not per-scene re-transcription
+    step("Assigning lyrics to scenes")
+    _assign_lyrics_from_words(scene_list.scenes, words, set_type=True)
 
     # Save
     project.scenes = scene_list
@@ -562,17 +560,57 @@ def _lyrics_from_words(
     words: list[WordTimestamp],
     time_start: float,
     time_end: float,
+    include_end: bool = False,
 ) -> str:
     """Extract lyrics from word timestamps within a time range.
 
-    A word is included if its midpoint falls within [time_start, time_end].
+    A word is included if its midpoint falls within [time_start, time_end)
+    (closed at the end only for the song's last scene, via *include_end*), so
+    a word on a shared boundary belongs to exactly one of two adjacent scenes.
     """
     scene_words = []
     for w in words:
         mid = (w.start + w.end) / 2
-        if time_start <= mid <= time_end:
+        if time_start <= mid < time_end or (include_end and mid == time_end):
             scene_words.append(w.word)
     return " ".join(scene_words)
+
+
+def _assign_lyrics_from_words(scenes: list[Scene], words: list[WordTimestamp], set_type: bool) -> None:
+    """Fill scene lyrics from the full-song word timestamps (midpoint rule).
+
+    Replaces per-scene Whisper re-transcription, which in testing (#30) was far
+    less accurate than the full-song pass (12.2% vs 4.6% WER) and hallucinated
+    text on instrumental scenes. When a lyrics file was provided, *words* are the
+    user's lyrics aligned to Whisper timings, so the user's text is what lands.
+    With *set_type*, a scene is vocal iff at least one word falls in it."""
+    ordered = sorted(scenes, key=lambda s: s.time_start)
+    for i, scene in enumerate(ordered):
+        scene.lyrics = _lyrics_from_words(words, scene.time_start, scene.time_end, include_end=i == len(ordered) - 1)
+        if set_type:
+            scene.type = SceneType.VOCAL if scene.lyrics else SceneType.INSTRUMENTAL
+
+
+def _trim_words_to_vocal_activity(
+    words: list[WordTimestamp], active: list[tuple[float, float]],
+) -> list[WordTimestamp]:
+    """Move a word's start forward to where the vocal stem actually becomes active.
+
+    Whisper stretches the first word of each phrase back over the preceding
+    silence (on the test song "Karina," spanned 0.0-14.4 s while singing began at
+    13.5 s), which made instrumental intros and breaks look sung. Words whose
+    start already falls inside an active region are unchanged."""
+    if not active:
+        return words
+    out = []
+    for w in words:
+        start = w.start
+        if not any(a <= start < b for a, b in active):
+            onset = next((a for a, _ in active if start < a < w.end), None)
+            if onset is not None:
+                start = onset
+        out.append(WordTimestamp(word=w.word, start=start, end=w.end))
+    return out
 
 
 def _lyrics_for_scene_bpm(
@@ -656,92 +694,6 @@ def _slice_scenes(
             scene.audio_segment_vocal = str(vocal_seg.relative_to(paths.root))
 
 
-def _detect_whisper_device() -> str:
-    """Auto-detect the best device for Whisper (secondary GPU preferred)."""
-    try:
-        from musicvision.utils.gpu import detect_devices
-        dm = detect_devices()
-        return str(dm.secondary)
-    except Exception:
-        return "cpu"
-
-
-def _transcribe_scene_slices(
-    scenes: list[Scene],
-    paths,
-    device: str = "cuda:0",
-) -> None:
-    """Transcribe each scene's vocal audio slice for accurate per-scene lyrics.
-
-    Short clips (2-10s) give Whisper much better accuracy than trying to
-    use word timestamps from a full-song transcription, where timing drifts
-    significantly on sung vocals.
-    """
-    # Check if any vocal segments exist
-    has_vocal_slices = any(
-        s.audio_segment_vocal and (paths.root / s.audio_segment_vocal).exists()
-        for s in scenes
-    )
-    if not has_vocal_slices:
-        # Fall back to full-mix segments
-        has_mix_slices = any(
-            s.audio_segment and (paths.root / s.audio_segment).exists()
-            for s in scenes
-        )
-        if not has_mix_slices:
-            log.warning("No audio segments available for per-scene transcription")
-            return
-
-    log.info("Transcribing %d scene slices with Whisper for accurate lyrics...", len(scenes))
-    # Load model once, transcribe all scenes
-    import torch
-    from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
-    from transformers import pipeline as hf_pipeline
-
-    model_name = "openai/whisper-large-v3"
-    torch_dtype = torch.float16 if "cuda" in device else torch.float32
-
-    model = AutoModelForSpeechSeq2Seq.from_pretrained(
-        model_name, torch_dtype=torch_dtype, low_cpu_mem_usage=True,
-    ).to(device)
-    processor = AutoProcessor.from_pretrained(model_name)
-
-    pipe = hf_pipeline(
-        "automatic-speech-recognition",
-        model=model,
-        tokenizer=processor.tokenizer,
-        feature_extractor=processor.feature_extractor,
-        torch_dtype=torch_dtype,
-        device=device,
-    )
-
-    for scene in scenes:
-        # Prefer vocal slice for cleaner transcription
-        audio_rel = scene.audio_segment_vocal or scene.audio_segment
-        if not audio_rel:
-            continue
-        audio_file = paths.root / audio_rel
-        if not audio_file.exists():
-            continue
-
-        try:
-            result = pipe(
-                str(audio_file),
-                return_timestamps=False,
-                generate_kwargs={"task": "transcribe"},
-            )
-            text = result.get("text", "").strip()
-            if text:
-                scene.lyrics = text
-                log.debug("Scene %s lyrics: %s", scene.id, text[:80])
-        except Exception as exc:
-            log.warning("Failed to transcribe %s: %s", scene.id, exc)
-
-    # Unload
-    del pipe, model, processor
-    if "cuda" in device:
-        torch.cuda.empty_cache()
-    log.info("Per-scene transcription complete")
 
 
 def _snap_to_beat(t: float, beat_times: list[float], tolerance: float = 0.15) -> float:
