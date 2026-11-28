@@ -46,18 +46,13 @@ def cmd_create(args: argparse.Namespace) -> None:
 
 
 def cmd_serve(args: argparse.Namespace) -> None:
-    from musicvision.api.app import app, mount_project_files
-    from musicvision.project import ProjectService
+    from musicvision.api.app import app, load_project_at_startup
 
     if args.directory:
         project_dir = Path(args.directory).resolve()
+        project = load_project_at_startup(project_dir)
 
-        import musicvision.api.app as api_module
-
-        api_module._project = ProjectService.open(project_dir)
-        mount_project_files(project_dir)
-
-        print(f"✓ Serving project '{api_module._project.config.name}'")
+        print(f"✓ Serving project '{project.config.name}'")
         print(f"  Project:  {project_dir}")
     else:
         print("✓ Starting server with no project loaded")

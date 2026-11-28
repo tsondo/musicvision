@@ -1,6 +1,6 @@
 # AGENT_INTERFACE_SPEC.md — Job Model + MCP Server
 
-**Status:** Draft for review
+**Status:** P1 + P2 + P3 implemented (job model, endpoint migration, frontend submit+poll). P4 (MCP server + review evidence) next.
 **Depends on:** GPU verification of the new two-GPU topology (in progress)
 **Supersedes:** the `TODO(job-model)` markers in `api/app.py`
 

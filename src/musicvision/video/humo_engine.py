@@ -103,6 +103,9 @@ class HumoOutput:
     frames_generated: int
     duration_seconds: float
     seed_used: int = 0  # seed used for noise init; 0 means unset
+    # HuMo never generates audio. The field exists so callers can treat
+    # HumoOutput and VideoResult (LTX-2) uniformly.
+    generated_audio_path: Path | None = None
 
 
 # ---------------------------------------------------------------------------

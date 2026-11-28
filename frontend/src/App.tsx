@@ -114,6 +114,8 @@ export default function App() {
         queueTotal={queueTotal}
         batchDone={pipeline.batchDone}
         batchTotal={pipeline.batchTotal}
+        activeJob={pipeline.activeJob}
+        onCancelJob={pipeline.cancelActiveJob}
         onUploadAudio={pipeline.uploadAudio}
         onUploadLyrics={pipeline.uploadLyrics}
         onImportAudio={pipeline.importAudio}

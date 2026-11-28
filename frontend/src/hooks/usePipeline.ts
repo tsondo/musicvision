@@ -15,9 +15,13 @@ import {
   generateAllVideos as apiGenerateVideos,
   upscaleVideos as apiUpscaleVideos,
   assemblePreview as apiAssemble,
+  cancelJob as apiCancelJob,
+  listJobs as apiListJobs,
   ApiError,
+  JobCancelledError,
+  type JobCallbacks,
 } from "../api/client";
-import type { AnalysisResult, AssembleResult, BatchGenResult, LyricsSource, PipelineStage, ProjectConfig, RenderMode, Scene, SceneBoundary, TargetResolution, UpscalerType } from "../api/types";
+import type { AnalysisResult, AssembleResult, BatchGenResult, Job, LyricsSource, PipelineStage, ProjectConfig, RenderMode, Scene, SceneBoundary, TargetResolution, UpscalerType } from "../api/types";
 
 export type StepStatus = "idle" | "running" | "done" | "error";
 
@@ -51,6 +55,8 @@ export interface PipelineState {
   isRunning: boolean;
   batchDone: number;
   batchTotal: number;
+  /** The queued/running job (ours or one an agent submitted), if any. */
+  activeJob: Job | null;
 }
 
 export function usePipeline(
@@ -74,20 +80,84 @@ export function usePipeline(
   const [error, setError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<BatchGenResult | null>(null);
 
-  // Batch progress tracking: snapshot clip paths at batch start, count changes via polling
-  const [batchSnapshot, setBatchSnapshot] = useState<{ step: string; clips: Record<string, string | null>; total: number } | null>(null);
+  // Job progress (AGENT_INTERFACE_SPEC.md §4.2): long-running steps are jobs;
+  // progress comes from job.progress instead of diffing scene clip paths.
+  const [activeJob, setActiveJob] = useState<Job | null>(null);
+  const localJobRef = useRef(false);
+  const lastProgressRef = useRef("");
 
-  const batchDone = (() => {
-    if (!batchSnapshot) return 0;
-    let done = 0;
-    for (const scene of scenes) {
-      const oldClip = batchSnapshot.clips[scene.id];
-      const newClip = scene.video_clip || scene.sub_clips.find((sc) => sc.video_clip)?.video_clip || null;
-      if (newClip !== oldClip) done++;
+  const batchDone = activeJob?.progress.current ?? 0;
+  const batchTotal = activeJob?.progress.total ?? 0;
+
+  const jobCallbacks = useMemo<JobCallbacks>(
+    () => ({
+      onUpdate: (job: Job) => {
+        const live = job.state === "queued" || job.state === "running";
+        setActiveJob(live ? job : null);
+        // Each finished unit (scene) has been saved server-side: refresh so
+        // new images/clips appear as they land.
+        const key = `${job.id}:${job.progress.current}`;
+        if (job.progress.current > 0 && key !== lastProgressRef.current) {
+          lastProgressRef.current = key;
+          reloadScenes();
+        }
+      },
+    }),
+    [reloadScenes],
+  );
+
+  /** Shared error path for job-backed steps. A cancel is not an error. */
+  const failStep = useCallback(
+    (err: unknown, setStatus: (s: StepStatus) => void) => {
+      if (err instanceof JobCancelledError) {
+        setError(null);
+        setStatus("idle");
+        reloadScenes();
+        return;
+      }
+      const msg = err instanceof ApiError ? err.detail : String(err);
+      setError(msg);
+      setStatus("error");
+    },
+    [reloadScenes],
+  );
+
+  /** Run one job-backed step: status bookkeeping, progress, errors, cleanup. */
+  const runJobStep = useCallback(
+    async <T,>(
+      setStatus: (s: StepStatus) => void,
+      call: (callbacks: JobCallbacks) => Promise<T>,
+      onDone: (result: T) => Promise<void> | void,
+    ) => {
+      setStatus("running");
+      setError(null);
+      localJobRef.current = true;
+      try {
+        const result = await call(jobCallbacks);
+        await onDone(result);
+      } catch (err) {
+        failStep(err, setStatus);
+      } finally {
+        localJobRef.current = false;
+        setActiveJob(null);
+      }
+    },
+    [jobCallbacks, failStep],
+  );
+
+  const cancelActiveJob = useCallback(async () => {
+    if (!activeJob) return;
+    try {
+      const updated = await apiCancelJob(activeJob.id);
+      // Show "Cancelling…" right away instead of waiting for the next poll.
+      setActiveJob((cur) => (cur && cur.id === updated.id && !updated.finished_at ? updated : cur));
+    } catch (err) {
+      // Already finished between poll and click: nothing to cancel.
+      if (!(err instanceof ApiError && err.code === "job_not_cancellable")) {
+        setError(err instanceof ApiError ? err.detail : String(err));
+      }
     }
-    return done;
-  })();
-  const batchTotal = batchSnapshot?.total ?? 0;
+  }, [activeJob]);
 
   const hasAudio = Boolean(config?.song.audio_file);
   const hasLyrics = Boolean(config?.song.lyrics_file);
@@ -143,7 +213,8 @@ export function usePipeline(
     videoDescriptionsStatus === "running" ||
     videosStatus === "running" ||
     upscaleStatus === "running" ||
-    assembleStatus === "running";
+    assembleStatus === "running" ||
+    activeJob !== null;
 
   const uploadAudio = useCallback(
     async (file: File) => {
@@ -227,21 +298,17 @@ export function usePipeline(
 
   // Phase 1: Analyze audio (BPM, Whisper, demucs)
   const runAnalyze = useCallback(
-    async (opts?: { skipTranscription?: boolean }) => {
-      setAnalyzeStatus("running");
-      setError(null);
-      try {
-        const result = await apiRunAnalyze(opts);
-        setAnalysisResult(result);
-        await reloadConfig();
-        setAnalyzeStatus("done");
-      } catch (err) {
-        const msg = err instanceof ApiError ? err.detail : String(err);
-        setError(msg);
-        setAnalyzeStatus("error");
-      }
-    },
-    [reloadConfig],
+    (opts?: { skipTranscription?: boolean }) =>
+      runJobStep(
+        setAnalyzeStatus,
+        (cb) => apiRunAnalyze(opts, cb),
+        async (result) => {
+          setAnalysisResult(result);
+          await reloadConfig();
+          setAnalyzeStatus("done");
+        },
+      ),
+    [runJobStep, reloadConfig],
   );
 
   // Load existing analysis data (on project open when already analyzed)
@@ -317,187 +384,142 @@ export function usePipeline(
 
   // Legacy one-shot intake (kept for backward compat)
   const runIntake = useCallback(
-    async (opts?: { useLlm?: boolean; skipTranscription?: boolean }) => {
-      setIntakeStatus("running");
-      setError(null);
-      try {
-        await apiRunIntake(opts);
-        await reloadScenes();
-        await reloadConfig();
-        setIntakeStatus("done");
-      } catch (err) {
-        const msg = err instanceof ApiError ? err.detail : String(err);
-        setError(msg);
-        setIntakeStatus("error");
+    (opts?: { useLlm?: boolean; skipTranscription?: boolean }) =>
+      runJobStep(
+        setIntakeStatus,
+        (cb) => apiRunIntake(opts, cb),
+        async () => {
+          await reloadScenes();
+          await reloadConfig();
+          setIntakeStatus("done");
+        },
+      ),
+    [runJobStep, reloadScenes, reloadConfig],
+  );
+
+  /** Finish a batch step: record the result and surface per-scene failures. */
+  const finishBatch = useCallback(
+    async (result: BatchGenResult, setStatus: (s: StepStatus) => void, noun: string) => {
+      setLastResult(result);
+      await reloadScenes();
+      setStatus(result.failed.length > 0 ? "error" : "done");
+      if (result.failed.length > 0) {
+        setError(`${result.failed.length} ${noun}(s) failed: ${result.failed[0]?.error}`);
       }
     },
-    [reloadScenes, reloadConfig],
+    [reloadScenes],
   );
 
   const generateDescriptions = useCallback(
-    async (sceneIds?: string[]) => {
-      setDescriptionsStatus("running");
-      setError(null);
-      try {
-        const result = await apiGenerateDescriptions(sceneIds);
-        setLastResult(result);
-        await reloadScenes();
-        setDescriptionsStatus(result.failed.length > 0 ? "error" : "done");
-        if (result.failed.length > 0) {
-          setError(
-            `${result.failed.length} description(s) failed: ${result.failed[0]?.error}`,
-          );
-        }
-      } catch (err) {
-        const msg = err instanceof ApiError ? err.detail : String(err);
-        setError(msg);
-        setDescriptionsStatus("error");
-      }
-    },
-    [reloadScenes],
+    (sceneIds?: string[]) =>
+      runJobStep(
+        setDescriptionsStatus,
+        (cb) => apiGenerateDescriptions(sceneIds, cb),
+        (result) => finishBatch(result, setDescriptionsStatus, "description"),
+      ),
+    [runJobStep, finishBatch],
   );
 
   const generateImages = useCallback(
-    async () => {
-      setImagesStatus("running");
-      setError(null);
-      try {
-        const result = await apiGenerateImages();
-        setLastResult(result);
-        await reloadScenes();
-        setImagesStatus(result.failed.length > 0 ? "error" : "done");
-        if (result.failed.length > 0) {
-          setError(
-            `${result.failed.length} image(s) failed: ${result.failed[0]?.error}`,
-          );
-        }
-      } catch (err) {
-        const msg = err instanceof ApiError ? err.detail : String(err);
-        setError(msg);
-        setImagesStatus("error");
-      }
-    },
-    [reloadScenes],
+    () =>
+      runJobStep(
+        setImagesStatus,
+        (cb) => apiGenerateImages(undefined, undefined, cb),
+        (result) => finishBatch(result, setImagesStatus, "image"),
+      ),
+    [runJobStep, finishBatch],
   );
 
   const generateVideoDescriptions = useCallback(
-    async (sceneIds?: string[]) => {
-      setVideoDescriptionsStatus("running");
-      setError(null);
-      try {
-        const result = await apiGenerateVideoDescriptions(sceneIds);
-        setLastResult(result);
-        await reloadScenes();
-        setVideoDescriptionsStatus(result.failed.length > 0 ? "error" : "done");
-        if (result.failed.length > 0) {
-          setError(
-            `${result.failed.length} video description(s) failed: ${result.failed[0]?.error}`,
-          );
-        }
-      } catch (err) {
-        const msg = err instanceof ApiError ? err.detail : String(err);
-        setError(msg);
-        setVideoDescriptionsStatus("error");
-      }
-    },
-    [reloadScenes],
+    (sceneIds?: string[]) =>
+      runJobStep(
+        setVideoDescriptionsStatus,
+        (cb) => apiGenerateVideoDescriptions(sceneIds, cb),
+        (result) => finishBatch(result, setVideoDescriptionsStatus, "video description"),
+      ),
+    [runJobStep, finishBatch],
   );
 
   const generateVideos = useCallback(
-    async (renderMode?: RenderMode) => {
+    (renderMode?: RenderMode) => {
       // Determine target scenes: all remaining, or unapproved for re-render
       const targetIds = videosRemaining > 0
         ? undefined
         : unapprovedSceneIds.length > 0
           ? unapprovedSceneIds
           : undefined;
-      const targetScenes = targetIds ? scenes.filter((s) => targetIds.includes(s.id)) : scenes;
-      // Snapshot current clips to track re-render progress
-      const clips: Record<string, string | null> = {};
-      for (const s of targetScenes) {
-        clips[s.id] = s.video_clip || s.sub_clips.find((sc) => sc.video_clip)?.video_clip || null;
-      }
-      setBatchSnapshot({ step: "videos", clips, total: targetScenes.length });
-      setVideosStatus("running");
-      setError(null);
-      try {
-        const result = await apiGenerateVideos(targetIds, undefined, renderMode);
-        setLastResult(result);
-        await reloadScenes();
-        setBatchSnapshot(null);
-        setVideosStatus(result.failed.length > 0 ? "error" : "done");
-        if (result.failed.length > 0) {
-          setError(
-            `${result.failed.length} video(s) failed: ${result.failed[0]?.error}`,
-          );
-        }
-      } catch (err) {
-        const msg = err instanceof ApiError ? err.detail : String(err);
-        setError(msg);
-        setBatchSnapshot(null);
-        setVideosStatus("error");
-      }
+      return runJobStep(
+        setVideosStatus,
+        (cb) => apiGenerateVideos(targetIds, undefined, renderMode, cb),
+        (result) => finishBatch(result, setVideosStatus, "video"),
+      );
     },
-    [scenes, videosRemaining, unapprovedSceneIds, reloadScenes],
+    [videosRemaining, unapprovedSceneIds, runJobStep, finishBatch],
   );
 
   const upscaleAll = useCallback(
-    async (sceneIds?: string[], resolution?: TargetResolution, upscaler?: UpscalerType, renderMode?: RenderMode) => {
-      setUpscaleStatus("running");
-      setError(null);
-      try {
-        const result = await apiUpscaleVideos(sceneIds, resolution, upscaler, renderMode);
-        await reloadScenes();
-        setUpscaleStatus(result.failed.length > 0 ? "error" : "done");
-        if (result.failed.length > 0) {
-          setError(`${result.failed.length} upscale(s) failed`);
-        }
-      } catch (err) {
-        const msg = err instanceof ApiError ? err.detail : String(err);
-        setError(msg);
-        setUpscaleStatus("error");
-      }
-    },
-    [reloadScenes],
+    (sceneIds?: string[], resolution?: TargetResolution, upscaler?: UpscalerType, renderMode?: RenderMode) =>
+      runJobStep(
+        setUpscaleStatus,
+        (cb) => apiUpscaleVideos(sceneIds, resolution, upscaler, renderMode, cb),
+        async (result) => {
+          await reloadScenes();
+          setUpscaleStatus(result.failed.length > 0 ? "error" : "done");
+          if (result.failed.length > 0) {
+            setError(`${result.failed.length} upscale(s) failed`);
+          }
+        },
+      ),
+    [runJobStep, reloadScenes],
   );
 
   const assemble = useCallback(
-    async (approvedOnly?: boolean) => {
-      setAssembleStatus("running");
-      setError(null);
-      try {
-        const result = await apiAssemble(approvedOnly);
-        setAssembleResult(result);
-        setAssembleStatus("done");
-      } catch (err) {
-        const msg = err instanceof ApiError ? err.detail : String(err);
-        setError(msg);
-        setAssembleStatus("error");
-      }
-    },
-    [],
+    (approvedOnly?: boolean) =>
+      runJobStep(
+        setAssembleStatus,
+        (cb) => apiAssemble(approvedOnly, cb),
+        (result) => {
+          setAssembleResult(result);
+          setAssembleStatus("done");
+        },
+      ),
+    [runJobStep],
   );
 
-  // Poll scenes while generation is running so new images/videos appear incrementally
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Show jobs this tab didn't start (an agent, another tab, or a job still
+  // running after a page reload) so the UI reflects the server's queue and
+  // doesn't start conflicting work. Refresh when such a job finishes.
+  const projectLoaded = config !== null;
   useEffect(() => {
-    const generating = descriptionsStatus === "running" || imagesStatus === "running" || videoDescriptionsStatus === "running" || videosStatus === "running" || upscaleStatus === "running";
-    if (generating && !pollRef.current) {
-      pollRef.current = setInterval(() => {
-        reloadScenes();
-      }, 10000);
-    }
-    if (!generating && pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
-    return () => {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
+    if (!projectLoaded) return;
+    let stopped = false;
+    let watching = false;
+    const tick = async () => {
+      if (localJobRef.current) return;
+      try {
+        const jobs = await apiListJobs({ limit: 10 });
+        if (stopped || localJobRef.current) return;
+        const live = jobs.find((j) => j.state === "running") ?? jobs.find((j) => j.state === "queued") ?? null;
+        if (live) {
+          watching = true;
+          jobCallbacks.onUpdate?.(live);
+        } else if (watching) {
+          watching = false;
+          setActiveJob(null);
+          await reloadScenes();
+          await reloadConfig();
+        }
+      } catch {
+        // Server unreachable or project closing; try again next tick.
       }
     };
-  }, [descriptionsStatus, imagesStatus, videoDescriptionsStatus, videosStatus, upscaleStatus, reloadScenes]);
+    tick();
+    const handle = setInterval(tick, 3000);
+    return () => {
+      stopped = true;
+      clearInterval(handle);
+    };
+  }, [projectLoaded, jobCallbacks, reloadScenes, reloadConfig]);
 
   const pipelineState: PipelineState = {
     stage,
@@ -529,10 +551,12 @@ export function usePipeline(
     isRunning,
     batchDone,
     batchTotal,
+    activeJob,
   };
 
   return {
     ...pipelineState,
+    cancelActiveJob,
     uploadAudio,
     uploadLyrics,
     importAudio,
