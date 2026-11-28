@@ -27,6 +27,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 
+from musicvision.imaging.performer_check import run_performer_check
 from musicvision.jobs import JobContext, JobFailureError, JobManager, JobManagerError
 from musicvision.models import (
     ApprovalStatus,
@@ -887,9 +888,11 @@ def _job_regenerate_image(params: dict, ctx: JobContext) -> dict:
         scene.image_status = ApprovalStatus.PENDING
     finally:
         engine.unload()
+    ctx.report(1, 1, message=f"Checking performer in {scene.id}", scene_id=scene.id)
+    warning = run_performer_check(scene, proj.config, output_path)
     proj.save_scenes()
     ctx.report(1, 1, message=f"Generated image for {scene.id}", scene_id=scene.id)
-    return {"scene": scene.model_dump(mode="json")}
+    return {"scene": scene.model_dump(mode="json"), "warnings": [warning] if warning else []}
 
 
 @app.post("/api/scenes/{scene_id}/regenerate-video", status_code=202)
@@ -1388,7 +1391,8 @@ def _job_generate_images(params: dict, ctx: JobContext) -> dict:
 
     generated: list[str] = []
     failed: list[dict] = []
-    ctx.partial_result(generated=generated, failed=failed)
+    warnings: list[dict] = []
+    ctx.partial_result(generated=generated, failed=failed, warnings=warnings)
 
     try:
         # Group by LoRA (minimize fuse/unfuse swaps), then by IP-Adapter
@@ -1414,6 +1418,8 @@ def _job_generate_images(params: dict, ctx: JobContext) -> dict:
                 )
                 scene.reference_image = f"images/{scene.id}.png"
                 generated.append(scene.id)
+                if warning := run_performer_check(scene, proj.config, output_path):
+                    warnings.append(warning)
                 proj.save_scenes()
             except Exception as exc:
                 log.error("Image generation failed for %s: %s", scene.id, exc)
@@ -1426,6 +1432,7 @@ def _job_generate_images(params: dict, ctx: JobContext) -> dict:
         "status": "complete",
         "generated": generated,
         "failed": failed,
+        "warnings": warnings,
         "total": total,
     }
 

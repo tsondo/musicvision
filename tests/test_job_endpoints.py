@@ -596,3 +596,30 @@ class TestIntakeProgress:
         assert observed == [(i, total, f"stage {i}") for i in range(total)]
         assert final["progress"]["unit"] == "steps"
         assert (final["progress"]["current"], final["progress"]["total"]) == (total, total)
+
+
+# ---------------------------------------------------------------------------
+# Performer check warnings surface in image job results
+# ---------------------------------------------------------------------------
+
+class TestPerformerWarnings:
+    def test_batch_and_single_image_jobs_report_mismatch(self, client, fake_image_engine, monkeypatch):
+        import musicvision.api.app as app_module
+
+        c, _, _ = client
+        fake_image_engine()
+
+        def fake_check(scene, config, image_path):
+            if scene.id == "scene_002":
+                return {"code": "performer_mismatch", "scene_id": scene.id, "message": "m", "detail": {}}
+            return None
+
+        monkeypatch.setattr(app_module, "run_performer_check", fake_check)
+        final = wait_terminal(c, c.post("/api/pipeline/generate-images", json={}).json()["id"])
+        assert final["state"] == "succeeded", final["error"]
+        assert [w["scene_id"] for w in final["result"]["warnings"]] == ["scene_002"]
+
+        job = c.post("/api/scenes/scene_002/regenerate-image", json={}).json()
+        final = wait_terminal(c, job["id"])
+        assert final["state"] == "succeeded", final["error"]
+        assert final["result"]["warnings"][0]["code"] == "performer_mismatch"
