@@ -40,6 +40,7 @@ from musicvision.models import (
     StyleSheet,
     VideoEngineType,
 )
+from musicvision.video.render_mode import RenderMode, config_for_render_mode, missing_render_weights
 
 # Backward compat — keep FluxConfig importable from here
 FluxConfig = ImageGenConfig
@@ -179,7 +180,7 @@ class GenerateImagesRequest(BaseModel):
 class GenerateVideosRequest(BaseModel):
     scene_ids: list[str] = []
     engine: str | None = None  # override project config engine (e.g. "humo", "ltx_video")
-    render_mode: str = "preview"  # "preview" (256p/10steps) or "final" (512p/30steps)
+    render_mode: RenderMode = "preview"  # see musicvision.video.render_mode (applies to HuMo and LTX-2)
 
 
 class RegenerateImageRequest(BaseModel):
@@ -190,7 +191,7 @@ class RegenerateImageRequest(BaseModel):
 class RegenerateVideoRequest(BaseModel):
     engine: str | None = None  # "humo" | "ltx_video"
     seed: int = -1
-    render_mode: str = "preview"  # "preview" (256p/10steps) or "final" (512p/30steps)
+    render_mode: RenderMode = "preview"  # see musicvision.video.render_mode (applies to HuMo and LTX-2)
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +289,17 @@ def _submit_job(kind: JobKind, params: BaseModel) -> Job:
             "scene_not_found", f"Scene(s) not found: {', '.join(missing)}", {"scene_ids": missing},
         )
     return job_manager.submit(kind, data)
+
+
+def _raise_if_render_weights_missing(config, render_mode: str) -> None:
+    """Fail the job (typed) when the render mode needs weights that are not on disk."""
+    missing = missing_render_weights(config)
+    if missing:
+        raise JobFailureError(
+            "missing_prerequisite",
+            f"render_mode={render_mode!r} needs LoRA {missing['lora']!r}, which is not downloaded.",
+            missing,
+        )
 
 
 def _job_project() -> ProjectService:
@@ -914,20 +926,10 @@ def _job_regenerate_video(params: dict, ctx: JobContext) -> dict:
     # Apply render mode
     from musicvision.utils.gpu import detect_devices
 
-    if engine_type == VideoEngineType.LTX_VIDEO:
-        config = proj.config.ltx_video.model_copy()
-        if req.render_mode == "preview":
-            config.width = 480
-            config.height = 320
-            config.num_inference_steps = 20
-        else:
-            config.width = 768
-            config.height = 512
-            config.num_inference_steps = 40
-    else:
-        config = proj.config.humo.model_copy()
-        if scene.sigma_shift is not None:
-            config.shift = scene.sigma_shift
+    config = config_for_render_mode(engine_type, proj.config, req.render_mode)
+    _raise_if_render_weights_missing(config, req.render_mode)
+    if engine_type != VideoEngineType.LTX_VIDEO and scene.sigma_shift is not None:
+        config.shift = scene.sigma_shift
 
     # Resolve seed: use locked seed if approved, use request seed if specified, else random
     import random
@@ -1516,19 +1518,12 @@ def _job_generate_videos(params: dict, ctx: JobContext) -> dict:
                 vram_warnings.append(warning)
                 log.warning("VRAM pre-flight: %s", warning["message"])
 
-    # --- Apply render mode to engine configs (ephemeral, not saved to disk) ---
+    # Render mode is applied to per-engine copies; proj.config is never mutated.
     render_mode = req.render_mode
-    if render_mode == "preview":
-        proj.config.ltx_video.width = 480
-        proj.config.ltx_video.height = 320
-        proj.config.ltx_video.num_inference_steps = 20
-    else:  # "final"
-        proj.config.ltx_video.width = 768
-        proj.config.ltx_video.height = 512
-        proj.config.ltx_video.num_inference_steps = 40
+    run_configs = {et: config_for_render_mode(et, proj.config, render_mode) for et in engine_groups}
+    for cfg in run_configs.values():
+        _raise_if_render_weights_missing(cfg, render_mode)
     log.info("Render mode: %s", render_mode)
-
-    _humo_default_shift = proj.config.humo.shift
 
     generated: list[str] = []
     failed: list[dict] = []
@@ -1541,10 +1536,9 @@ def _job_generate_videos(params: dict, ctx: JobContext) -> dict:
 
         ctx.report(done, total, message=f"Loading {engine_type.value}")
         device_map = detect_devices()
-        if engine_type == VideoEngineType.LTX_VIDEO:
-            engine = create_video_engine(proj.config.ltx_video, device_map=device_map, engine_type=engine_type)
-        else:
-            engine = create_video_engine(proj.config.humo, device_map=device_map, engine_type=engine_type)
+        run_config = run_configs[engine_type]
+        default_shift = getattr(run_config, "shift", None)
+        engine = create_video_engine(run_config, device_map=device_map, engine_type=engine_type)
 
         engine.load()
         consecutive_ooms = 0
@@ -1554,9 +1548,7 @@ def _job_generate_videos(params: dict, ctx: JobContext) -> dict:
                 ctx.raise_if_cancelled()  # between scenes only — never mid-denoise
                 ctx.report(done, total, message=f"Rendering {scene.id} ({engine_type.value})", scene_id=scene.id)
                 if consecutive_ooms >= 2:
-                    engine_config = (
-                        proj.config.ltx_video if engine_type == VideoEngineType.LTX_VIDEO else proj.config.humo
-                    )
+                    engine_config = run_config
                     log.warning(
                         "Skipping %s — %d consecutive OOMs, remaining scenes in "
                         "%s group will also fail",
@@ -1584,15 +1576,10 @@ def _job_generate_videos(params: dict, ctx: JobContext) -> dict:
                         scene_seed = random.randint(0, 2**31 - 1)
                         scene.video_seed = scene_seed
 
-                    if engine_type == VideoEngineType.LTX_VIDEO:
-                        proj.config.ltx_video.seed = scene_seed
-                    else:
-                        proj.config.humo.seed = scene_seed
-                        # Apply per-scene sigma shift override
-                        if scene.sigma_shift is not None:
-                            proj.config.humo.shift = scene.sigma_shift
-                        else:
-                            proj.config.humo.shift = _humo_default_shift
+                    # The engine holds run_config, so per-scene values go on it.
+                    run_config.seed = scene_seed
+                    if engine_type != VideoEngineType.LTX_VIDEO:
+                        run_config.shift = scene.sigma_shift if scene.sigma_shift is not None else default_shift
 
                     ref_image = proj.resolve_path(scene.reference_image)
                     segment = _resolve_scene_audio(proj, scene, audio_path)
@@ -1665,9 +1652,7 @@ def _job_generate_videos(params: dict, ctx: JobContext) -> dict:
                 except Exception as exc:
                     if is_oom_error(exc):
                         consecutive_ooms += 1
-                        engine_config = (
-                            proj.config.ltx_video if engine_type == VideoEngineType.LTX_VIDEO else proj.config.humo
-                        )
+                        engine_config = run_config
                         log.error(
                             "OOM on %s (%d consecutive): %s", scene.id, consecutive_ooms, exc,
                         )

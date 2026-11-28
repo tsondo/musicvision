@@ -76,6 +76,8 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module, "job_manager", fresh)
     monkeypatch.setattr(app_module, "_project", None)
     monkeypatch.setattr(gpu, "detect_devices", lambda: None)
+    # Hermetic: never see real weights in ~/.cache (render-mode LoRA checks etc.).
+    monkeypatch.setenv("MUSICVISION_WEIGHTS_DIR", str(tmp_path / "weights"))
 
     with TestClient(app_module.app) as c:
         resp = c.post("/api/projects/create", json={"name": "Job Endpoints", "directory": str(tmp_path / "proj")})
@@ -265,6 +267,7 @@ class TestHandlers:
                 return [SimpleNamespace(video_path=clip, generated_audio_path=None)]
 
         monkeypatch.setattr(video, "create_video_engine", lambda *a, **kw: FakeVideoEngine())
+        monkeypatch.setattr("musicvision.api.app.missing_render_weights", lambda cfg: None)
         monkeypatch.setattr("musicvision.utils.video.update_scene_resolution", lambda *a, **kw: None)
 
         job = c.post("/api/pipeline/generate-videos", json={"render_mode": "preview"}).json()
@@ -309,6 +312,7 @@ class TestHandlers:
                 return outputs
 
         monkeypatch.setattr(video, "create_video_engine", lambda *a, **kw: FakeHumoEngine())
+        monkeypatch.setattr("musicvision.api.app.missing_render_weights", lambda cfg: None)
         monkeypatch.setattr("musicvision.utils.video.update_scene_resolution", lambda *a, **kw: None)
         monkeypatch.setattr("musicvision.utils.audio.concat_videos", lambda paths, out: out.write_bytes(b"mp4"))
 
@@ -318,6 +322,72 @@ class TestHandlers:
         assert final["result"]["failed"] == []
         assert final["result"]["generated"] == ["scene_001", "scene_002", "scene_003"]
         assert proj.scenes.get_scene("scene_002").video_clip == "clips/scene_002_joined.mp4"
+
+    def _video_ready(self, proj):
+        song = proj.paths.root / "input" / "song.wav"
+        song.parent.mkdir(parents=True, exist_ok=True)
+        song.write_bytes(b"RIFF")
+        proj.config.song.audio_file = "input/song.wav"
+        for scene in proj.scenes.scenes:
+            scene.reference_image = f"images/{scene.id}.png"
+            scene.video_prompt = f"motion for {scene.id}"
+
+    def test_humo_preview_render_mode_reaches_engine_without_touching_project(self, client, monkeypatch):
+        import musicvision.video as video
+        from musicvision.video.humo_engine import HumoOutput
+
+        c, _, proj = client
+        self._video_ready(proj)
+        proj.config.humo.denoising_steps = 50
+        proj.config.humo.lora = None
+        before = proj.config.humo.model_dump()
+        seen: dict = {}
+
+        class Engine:
+            def load(self):
+                pass
+
+            def unload(self):
+                pass
+
+            def generate_scene(self, *, output_dir, scene_id, **kwargs):
+                seen.setdefault("steps", []).append(seen["config"].denoising_steps)
+                clip = output_dir / f"{scene_id}.mp4"
+                clip.parent.mkdir(parents=True, exist_ok=True)
+                clip.write_bytes(b"mp4")
+                return [HumoOutput(video_path=clip, frames_generated=97, duration_seconds=3.88)]
+
+        def factory(config, **kw):
+            seen["config"] = config
+            return Engine()
+
+        monkeypatch.setattr(video, "create_video_engine", factory)
+        monkeypatch.setattr("musicvision.utils.video.update_scene_resolution", lambda *a, **kw: None)
+        monkeypatch.setattr("musicvision.api.app.missing_render_weights", lambda cfg: None)
+
+        job = c.post("/api/pipeline/generate-videos", json={"render_mode": "preview"}).json()
+        final = wait_terminal(c, job["id"])
+        assert final["state"] == "succeeded", final["error"]
+        assert seen["config"].denoising_steps == 6 and seen["config"].resolution == "480p"
+        assert seen["config"].lora == "lightx2v_i2v_480p"
+        assert seen["config"] is not proj.config.humo
+        assert proj.config.humo.model_dump() == before
+
+    def test_humo_preview_without_lora_fails_typed(self, client, monkeypatch, tmp_path):
+        c, _, proj = client
+        self._video_ready(proj)
+        monkeypatch.setenv("MUSICVISION_WEIGHTS_DIR", str(tmp_path / "no_weights"))
+        job = c.post("/api/pipeline/generate-videos", json={"render_mode": "preview"}).json()
+        final = wait_terminal(c, job["id"])
+        assert final["state"] == "failed"
+        assert final["error"]["code"] == "missing_prerequisite"
+        assert final["error"]["detail"]["missing"] == "lora"
+
+    def test_invalid_render_mode_rejected_at_submit(self, client):
+        c, _, _ = client
+        resp = c.post("/api/jobs", json={"kind": "generate_videos", "params": {"render_mode": "draft"}})
+        assert resp.status_code == 400
+        assert resp.json()["error"]["code"] == "invalid_job_params"
 
     def test_descriptions_batch_reports_progress(self, client, monkeypatch):
         import musicvision.imaging.prompt_generator as pg
