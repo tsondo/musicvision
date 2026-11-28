@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 from musicvision.intake.audio_analysis import create_separator, detect_bpm, detect_sections, get_beat_times
@@ -41,11 +42,22 @@ log = logging.getLogger(__name__)
 # Phase 1: Analyze (no segmentation)
 # ---------------------------------------------------------------------------
 
+ANALYZE_STEPS = 4   # on_step calls made by run_analyze()
+SEGMENT_STEPS = 3   # on_step calls made by run_auto_segment()
+
+StepCallback = Callable[[str], None]
+
+
+def _noop_step(_message: str) -> None:
+    pass
+
+
 def run_analyze(
     project: ProjectService,
     device_map: DeviceMap | None = None,
     skip_transcription: bool = False,
     use_vocal_separation: bool = True,
+    on_step: StepCallback | None = None,
 ) -> AnalysisResult:
     """
     Run audio analysis: duration, BPM, beat times, Whisper transcription,
@@ -53,7 +65,11 @@ def run_analyze(
 
     Results are persisted to project.yaml (BPM, duration, beat_times, sections)
     and input/word_timestamps.json (word-level timestamps).
+
+    ``on_step(message)`` is called once at the start of each of the
+    ANALYZE_STEPS stages (for job progress).
     """
+    step = on_step or _noop_step
     if device_map is None:
         device_map = detect_devices()
 
@@ -90,6 +106,7 @@ def run_analyze(
         warnings.append(msg)
 
     # --- BPM ---
+    step("Detecting tempo and beats")
     if config.song.bpm:
         bpm = config.song.bpm
         log.info("BPM (from %s): %.1f", "AceStep" if has_acestep else "config", bpm)
@@ -104,6 +121,7 @@ def run_analyze(
     log.info("Detected %d beats", len(beat_times))
 
     # --- Vocal separation ---
+    step("Separating vocals" if use_vocal_separation else "Vocal separation skipped")
     vocal_audio_path: Path | None = None
     if use_vocal_separation:
         vocal_full_path = paths.input_dir / "audio_vocal.wav"
@@ -135,6 +153,7 @@ def run_analyze(
     whisper_input = vocal_audio_path if vocal_audio_path is not None else audio_path
 
     # --- Transcription / Lyrics ---
+    step("Transcribing lyrics (Whisper)")
     words: list[WordTimestamp] = []
 
     lyrics_path = (
@@ -167,6 +186,7 @@ def run_analyze(
         log.info("Saved Whisper transcription to %s", lyrics_out.name)
 
     # --- Parse AceStep sections or auto-detect from audio ---
+    step("Detecting song sections")
     sections: list[SongSection] = []
     if has_acestep and config.song.acestep.lyrics:
         sections = parse_acestep_sections(config.song.acestep.lyrics, words, duration)
@@ -344,11 +364,15 @@ def create_scenes_from_boundaries(
 def run_auto_segment(
     project: ProjectService,
     use_llm: bool = True,
+    on_step: StepCallback | None = None,
 ) -> SceneList:
     """
     Run LLM or rule-based segmentation using stored analysis data.
     Requires run_analyze() to have been called first.
+
+    ``on_step(message)`` is called at the start of each of the SEGMENT_STEPS stages.
     """
+    step = on_step or _noop_step
     config = project.config
     paths = project.paths
 
@@ -379,8 +403,9 @@ def run_auto_segment(
     except Exception:
         log.debug("Could not resolve engine constraints")
 
+    step("Segmenting scenes (LLM)" if use_llm and words else "Segmenting scenes (rule-based)")
     if use_llm and words:
-        log.info("Segmenting with Claude API...")
+        log.info("Segmenting with LLM...")
         scene_list = segment_scenes(
             lyrics_with_timestamps=words,
             song_duration=duration,
@@ -399,9 +424,11 @@ def run_auto_segment(
         )
 
     # Slice audio
+    step("Slicing scene audio")
     _slice_scenes(scene_list, audio_path, paths)
 
     # Transcribe each scene's audio slice for accurate lyrics
+    step("Transcribing scene slices (Whisper)")
     try:
         _transcribe_scene_slices(scene_list.scenes, paths, device=_detect_whisper_device())
     except Exception as exc:
@@ -427,10 +454,12 @@ def run_intake(
     device_map: DeviceMap | None = None,
     skip_transcription: bool = False,
     use_vocal_separation: bool = True,
+    on_step: StepCallback | None = None,
 ) -> SceneList:
     """
     Run the full Stage 1 pipeline (analyze + segment in one call).
     This is the CLI entry point. GUI uses run_analyze() + manual boundaries.
+    ``on_step`` is called ANALYZE_STEPS + SEGMENT_STEPS times.
     """
     # Phase 1
     run_analyze(
@@ -438,12 +467,14 @@ def run_intake(
         device_map=device_map,
         skip_transcription=skip_transcription,
         use_vocal_separation=use_vocal_separation,
+        on_step=on_step,
     )
 
     # Phase 2
     scene_list = run_auto_segment(
         project=project,
         use_llm=use_llm_segmentation,
+        on_step=on_step,
     )
 
     return scene_list

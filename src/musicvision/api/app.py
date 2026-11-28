@@ -1074,20 +1074,35 @@ async def analyze_audio(
     )
 
 
+def _step_reporter(ctx: JobContext, total: int):
+    """on_step callback for intake stages: progress = stages finished out of total."""
+    done = 0
+
+    def on_step(message: str) -> None:
+        nonlocal done
+        ctx.report(min(done, total), total, unit="steps", message=message)
+        done += 1
+
+    return on_step
+
+
 def _job_analyze(params: dict, ctx: JobContext) -> dict:
+    from musicvision.intake.pipeline import ANALYZE_STEPS
     from musicvision.intake.pipeline import run_analyze as _run_analyze
     from musicvision.utils.gpu import detect_devices
 
     p = AnalyzeParams.model_validate(params)
     proj = _job_project()
-    ctx.report(0, 0, unit="steps", message="Analyzing audio (BPM, vocals, transcription)")
+    ctx.report(0, ANALYZE_STEPS, unit="steps", message="Starting audio analysis")
     device_map = detect_devices()
     result = _run_analyze(
         project=proj,
         device_map=device_map,
         skip_transcription=p.skip_transcription,
         use_vocal_separation=p.use_vocal_separation,
+        on_step=_step_reporter(ctx, ANALYZE_STEPS),
     )
+    ctx.report(ANALYZE_STEPS, ANALYZE_STEPS, unit="steps", message="Analysis complete")
     return result.model_dump(mode="json")
 
 
@@ -1204,12 +1219,14 @@ async def run_intake(
 
 
 def _job_intake(params: dict, ctx: JobContext) -> dict:
+    from musicvision.intake.pipeline import ANALYZE_STEPS, SEGMENT_STEPS
     from musicvision.intake.pipeline import run_intake as _run_intake
     from musicvision.utils.gpu import detect_devices
 
     p = IntakeParams.model_validate(params)
     proj = _job_project()
-    ctx.report(0, 0, unit="steps", message="Running intake (analysis + segmentation)")
+    total = ANALYZE_STEPS + SEGMENT_STEPS
+    ctx.report(0, total, unit="steps", message="Starting intake")
     device_map = detect_devices()
     scene_list = _run_intake(
         project=proj,
@@ -1217,7 +1234,9 @@ def _job_intake(params: dict, ctx: JobContext) -> dict:
         device_map=device_map,
         skip_transcription=p.skip_transcription,
         use_vocal_separation=p.use_vocal_separation,
+        on_step=_step_reporter(ctx, total),
     )
+    ctx.report(total, total, unit="steps", message=f"Intake complete: {len(scene_list.scenes)} scenes")
     return {"status": "complete", "scene_count": len(scene_list.scenes)}
 
 

@@ -14,7 +14,7 @@ import time
 import pytest
 
 from musicvision.jobs import JobManager
-from musicvision.models import JobProgress, Scene, SceneList
+from musicvision.models import JobProgress, JobState, Scene, SceneList
 
 TICK = 0.005
 
@@ -568,3 +568,31 @@ class TestRequestValidationErrors:
         err = resp.json()["error"]
         assert err["code"] == "invalid_request"
         assert err["detail"]["errors"][0]["loc"][-1] == "render_mode"
+
+
+# ---------------------------------------------------------------------------
+# Intake progress
+# ---------------------------------------------------------------------------
+
+class TestIntakeProgress:
+    def test_intake_reports_step_progress(self, client, monkeypatch):
+        import musicvision.intake.pipeline as pipeline
+
+        c, manager, proj = client
+        total = pipeline.ANALYZE_STEPS + pipeline.SEGMENT_STEPS
+        observed: list[tuple[int, int, str]] = []
+
+        def fake_run_intake(project, on_step=None, **kw):
+            for i in range(total):
+                on_step(f"stage {i}")
+                (job,) = manager.list(state=JobState.RUNNING)
+                observed.append((job.progress.current, job.progress.total, job.progress.message))
+            return project.scenes
+
+        monkeypatch.setattr(pipeline, "run_intake", fake_run_intake)
+        job = c.post("/api/jobs", json={"kind": "intake", "params": {}}).json()
+        final = wait_terminal(c, job["id"])
+        assert final["state"] == "succeeded", final["error"]
+        assert observed == [(i, total, f"stage {i}") for i in range(total)]
+        assert final["progress"]["unit"] == "steps"
+        assert (final["progress"]["current"], final["progress"]["total"]) == (total, total)
