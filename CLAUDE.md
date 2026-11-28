@@ -72,7 +72,7 @@ Two machines on the same LAN:
 - GPU: RTX 3090 Ti 24GB (single GPU)
 - Model: `cyankiwi/Qwen3.6-27B-AWQ-INT4` (~17.7 GB, 4-bit AWQ, vision+text) via vLLM 0.27+, served as `qwen`
 - Endpoint: `http://192.168.68.53:8000/v1` (OpenAI-compatible; see `OPENAI_BASE_URL` in `.env`)
-- Max context 24576 tokens (KV-cache limit on 24 GB); reasoning parser `qwen3`, tool-call parser `qwen3_xml`
+- Max context 65536 tokens (`max_model_len` as of 2026-11-28); reasoning parser `qwen3`, tool-call parser `qwen3_xml`
 - Runs as a systemd user service on the host (`systemctl --user status vllm`), 24/7, no per-token cost
 
 ## Environment Setup
