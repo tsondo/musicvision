@@ -97,7 +97,7 @@ Weight location env vars (for team setups with shared storage):
 - `SEEDVR2_REPO_DIR` — SeedVR2 repo path (no default, must be set for SeedVR2 upscaler)
 - `SEEDVR2_VENV_PYTHON` — SeedVR2 venv python (auto-derived from `SEEDVR2_REPO_DIR/.venv/bin/python`)
 
-PyTorch: 2.10.0+cu128 (upgraded for RTX 5090 sm_120 support). Do not downgrade.
+PyTorch: 2.13.0+cu130 (CUDA 13.0; needs an NVIDIA driver with CUDA ≥ 13.0). Do not downgrade below sm_120 (RTX 5090) support. When bumping torch, also bump torchvision, torchaudio and **torchcodec** together (torchcodec's compiled library is tied to one torch minor version and the resolver can't tell), and test a Whisper transcription — see the note in `pyproject.toml`.
 
 ## Coding Conventions
 
