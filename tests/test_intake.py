@@ -393,23 +393,23 @@ class TestDetectSections:
 
         from musicvision.intake.audio_analysis import detect_sections
 
-        # Create a 30-second synthetic audio with energy variation
+        # 12-second synthetic audio with energy variation (kept short: analysis cost scales with length)
         sr = 22050
-        duration = 30.0
+        duration = 12.0
         t = np.linspace(0, duration, int(sr * duration))
         # Low energy intro, high energy middle, low energy ending
         envelope = np.concatenate([
-            np.linspace(0.1, 0.3, int(sr * 10)),
-            np.linspace(0.8, 0.9, int(sr * 10)),
-            np.linspace(0.3, 0.1, int(sr * 10)),
+            np.linspace(0.1, 0.3, int(sr * 4)),
+            np.linspace(0.8, 0.9, int(sr * 4)),
+            np.linspace(0.3, 0.1, int(sr * 4)),
         ])
         audio = np.sin(2 * np.pi * 440 * t) * envelope
 
         audio_path = tmp_path / "test.wav"
         sf.write(str(audio_path), audio, sr)
 
-        beats = [float(i) for i in range(1, 30)]
-        sections = detect_sections(audio_path, beats, duration, min_section_seconds=5.0)
+        beats = [float(i) for i in range(1, 12)]
+        sections = detect_sections(audio_path, beats, duration, min_section_seconds=2.0)
 
         assert len(sections) >= 1
         assert sections[0][1] == 0.0  # first section starts at 0

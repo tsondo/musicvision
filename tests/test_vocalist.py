@@ -16,7 +16,13 @@ from musicvision.video import prompt_generator as video_pg
 SR = 16000
 
 
-def _sung_tone(path, f0, seconds=7.0):
+@pytest.fixture(autouse=True)
+def _short_minimum(monkeypatch):
+    """Lower the 5 s sung-audio minimum so the pitch tests can use 2 s tones (pyin cost ~ length)."""
+    monkeypatch.setattr("musicvision.intake.audio_analysis._MIN_VOICED_SECONDS", 1.0)
+
+
+def _sung_tone(path, f0, seconds=2.0):
     """A vibrato tone with harmonics: close enough to a sung note for pyin."""
     t = np.arange(int(SR * seconds)) / SR
     freq = f0 * (1 + 0.02 * np.sin(2 * np.pi * 5 * t))
@@ -36,7 +42,7 @@ def test_estimate_from_pitch(tmp_path, f0, voice):
 
 def test_silence_is_unknown(tmp_path):
     path = tmp_path / "silence.wav"
-    sf.write(path, np.zeros(SR * 6, dtype=np.float32), SR)
+    sf.write(path, np.zeros(SR * 2, dtype=np.float32), SR)
     assert estimate_vocalist(path).voice == "unknown"
 
 
@@ -104,3 +110,9 @@ class TestPromptContext:
     def test_template_subject_uses_voice(self):
         assert template_subject(_config(voice="male"), "a performer on stage") == "a male singer on stage"
         assert template_subject(_config(), "a performer on stage") == "a performer on stage"
+
+
+def test_too_little_singing_is_unknown(tmp_path, monkeypatch):
+    """The real 5 s minimum: a clear 2 s male tone is still 'unknown'."""
+    monkeypatch.setattr("musicvision.intake.audio_analysis._MIN_VOICED_SECONDS", 5.0)
+    assert estimate_vocalist(_sung_tone(tmp_path / "short.wav", 140)).voice == "unknown"
