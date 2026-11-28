@@ -170,6 +170,7 @@ class HumoEngine:
         import os
 
         from musicvision.video.weight_registry import (
+            SHARED_SPECS,
             download_dit,
             download_shared,
             weight_status,
@@ -182,7 +183,7 @@ class HumoEngine:
         # Shared weights are open — auto-download without requiring a token.
         # The individual loaders (_load_t5 / _load_vae / _load_whisper) also
         # handle this on FileNotFoundError, so this is an optional fast-path.
-        for key in ("t5", "vae", "whisper"):
+        for key in SHARED_SPECS:  # t5, vae, whisper, official zero_vae files
             if not status.get(key, False):
                 log.info("Auto-downloading shared weight '%s' (open model)…", key)
                 try:
@@ -328,8 +329,10 @@ class HumoEngine:
         (from ``engine_registry.plan_subclips``), those pre-computed values
         are used directly.  Otherwise falls back to the old float-based path.
 
-        Sub-clip continuity (config.sub_clip_continuity, default True):
-            Sub-clip N+1 uses the last frame of sub-clip N as its reference image.
+        Sub-clip continuity (config.sub_clip_continuity, default False):
+            When on, sub-clip N+1 uses the last frame of sub-clip N as its reference
+            image. Off by default: it compounds artifacts and does not make boundaries
+            smoother (HuMo's reference is identity, not the first frame). See #30.
 
         Returns:
             List of HumoOutput (one per sub-clip, or a single item for short scenes).
@@ -542,21 +545,22 @@ class HumoEngine:
 
     def _try_load_official_zero_vae(self, lat_h: int, lat_w: int) -> bool:
         """Try to load official pre-computed zero_vae if resolution matches."""
-        from pathlib import Path
-
         import torch
 
-        weights_dir = Path.home() / ".cache/musicvision/weights/humo/reference"
+        from musicvision.video.weight_registry import SHARED_SPECS, locate_shared, weights_dir
 
-        # Map latent dims to official files
-        official_files = {
-            (60, 104): weights_dir / "zero_vae_129frame.pt",     # 480p
-            (90, 160): weights_dir / "zero_vae_720p_161frame.pt",  # 720p
-        }
-
-        path = official_files.get((lat_h, lat_w))
-        if path is None or not path.exists():
+        # Map latent dims to official files (fetched by `musicvision download-weights`)
+        key = {(60, 104): "zero_vae_480p", (90, 160): "zero_vae_720p"}.get((lat_h, lat_w))
+        if key is None:
             return False
+        try:
+            path = locate_shared(key)
+        except FileNotFoundError:
+            # Pre-registry installs downloaded these by hand into humo/reference/.
+            path = weights_dir() / "humo" / "reference" / SHARED_SPECS[key].filename
+            if not path.exists():
+                log.info("Official %s not found; run `musicvision download-weights` to fetch it", key)
+                return False
 
         try:
             zv = torch.load(path, map_location="cpu", weights_only=True)

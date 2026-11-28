@@ -154,7 +154,7 @@ When video/image generation produces bad output (noise, black frames, artifacts)
 6. **Subprocess engines (SeedVR2)**: Check stderr first — the subprocess may fail silently from the caller's perspective. Parse return codes.
 7. **Known gotchas** (see FIXLOG.md):
    - Timestep must be scaled ×1000 for HuMo
-   - Sigma shift 8.0 (not 5.0) matches ComfyUI
+   - Sigma shift: 5.0 for CFG runs (draft/final, upstream default) — best identity hold; 1.0–1.5 only for distilled-LoRA runs (CFG off, ~6 steps). Values >2 with a distill LoRA look bad
    - FP8 needs dynamic per-tensor input scaling
    - Reference frame goes at LAST temporal position, not first
 
@@ -200,7 +200,7 @@ Run manually. Each has different hardware requirements — see docs/TESTING.md a
 ## Key Constraints
 
 - HuMo max output: 97 frames (~3.88s at 25fps). Scenes >4s are auto-split into sub-clips.
-- Sub-clip continuity: last frame of sub-clip N becomes reference image for sub-clip N+1.
+- Sub-clips all use the scene's reference image. Chaining (last frame of N → reference for N+1, `sub_clip_continuity`) is off by default: it compounds grain/speckle each hop and does not smooth boundaries, because HuMo's reference sets identity, not the first frame (#30).
 - FLUX and HuMo run sequentially (different stages), never simultaneously. Models fully unloaded between stages.
 - Primary GPU (5090) runs DiT/UNet. Secondary GPU (4080, ~14 GB usable — shares the display) runs encoders/VAE, sequentially offloaded per component. This split is managed by `utils/gpu.py`.
 - VRAM tier system: fp16, fp8_scaled, gguf_q8, gguf_q6, gguf_q4, preview. `recommend_tier()` auto-selects based on available VRAM.

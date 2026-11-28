@@ -15,6 +15,12 @@ import sys
 
 from musicvision.llm import LLMClient, LLMConfig, get_client, llm_available
 from musicvision.models import ProjectConfig, Scene, SceneType
+from musicvision.style_context import (
+    asset_context_lines,
+    template_setting,
+    template_subject,
+    vocalist_context_line,
+)
 
 log = logging.getLogger(__name__)
 
@@ -83,15 +89,9 @@ def _build_style_context(config: ProjectConfig, scene: Scene | None = None) -> s
         parts.append(f"Visual style: {ss.visual_style}")
     if ss.color_palette:
         parts.append(f"Color palette: {ss.color_palette}")
-    if ss.characters:
-        for c in ss.characters:
-            parts.append(f"Character — {c.id}: {c.description}")
-    if ss.props:
-        for p in ss.props:
-            parts.append(f"Prop — {p.id}: {p.description}")
-    if ss.settings:
-        for s in ss.settings:
-            parts.append(f"Setting — {s.id}: {s.description}")
+    parts.extend(asset_context_lines(ss))
+    if vocalist := vocalist_context_line(config):
+        parts.append(vocalist)
 
     return "\n".join(parts) if parts else "(no style sheet defined)"
 
@@ -291,8 +291,8 @@ def _auto_template_image(scene: Scene, config: ProjectConfig) -> str:
     ss = config.style_sheet
     style = ss.visual_style or "cinematic"
     palette = f", {ss.color_palette}" if ss.color_palette else ""
-    subject = ss.characters[0].description if ss.characters else "a performer on stage"
-    setting = ss.settings[0].description if ss.settings else "a dramatic stage environment"
+    subject = template_subject(config, "a performer on stage")
+    setting = template_setting(config, "a dramatic stage environment")
     lyric_hint = f'evoking the mood of "{scene.lyrics[:60]}"' if scene.lyrics else "atmospheric and evocative"
     return (
         f"{subject.capitalize()} in {setting}, {style} aesthetic{palette}. "

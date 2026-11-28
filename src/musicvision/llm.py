@@ -33,6 +33,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 log = logging.getLogger(__name__)
 
@@ -83,18 +84,22 @@ class LLMClient:
     def __init__(self, config: LLMConfig | None = None) -> None:
         self.config = config or _config_from_env()
 
-    def chat(self, system: str, user: str) -> str:
+    def chat(self, system: str, user: str, images: list[Path] | None = None) -> str:
         """
         Send a (system, user) message pair and return the response text.
+
+        ``images`` (optional) are attached to the user message for vision
+        models; each is downscaled to <=768 px and sent as JPEG.
 
         Raises:
             ValueError: if required config/env vars are missing.
             RuntimeError: if the API call fails.
         """
+        encoded = [_encode_image(p) for p in images] if images else []
         if self.config.backend == "anthropic":
-            return self._chat_anthropic(system, user)
+            return self._chat_anthropic(system, user, encoded)
         if self.config.backend == "openai":
-            return self._chat_openai(system, user)
+            return self._chat_openai(system, user, encoded)
         raise ValueError(
             f"Unknown LLM backend: {self.config.backend!r}. "
             "Set LLM_BACKEND to 'anthropic' or 'openai'."
@@ -104,7 +109,7 @@ class LLMClient:
     # Private backend implementations
     # ------------------------------------------------------------------
 
-    def _chat_anthropic(self, system: str, user: str) -> str:
+    def _chat_anthropic(self, system: str, user: str, images: list[str] | None = None) -> str:
         import anthropic
 
         key = self.config.api_key or os.environ.get("ANTHROPIC_API_KEY", "")
@@ -122,11 +127,11 @@ class LLMClient:
             model=model,
             max_tokens=max_tokens,
             system=system,
-            messages=[{"role": "user", "content": user}],
+            messages=[{"role": "user", "content": _anthropic_content(user, images or [])}],
         )
         return response.content[0].text.strip()
 
-    def _chat_openai(self, system: str, user: str) -> str:
+    def _chat_openai(self, system: str, user: str, images: list[str] | None = None) -> str:
         from openai import OpenAI
 
         base_url = self.config.base_url or os.environ.get("OPENAI_BASE_URL", "")
@@ -149,7 +154,7 @@ class LLMClient:
             model=model,
             messages=[
                 {"role": "system", "content": system},
-                {"role": "user", "content": user},
+                {"role": "user", "content": _openai_content(user, images or [])},
             ],
         )
         if self.config.max_tokens:
@@ -178,6 +183,44 @@ class LLMClient:
         # A model serving without a reasoning parser can leak its chain of
         # thought into content as <think>...</think>; strip it.
         return _THINK_BLOCK_RE.sub("", content).strip()
+
+
+_IMAGE_MAX_SIDE = 768
+
+
+def _encode_image(path: Path) -> str:
+    """Downscale to <=768 px and return base64 JPEG (keeps vision token use modest)."""
+    import base64
+    import io
+
+    from PIL import Image
+
+    with Image.open(path) as img:
+        img = img.convert("RGB")
+        img.thumbnail((_IMAGE_MAX_SIDE, _IMAGE_MAX_SIDE))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=90)
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _openai_content(text: str, images: list[str]) -> str | list[dict]:
+    if not images:
+        return text
+    parts: list[dict] = [
+        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}} for b64 in images
+    ]
+    parts.append({"type": "text", "text": text})
+    return parts
+
+
+def _anthropic_content(text: str, images: list[str]) -> str | list[dict]:
+    if not images:
+        return text
+    parts: list[dict] = [
+        {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}} for b64 in images
+    ]
+    parts.append({"type": "text", "text": text})
+    return parts
 
 
 def get_client(config: LLMConfig | None = None) -> LLMClient:

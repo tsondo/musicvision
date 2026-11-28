@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    from musicvision.models import SeparationMethod
+    from musicvision.models import SeparationMethod, VocalistProfile
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +46,38 @@ def get_beat_times(audio_path: Path) -> list[float]:
     _, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
     beat_times = librosa.frames_to_time(beat_frames, sr=sr)
     return [float(t) for t in beat_times]
+
+
+# Median sung F0 bands for the lead-vocal guess. Male lead vocals typically sit
+# ~100-180 Hz, female ~200-400 Hz; the band between is genuinely ambiguous
+# (tenors, altos, falsetto), so it reports "unknown" rather than guessing.
+MALE_MAX_F0_HZ = 175.0
+FEMALE_MIN_F0_HZ = 205.0
+_MIN_VOICED_SECONDS = 5.0
+
+
+def estimate_vocalist(vocal_path: Path) -> VocalistProfile:
+    """Guess the lead vocalist's voice (male/female/unknown) from a vocal stem.
+
+    Uses librosa.pyin on the separated vocals. Needs a vocal stem, not the
+    full mix: instruments dominate pitch tracking on a mix.
+    """
+    import librosa
+
+    from musicvision.models import VocalistProfile
+
+    sr = 16000
+    hop = 256
+    y, _ = librosa.load(str(vocal_path), sr=sr, mono=True)
+    f0, voiced, prob = librosa.pyin(y, fmin=65, fmax=1000, sr=sr, frame_length=1024, hop_length=hop)
+    sung = f0[voiced & (prob > 0.6)]
+    if len(sung) * hop / sr < _MIN_VOICED_SECONDS:
+        log.info("Vocalist estimate: too little sung audio (%.1fs) — unknown", len(sung) * hop / sr)
+        return VocalistProfile(voice="unknown")
+    median = float(np.median(sung))
+    voice = "male" if median <= MALE_MAX_F0_HZ else "female" if median >= FEMALE_MIN_F0_HZ else "unknown"
+    log.info("Vocalist estimate: median F0 %.0f Hz → %s", median, voice)
+    return VocalistProfile(voice=voice, median_f0_hz=round(median, 1))
 
 
 def estimate_vocal_activity(

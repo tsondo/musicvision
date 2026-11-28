@@ -108,6 +108,7 @@ export interface ProjectConfig {
   video_engine: VideoEngineType;
   video_type: VideoType;
   style_sheet: StyleSheet;
+  humo?: { shift: number };
 }
 
 export interface UpdateSceneRequest {

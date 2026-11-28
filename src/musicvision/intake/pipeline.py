@@ -16,7 +16,13 @@ import re
 from collections.abc import Callable
 from pathlib import Path
 
-from musicvision.intake.audio_analysis import create_separator, detect_bpm, detect_sections, get_beat_times
+from musicvision.intake.audio_analysis import (
+    create_separator,
+    detect_bpm,
+    detect_sections,
+    estimate_vocalist,
+    get_beat_times,
+)
 from musicvision.intake.segmentation import segment_scenes, segment_scenes_simple
 from musicvision.intake.transcription import (
     WordTimestamp,
@@ -29,6 +35,7 @@ from musicvision.models import (
     Scene,
     SceneBoundary,
     SceneList,
+    SongInfo,
     SongSection,
 )
 from musicvision.project import ProjectService
@@ -150,6 +157,9 @@ def run_analyze(
                 separator.unload()
             log.info("Vocal separation complete")
 
+    # --- Lead vocalist (male/female) for performer prompts ---
+    _update_vocalist(config.song, vocal_audio_path)
+
     whisper_input = vocal_audio_path if vocal_audio_path is not None else audio_path
 
     # --- Transcription / Lyrics ---
@@ -238,6 +248,19 @@ def run_analyze(
 # ---------------------------------------------------------------------------
 # Phase 2: Create scenes from manual boundaries
 # ---------------------------------------------------------------------------
+
+def _update_vocalist(song: SongInfo, vocal_path: Path | None) -> None:
+    """Refresh song.vocalist from the vocal stem. A user-set profile is never overwritten,
+    and the estimate is best-effort: analysis does not fail if it does."""
+    if vocal_path is None:
+        return
+    if song.vocalist is not None and song.vocalist.source == "user":
+        return
+    try:
+        song.vocalist = estimate_vocalist(vocal_path)
+    except Exception as exc:
+        log.warning("Vocalist estimate failed: %s", exc)
+
 
 def create_scenes_from_boundaries(
     project: ProjectService,

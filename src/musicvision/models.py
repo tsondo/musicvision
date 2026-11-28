@@ -14,6 +14,7 @@ import json
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
@@ -382,9 +383,16 @@ class HumoConfig(BaseModel):
     scale_a: float = 5.5              # audio guidance strength (original HuMo default 5.5)
     scale_t: float = 5.0              # text guidance strength (original HuMo default 5.0)
     denoising_steps: int = 50         # 6 with LoRA, 15–30 standard, 50 max quality
-    shift: float = 1.5                # sigma schedule shift (1.0–1.5 best for stage/performance scenes)
+    # Sigma schedule shift. 5.0 (upstream HuMo default) for CFG runs: holds the
+    # reference identity better than lower values. Distilled-LoRA runs (CFG off,
+    # ~6 steps) want 1.0–1.5 instead; the fast presets set that explicitly.
+    shift: float = 5.0
     block_swap_count: int = 0         # DiT blocks to keep on CPU (0 = all on GPU)
-    sub_clip_continuity: bool = True  # pass last frame of sub-clip N as reference for sub-clip N+1
+    # Chain sub-clips: use the last frame of sub-clip N as the reference for N+1.
+    # Off by default: HuMo's reference sets identity, not the first frame, so chaining
+    # gives no boundary continuity, and feeding decoded frames back compounds grain and
+    # speckle (~7x by the 5th sub-clip in testing, #30). Every sub-clip uses the scene image.
+    sub_clip_continuity: bool = False
     sampler: str = "uni_pc"           # "uni_pc" or "euler"
     lora: str | None = None           # LoRA key from weight_registry (e.g. "lightx2v_i2v_480p")
     seed: int | None = None           # global seed (overridden by per-clip HumoInput.seed)
@@ -404,14 +412,14 @@ class HumoConfig(BaseModel):
                 shift=1.5, scale_t=1.0, scale_a=1.0, lora="lightx2v_i2v_480p",
             ),
             HumoQuality.DRAFT: dict(
-                tier=HumoTier.FP8_SCALED, resolution="480p", denoising_steps=20,
+                tier=HumoTier.FP8_SCALED, resolution="480p", denoising_steps=20, shift=5.0,
             ),
             HumoQuality.FAST: dict(
                 tier=HumoTier.FP8_SCALED, resolution="480p", denoising_steps=6,
                 shift=1.5, scale_t=1.0, scale_a=1.0, lora="lightx2v_i2v_480p",
             ),
             HumoQuality.FINAL: dict(
-                tier=HumoTier.FP8_SCALED, resolution="720p", denoising_steps=50,
+                tier=HumoTier.FP8_SCALED, resolution="720p", denoising_steps=50, shift=5.0,
             ),
         }
         params = presets[quality]
@@ -527,6 +535,17 @@ class SongSection(BaseModel):
     time: float  # estimated start time in seconds
 
 
+class VocalistProfile(BaseModel):
+    """Who sings lead, so generated performers match the voice.
+
+    ``source="detected"`` values come from pitch analysis of the vocal stem and
+    are refreshed by each analysis run; ``source="user"`` values are never
+    overwritten."""
+    voice: Literal["male", "female", "unknown"] = "unknown"
+    median_f0_hz: float | None = None       # median sung pitch of the vocal stem
+    source: Literal["detected", "user"] = "detected"
+
+
 class SongInfo(BaseModel):
     audio_file: str = ""
     lyrics_file: str = ""
@@ -538,6 +557,7 @@ class SongInfo(BaseModel):
     sections: list[SongSection] = Field(default_factory=list)
     sections_source: str = ""  # "acestep" or "auto" — empty means not yet set
     analyzed: bool = False  # True after Phase 1 (BPM, Whisper, demucs) completes
+    vocalist: VocalistProfile | None = None  # lead voice, from analysis or the user
 
 
 # ---------------------------------------------------------------------------

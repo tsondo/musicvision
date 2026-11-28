@@ -18,6 +18,12 @@ import sys
 
 from musicvision.llm import LLMClient, LLMConfig, get_client, llm_available
 from musicvision.models import ProjectConfig, Scene, SceneType
+from musicvision.style_context import (
+    asset_context_lines,
+    template_setting,
+    template_subject,
+    vocalist_context_line,
+)
 
 log = logging.getLogger(__name__)
 
@@ -94,15 +100,9 @@ def _build_style_context(config: ProjectConfig, scene: Scene | None = None) -> s
         parts.append(f"Visual style: {ss.visual_style}")
     if ss.color_palette:
         parts.append(f"Color palette: {ss.color_palette}")
-    if ss.characters:
-        for c in ss.characters:
-            parts.append(f"Character — {c.id}: {c.description}")
-    if ss.props:
-        for p in ss.props:
-            parts.append(f"Prop — {p.id}: {p.description}")
-    if ss.settings:
-        for s in ss.settings:
-            parts.append(f"Setting — {s.id}: {s.description}")
+    parts.extend(asset_context_lines(ss))
+    if vocalist := vocalist_context_line(config):
+        parts.append(vocalist)
 
     return "\n".join(parts) if parts else "(no style sheet defined)"
 
@@ -322,8 +322,8 @@ def _auto_template_video(scene: Scene, config: ProjectConfig) -> str:
     """Minimal template used when interactive input is unavailable or skipped."""
     ss = config.style_sheet
     style = ss.visual_style or "cinematic music video"
-    subject = ss.characters[0].description if ss.characters else "a performer"
-    setting = ss.settings[0].description if ss.settings else "a dramatic stage"
+    subject = template_subject(config, "a performer")
+    setting = template_setting(config, "a dramatic stage")
     motion = "moving with the rhythm, gesturing expressively" if scene.type == SceneType.VOCAL \
              else "standing still, ambient environmental motion"
     lyric_hint = f'with lyrics "{scene.lyrics[:60]}"' if scene.lyrics else "instrumental passage"

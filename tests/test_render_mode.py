@@ -78,3 +78,26 @@ class TestMissingWeights:
 
     def test_unknown_lora_key_is_missing(self):
         assert missing_render_weights(HumoConfig(lora="no_such_lora"))["lora"] == "no_such_lora"
+
+
+@pytest.mark.parametrize(
+    ("quality", "shift"),
+    [("preview", 1.5), ("fast", 1.5), ("draft", 5.0), ("final", 5.0)],
+)
+def test_preset_shift_matches_guidance(quality, shift):
+    """Distilled (CFG-off) presets use a low shift; guided presets use 5.0 (identity hold)."""
+    cfg = HumoConfig.from_quality(quality)
+    assert cfg.shift == shift
+    assert (cfg.scale_t == 1.0) == (shift == 1.5)  # low shift only where CFG is off
+
+
+def test_default_humo_config_is_guided_with_shift_5():
+    cfg = HumoConfig()
+    assert cfg.scale_t > 1.0 and cfg.shift == 5.0
+
+
+def test_sub_clip_chaining_off_by_default():
+    """#30: chaining compounds artifacts and does not smooth boundaries."""
+    assert HumoConfig().sub_clip_continuity is False
+    for q in ("preview", "fast", "draft", "final"):
+        assert HumoConfig.from_quality(q).sub_clip_continuity is False
