@@ -1850,13 +1850,17 @@ async def assemble(req: AssembleRequest = AssembleRequest()) -> Job:
 
     Runs as a job: returns 202 with the queued Job. ``result`` on success:
     {rough_cut, clip_count, total_scenes, duration_seconds,
-    video_duration_seconds, drift_seconds, output_dir, edl?, fcpxml?}."""
+    video_duration_seconds, drift_seconds, warnings, output_dir, edl?, fcpxml?}.
+    ``warnings`` is a list of {code, message, detail}; ``av_drift`` means the
+    rough cut does not match the song length (e.g. gaps between scenes), so
+    lip sync drifts and the end is truncated. The job still succeeds."""
     return _submit_job(JobKind.ASSEMBLE, req)
 
 
 def _job_assemble(params: dict, ctx: JobContext) -> dict:
-    from musicvision.assembly.concatenator import assemble_rough_cut
+    from musicvision.assembly.concatenator import assemble_rough_cut, sync_warnings
     from musicvision.assembly.exporter import export_edl, export_fcpxml
+    from musicvision.engine_registry import get_constraints
     from musicvision.utils.audio import get_duration
 
     req = AssembleRequest.model_validate(params)
@@ -1893,6 +1897,7 @@ def _job_assemble(params: dict, ctx: JobContext) -> dict:
         "duration_seconds": scene_dur,
         "video_duration_seconds": video_dur,
         "drift_seconds": round(video_dur - scene_dur, 3),
+        "warnings": sync_warnings(proj.scenes, video_dur, get_constraints(proj.config.video_engine.value).fps),
         "output_dir": str(proj.paths.root / "output"),
     }
 

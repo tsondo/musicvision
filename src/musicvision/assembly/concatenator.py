@@ -131,6 +131,45 @@ def assemble_rough_cut(
 # Helpers
 # ---------------------------------------------------------------------------
 
+def sync_warnings(scenes: SceneList, video_duration: float, fps: float) -> list[dict]:
+    """Structured warnings about rough-cut timing, for job results.
+
+    The final mux uses -shortest, so a rough cut shorter than the song is
+    truncated at the end and, when the shortfall comes from gaps between
+    scenes, the picture runs progressively ahead of the audio.
+    """
+    expected = scenes.total_duration
+    drift = video_duration - expected
+    if abs(drift) <= 1.0 / fps:
+        return []
+    ordered = sorted(scenes.scenes, key=lambda s: s.order)
+    gaps = [
+        {"after": a.id, "before": b.id, "seconds": round(b.time_start - a.time_end, 3)}
+        for a, b in zip(ordered, ordered[1:])
+        if b.time_start - a.time_end > 1.0 / fps
+    ]
+    gap_total = round(sum(g["seconds"] for g in gaps), 3)
+    direction = "shorter" if drift < 0 else "longer"
+    message = f"Rough cut is {abs(drift):.2f}s {direction} than the song ({abs(drift) * fps:.0f} frames)."
+    if drift < 0 and gaps:
+        message += (
+            f" {len(gaps)} gap(s) between scenes total {gap_total:.2f}s; the video runs ahead of the "
+            "audio after each gap and the end of the song is cut off."
+        )
+    return [{
+        "code": "av_drift",
+        "message": message,
+        "detail": {
+            "drift_seconds": round(drift, 3),
+            "drift_frames": round(drift * fps),
+            "expected_seconds": round(expected, 3),
+            "video_seconds": round(video_duration, 3),
+            "scene_gaps": gaps,
+            "scene_gaps_total_seconds": gap_total,
+        },
+    }]
+
+
 def _resolve_scene_clip(scene: Scene, paths: ProjectPaths) -> Path | None:
     """
     Return the final single-file clip path for a scene.
