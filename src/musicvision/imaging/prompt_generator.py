@@ -15,7 +15,12 @@ import sys
 
 from musicvision.llm import LLMClient, LLMConfig, get_client, llm_available
 from musicvision.models import ProjectConfig, Scene, SceneType
-from musicvision.style_context import asset_context_lines, template_setting, template_subject
+from musicvision.style_context import (
+    asset_context_lines,
+    template_setting,
+    template_subject,
+    vocalist_context_line,
+)
 
 log = logging.getLogger(__name__)
 
@@ -85,6 +90,8 @@ def _build_style_context(config: ProjectConfig, scene: Scene | None = None) -> s
     if ss.color_palette:
         parts.append(f"Color palette: {ss.color_palette}")
     parts.extend(asset_context_lines(ss))
+    if vocalist := vocalist_context_line(config):
+        parts.append(vocalist)
 
     return "\n".join(parts) if parts else "(no style sheet defined)"
 

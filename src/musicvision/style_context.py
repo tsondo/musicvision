@@ -32,11 +32,40 @@ def asset_context_lines(ss: StyleSheet) -> list[str]:
     return lines
 
 
+def _has_described_character(ss: StyleSheet) -> bool:
+    return any(a.description for a in assets_of_type(ss, AssetType.CHARACTER))
+
+
+def vocalist_voice(config: ProjectConfig) -> str | None:
+    """'male' / 'female' when known, else None."""
+    v = config.song.vocalist
+    return v.voice if v is not None and v.voice in ("male", "female") else None
+
+
+def vocalist_context_line(config: ProjectConfig) -> str | None:
+    """Tell the LLM the singer's gender when no character asset describes the performer.
+
+    A described character asset always wins (e.g. a deliberately cast performer
+    lip-syncing someone else's voice)."""
+    voice = vocalist_voice(config)
+    if voice is None or _has_described_character(config.style_sheet):
+        return None
+    person = "man" if voice == "male" else "woman"
+    return (
+        f"Lead vocalist: {voice} voice. Any singer or performer shown is a {person}; "
+        f"say so explicitly in the prompt."
+    )
+
+
 def template_subject(config: ProjectConfig, fallback: str) -> str:
-    """Subject phrase for the no-LLM templates: first described character, else *fallback*."""
+    """Subject phrase for the no-LLM templates: first described character, else a
+    performer of the vocalist's gender, else *fallback*."""
     for a in assets_of_type(config.style_sheet, AssetType.CHARACTER):
         if a.description:
             return a.description
+    voice = vocalist_voice(config)
+    if voice is not None:
+        return fallback.replace("a performer", f"a {voice} singer", 1)
     return fallback
 
 

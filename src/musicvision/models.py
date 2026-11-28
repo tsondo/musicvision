@@ -14,6 +14,7 @@ import json
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
@@ -530,6 +531,17 @@ class SongSection(BaseModel):
     time: float  # estimated start time in seconds
 
 
+class VocalistProfile(BaseModel):
+    """Who sings lead, so generated performers match the voice.
+
+    ``source="detected"`` values come from pitch analysis of the vocal stem and
+    are refreshed by each analysis run; ``source="user"`` values are never
+    overwritten."""
+    voice: Literal["male", "female", "unknown"] = "unknown"
+    median_f0_hz: float | None = None       # median sung pitch of the vocal stem
+    source: Literal["detected", "user"] = "detected"
+
+
 class SongInfo(BaseModel):
     audio_file: str = ""
     lyrics_file: str = ""
@@ -541,6 +553,7 @@ class SongInfo(BaseModel):
     sections: list[SongSection] = Field(default_factory=list)
     sections_source: str = ""  # "acestep" or "auto" — empty means not yet set
     analyzed: bool = False  # True after Phase 1 (BPM, Whisper, demucs) completes
+    vocalist: VocalistProfile | None = None  # lead voice, from analysis or the user
 
 
 # ---------------------------------------------------------------------------
