@@ -20,6 +20,8 @@ from dotenv import load_dotenv
 load_dotenv()  # load .env from cwd (or any parent) before anything reads env vars
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -108,6 +110,27 @@ async def _structured_error_handler(request: Request, exc: StructuredApiError | 
     return JSONResponse(
         status_code=_ERROR_HTTP_STATUS.get(exc.code, 400),
         content={"error": {"code": exc.code, "message": exc.message, "detail": exc.detail}},
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def _request_validation_handler(request: Request, exc: RequestValidationError):
+    """Body/query validation failures in the structured error shape (agent-ready API).
+
+    /api/jobs uses invalid_job_params (400), matching its own param validation;
+    an unknown kind also lists the valid kinds. Other endpoints: invalid_request (422)."""
+    errors = jsonable_encoder(exc.errors())
+    if request.url.path.rstrip("/") == "/api/jobs":
+        detail: dict = {"errors": errors}
+        if any(list(e.get("loc", []))[-1:] == ["kind"] for e in errors):
+            detail["valid_kinds"] = [k.value for k in JobKind]
+        return JSONResponse(
+            status_code=400,
+            content={"error": {"code": "invalid_job_params", "message": "Invalid job request", "detail": detail}},
+        )
+    return JSONResponse(
+        status_code=422,
+        content={"error": {"code": "invalid_request", "message": "Invalid request", "detail": {"errors": errors}}},
     )
 
 

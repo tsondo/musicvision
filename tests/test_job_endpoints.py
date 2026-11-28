@@ -546,3 +546,25 @@ class TestStartupProject:
             assert job["id"] in journal.read_text()
         finally:
             fresh.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Request validation errors use the structured shape
+# ---------------------------------------------------------------------------
+
+class TestRequestValidationErrors:
+    def test_unknown_job_kind_is_structured_and_lists_kinds(self, client):
+        c, _, _ = client
+        resp = c.post("/api/jobs", json={"kind": "make_coffee", "params": {}})
+        assert resp.status_code == 400
+        err = resp.json()["error"]
+        assert err["code"] == "invalid_job_params"
+        assert "generate_videos" in err["detail"]["valid_kinds"]
+
+    def test_other_endpoint_validation_is_structured(self, client):
+        c, _, _ = client
+        resp = c.post("/api/pipeline/generate-videos", json={"render_mode": "draft"})
+        assert resp.status_code == 422
+        err = resp.json()["error"]
+        assert err["code"] == "invalid_request"
+        assert err["detail"]["errors"][0]["loc"][-1] == "render_mode"
